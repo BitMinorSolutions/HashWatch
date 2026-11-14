@@ -756,12 +756,13 @@ function renderCelebrate() {
   if (b.t > Date.now() / 1000 - 6 * 3600 && LS.get("hw_block_big") !== String(b.id)) { LS.set("hw_block_big", b.id); bigCelebrate(b); }
   if (el.dataset.id === String(b.id) && el.innerHTML) return;
   el.dataset.id = b.id;
-  const bits = confettiBits(22, false);
-  el.innerHTML = `<section class="celebrate" role="status"><div class="confetti" aria-hidden="true">${bits}</div>
+  el.innerHTML = `<section class="celebrate" role="status"><canvas class="coins" aria-hidden="true"></canvas>
     <div class="cel-ic">${ic("party-popper")}</div>
     <div class="cel-txt"><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div><h2>${esc(b.miner_name || "Your miner")} found a block!</h2><p>${esc(b.body)}</p></div>
     <div class="cel-acts"><a class="btn ghost" href="#/alerts">Details</a><button class="btn accent" id="celOk">Dismiss</button></div></section>`;
   $("#celOk").onclick = () => { LS.set("hw_block_ack", b.id); el.firstChild.classList.add("out"); setTimeout(renderCelebrate, 260); };
+  if (!reducedMotion()) coinSheet(() => { const sec = el.firstChild, cv = sec && $(".coins", sec), icn = sec && $(".cel-ic", sec); if (!cv || !icn) return;
+    coinShower(cv, null, Object.assign({}, COIN_BANNER, { origin: () => { const a = sec.getBoundingClientRect(), r = icn.getBoundingClientRect(); return [r.left - a.left + r.width / 2, r.top - a.top + r.height / 2]; } })); });
 }
 function dayLabel(t) {
   const d = new Date(t * 1000), now = new Date(), y = new Date(now); y.setDate(now.getDate() - 1);
@@ -1065,10 +1066,86 @@ function autoCard() {
     ${acts.length ? `<div class="acts-log">${acts.map(x => `<div>${ic(x.ok ? "circle-check" : "circle-alert", "sm")}<span>${esc(x.text)}</span><span class="t3" data-rel="${x.t}">${rel(x.t)}</span></div>`).join("")}</div>` : ""}`;
 }
 
-function confettiBits(n, big) {
-  const dStep = big ? .18 : .35, dMod = big ? 11 : 7, min = 14, span = big ? 14 : 8;
-  return Array.from({ length: n }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % dMod) * dStep}s;--r:${(i * 53) % 360}deg;--sz:${min + (i * 11) % (span + 1)}px;--dx:${-40 + (i * 19) % 81}px;--br:${(0.86 + (i % 5) * .07).toFixed(2)}"></i>`).join("");
+/* ---------------- block celebration: falling gold Bitcoins ----------------
+   Sprites are the 3D gold glyph from the Camaro wallpaper video (same three.js geometry, material, lights and studio HDR),
+   pre-rendered at 24 tumble angles (one end-over-end flip) into a 6x4 sheet of 128px cells. Drawn on a canvas with rAF. */
+const COIN = { url: "/assets/icons/btc-coin-sprites.webp", cell: 128, cols: 6, n: 24, img: null, soft: null, glint: null, ready: false, wait: [] };
+function coinSheet(cb) {
+  if (COIN.ready) return cb();
+  COIN.wait.push(cb); if (COIN.img) return;
+  const im = new Image(); COIN.img = im; im.decoding = "async";
+  im.onload = () => {
+    // soft copy for the near, out-of-focus coins: downscale then upscale (a cheap blur that works in every browser)
+    const w = im.naturalWidth, h = im.naturalHeight, k = 0.3, a = document.createElement("canvas"), b = document.createElement("canvas");
+    a.width = Math.round(w * k); a.height = Math.round(h * k); a.getContext("2d").drawImage(im, 0, 0, a.width, a.height);
+    b.width = w; b.height = h; const bx = b.getContext("2d"); bx.imageSmoothingQuality = "high"; bx.drawImage(a, 0, 0, w, h); COIN.soft = b;
+    const g = document.createElement("canvas"); g.width = g.height = 64; const gx = g.getContext("2d"), rg = gx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0, "rgba(255,255,240,1)"); rg.addColorStop(.18, "rgba(255,236,170,.7)"); rg.addColorStop(1, "rgba(255,200,90,0)");
+    gx.fillStyle = rg; gx.fillRect(0, 0, 64, 64); gx.fillStyle = "rgba(255,255,245,.9)"; gx.fillRect(30.5, 2, 3, 60); gx.fillRect(2, 30.5, 60, 3); COIN.glint = g;
+    COIN.ready = true; COIN.wait.splice(0).forEach(f => f());
+  };
+  im.onerror = () => { COIN.wait.length = 0; COIN.img = null; };
+  im.src = COIN.url;
 }
+// host: positioned element to fill. layers: [back canvas, front canvas or null]. origin(): burst point in host px.
+function coinShower(back, front, o) {
+  const host = back.parentElement, cx = [back, front].filter(Boolean).map(c => c.getContext("2d"));
+  const P = [], R = (a, b) => a + Math.random() * (b - a);
+  let W = 0, H = 0, dpr = 1, t = 0, last = 0, spawnAcc = 0, raf = 0, dead = false;
+  const size = () => { dpr = Math.min(2, window.devicePixelRatio || 1); W = host.clientWidth; H = host.clientHeight;
+    [back, front].forEach(c => { if (!c) return; c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }); };
+  size(); const onR = () => size(); window.addEventListener("resize", onR);
+  const sc = () => Math.max(.55, Math.min(1.25, H / 900));               // physics scale so phones and big screens feel the same
+  const coin = (x, y, vx, vy, burst) => {
+    const z = Math.random() ** 1.15, near = !burst && front && Math.random() < o.near;   // most coins far/mid, a few big blurred ones up front
+    const zz = near ? R(.9, 1) : z, sz = near ? R(o.max * .95, o.max * 1.25) : o.min + (o.max - o.min) * zz;
+    P.push({ x, y, vx, vy, sz, near, burst, age: 0,
+      vt: (o.vt * (.62 + .55 * zz)) * sc(),                                // terminal fall speed: small/far coins drift, near ones drop faster (parallax)
+      fl: Math.random() * o.frames, fs: (burst ? R(2.2, 3.6) : R(.7, 1.9)) * (Math.random() < .5 ? -1 : 1),   // end-over-end flips per second
+      rot: R(-.6, .6), vr: R(-1.4, 1.4), sw: R(.6, 1.6), swA: R(18, 46) * (.5 + zz), ph: R(0, 6.28),
+      a: near ? .62 : .72 + .28 * zz });
+  };
+  const burst = () => { const [ox, oy] = o.origin(), s = sc();
+    for (let i = 0; i < o.burst; i++) { const ang = -Math.PI / 2 + R(-1.05, 1.05), sp = R(.55, 1) * o.burstV * s;
+      coin(ox + R(-30, 30), oy + R(-14, 14), Math.cos(ang) * sp * 1.15, Math.sin(ang) * sp, true); } };
+  const tick = (now) => {
+    if (dead) return;
+    if (!back.isConnected) return stop();
+    const dt = last ? Math.min(.033, (now - last) / 1000) : 1 / 60; last = now; t += dt;
+    const g = o.g * sc(), fade = t < o.rain ? 1 : Math.max(0, 1 - (t - o.rain) / o.fadeOut);
+    if (t < o.rain && P.length < o.cap) { spawnAcc += dt * o.rate * (t < .5 ? .4 : 1);
+      while (spawnAcc >= 1 && P.length < o.cap) { spawnAcc--; coin(R(-20, W + 20), -o.max * 1.4, R(-40, 40), R(40, 140) * sc(), false); } }
+    cx.forEach(c => { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, c.canvas.width, c.canvas.height); });
+    for (let i = P.length - 1; i >= 0; i--) {
+      const p = P[i]; p.age += dt;
+      // drag ramps in: burst coins fly free like they were fired, then open up and flutter down like confetti
+      const settle = p.burst ? Math.min(1, (p.age / 1.1) ** 2) : 1, k = .35 + (g / p.vt - .35) * settle;
+      p.vy += (g - k * p.vy) * dt; p.vx += (-k * p.vx) * dt;
+      const flut = Math.sin(p.age * p.sw * 2.4 + p.ph) * p.swA * settle;
+      p.x += (p.vx + flut * p.sw) * dt; p.y += p.vy * dt;
+      p.fl += p.fs * o.frames * dt * (p.burst ? 1 - .45 * settle : 1); p.rot += p.vr * dt * (p.burst ? 2.2 - 1.2 * settle : 1);
+      if (p.y > H + p.sz * 1.5 || (p.age > 1 && (p.x < -200 || p.x > W + 200))) { P.splice(i, 1); continue; }
+      const c = cx[p.near && cx[1] ? 1 : 0], f = ((Math.floor(p.fl) % o.frames) + o.frames) % o.frames;
+      const sx = (f % COIN.cols) * COIN.cell, sy = Math.floor(f / COIN.cols) * COIN.cell;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0); c.translate(p.x, p.y); c.rotate(p.rot);
+      c.globalAlpha = p.a * fade * Math.min(1, p.age * 6);
+      c.drawImage(p.near ? COIN.soft : COIN.img, sx, sy, COIN.cell, COIN.cell, -p.sz / 2, -p.sz / 2, p.sz, p.sz);
+      // glint: a quick star flash as the face swings toward the light (frames 0 and 12 are face-on)
+      if (!p.near && p.sz > o.min + 8) { const fr = ((p.fl % 12) + 12) % 12, gl = Math.max(0, 1 - Math.min(fr, 12 - fr) / 1.1);
+        if (gl > 0) { c.globalCompositeOperation = "lighter"; c.globalAlpha = gl * .75 * fade; const gs = p.sz * .9;
+          c.rotate(-p.rot + .4); c.drawImage(COIN.glint, -p.sz * .22 - gs / 2, -p.sz * .26 - gs / 2, gs, gs); c.globalCompositeOperation = "source-over"; } }
+    }
+    if (t > o.rain + o.fadeOut || (t > o.rain && !P.length)) return stop();
+    raf = requestAnimationFrame(tick);
+  };
+  const stop = () => { dead = true; cancelAnimationFrame(raf); window.removeEventListener("resize", onR);
+    cx.forEach(c => { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, c.canvas.width, c.canvas.height); }); o.done && o.done(); };
+  burst(); raf = requestAnimationFrame(tick);
+  return { stop };
+}
+const COIN_BIG = { frames: 24, burst: 72, burstV: 1550, cap: 170, rate: 24, rain: 7, fadeOut: 1.2, min: 20, max: 56, near: .09, vt: 330, g: 1900 };
+const COIN_BANNER = { frames: 24, burst: 22, burstV: 620, cap: 46, rate: 7, rain: 4.5, fadeOut: 1, min: 14, max: 30, near: 0, vt: 120, g: 900 };
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /* ---------------- block celebration: confetti + sound + flash ---------------- */
 function chime() {
@@ -1082,17 +1159,21 @@ function chime() {
 function bigCelebrate(b) {
   if ($("#bigCel")) return;
   const d = document.createElement("div"); d.id = "bigCel"; d.className = "big-cel"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Block found");
-  const bits = confettiBits(90, true);
   const rw = S.lot && S.lot.reward;
-  d.innerHTML = `<div class="bc-flash"></div><div class="confetti big" aria-hidden="true">${bits}</div>
-    <div class="bc-card"><div class="bc-ic">${ic("trophy")}</div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
+  const still = reducedMotion();
+  d.innerHTML = `<div class="bc-flash"></div><div class="bc-glow" aria-hidden="true"></div><canvas class="coins" aria-hidden="true"></canvas>
+    <div class="bc-card">${still ? `<img class="bc-coin" src="/assets/icons/btc-coin.webp" alt="" width="96" height="96">` : ""}<div class="bc-ic">${ic("trophy")}</div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
       <h1>${esc(b.miner_name || "Your miner")} found a block!</h1>
       <p>${rw ? `About <b>${rw.usd ? usd(rw.usd) : btc(rw.total_sat)}</b> (${btc(rw.total_sat)}) is heading to your payout address.` : esc(b.body)}</p>
       <p class="fine">Odds were ${S.lot && S.lot.odds && S.lot.odds.one_in_per_block ? oneIn(S.lot.odds.one_in_per_block) + " per block" : "astronomical"}. Check your pool or wallet; the reward unlocks after 100 confirmations.</p>
-      <div class="acts"><button class="btn accent lg" id="bcOk">Woohoo!</button></div></div>`;
+      <div class="acts"><button class="btn accent lg" id="bcOk">Woohoo!</button></div></div>
+    <canvas class="coins front" aria-hidden="true"></canvas>`;
   document.body.append(d); requestAnimationFrame(() => d.classList.add("on"));
   chime();
-  $("#bcOk").onclick = () => { LS.set("hw_block_ack", b.id); d.classList.remove("on"); setTimeout(() => { d.remove(); renderCelebrate(); }, 300); };
+  let show = null;
+  if (!still) coinSheet(() => { if (!d.isConnected) return; const card = $(".bc-card", d);
+    show = coinShower($(".coins", d), $(".coins.front", d), Object.assign({}, COIN_BIG, { origin: () => { const r = card.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height * .32]; } })); });
+  $("#bcOk").onclick = () => { LS.set("hw_block_ack", b.id); d.classList.remove("on"); setTimeout(() => { if (show) show.stop(); d.remove(); renderCelebrate(); }, 300); };
 }
 
 /* ---------------- settings: security ---------------- */
