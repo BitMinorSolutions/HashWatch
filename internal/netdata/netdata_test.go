@@ -74,7 +74,7 @@ func TestClassify(t *testing.T) {
 
 func TestDefaultIntervals(t *testing.T) {
 	f := New(t.TempDir())
-	if f.Every != 30*time.Second || f.PriceEvery != 60*time.Second {
+	if f.Every != 2*time.Minute || f.PriceEvery != 60*time.Second {
 		t.Fatalf("defaults: every=%v price=%v", f.Every, f.PriceEvery)
 	}
 }

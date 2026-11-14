@@ -1207,7 +1207,7 @@ function funSetUI() {
     </div>
     <div class="set-h" style="margin-top:22px">${""}<div class="set-ic">${ic("eye-off")}</div><div class="set-t"><h2>Privacy</h2><p>Only public network data is fetched, from mempool.space. Nothing about you or your miner is sent.</p></div></div>
     <div class="toggles">
-      <div class="tg-row"><div class="tg-ic">${ic("blocks", "sm")}</div><div class="tg-t"><b>Network data</b><span>Difficulty, newest blocks and who found them, every 30 seconds. Needed for live odds.</span></div>${sw("pvNet", !p.network_off, S.state.locked || isView(), "Network data")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("blocks", "sm")}</div><div class="tg-t"><b>Network data</b><span>Difficulty, newest blocks and who found them, every 2 minutes. Needed for live odds.</span></div>${sw("pvNet", !p.network_off, S.state.locked || isView(), "Network data")}</div>
       <div class="tg-row"><div class="tg-ic">${ic("bitcoin", "sm")}</div><div class="tg-t"><b>Bitcoin price</b><span>For the block reward in dollars, every 60 seconds.</span></div>${sw("pvPrice", !p.price_off, S.state.locked || isView(), "Bitcoin price")}</div>
     </div>`;
   seg($("#fnSum"));

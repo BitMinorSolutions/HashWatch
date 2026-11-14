@@ -24,10 +24,11 @@ import (
 // DefaultBase is the public mempool.space API.
 const DefaultBase = "https://mempool.space/api"
 
-// Default refresh intervals. On HTTP 429 or any other fetch error the
-// wait doubles, up to MaxBackoff, then returns to these on the next success.
+// Default refresh intervals. Network stays at 2 minutes; price is 60s.
+// On HTTP 429 or any other fetch error the wait doubles, up to MaxBackoff,
+// then returns to these on the next success. Last good values are kept.
 const (
-	DefaultEvery      = 30 * time.Second
+	DefaultEvery      = 2 * time.Minute
 	DefaultPriceEvery = 60 * time.Second
 	MaxBackoff        = 5 * time.Minute
 )
@@ -67,7 +68,7 @@ type Fetcher struct {
 	PriceURL   string // defaults to Base + "/v1/prices"
 	Client     *http.Client
 	Path       string        // cache file
-	Every      time.Duration // network refresh (default 30s)
+	Every      time.Duration // network refresh (default 2 min)
 	PriceEvery time.Duration // price refresh (default 60s)
 	// Enabled reports which sources may be contacted right now (privacy settings).
 	Enabled func() (network, price bool)
