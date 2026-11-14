@@ -14,13 +14,17 @@ type instanceFile struct {
 	Port int    `json:"port"`
 	ID   string `json:"id"`
 	URL  string `json:"url"`
+	App  string `json:"app_id,omitempty"`
 }
 
 func instPath(dir string) string { return filepath.Join(dir, "instance.json") }
 
+// LocalURL is the only address the window, menu bar and hand-off ever load for this copy.
+func LocalURL(port int) string { return "http://127.0.0.1:" + strconv.Itoa(port) }
+
 // WriteInstance records this running copy so a second launch can find it.
-func WriteInstance(dir string, port int, id, url string) {
-	b, _ := json.Marshal(instanceFile{os.Getpid(), port, id, url})
+func WriteInstance(dir string, port int, id string) {
+	b, _ := json.Marshal(instanceFile{os.Getpid(), port, id, LocalURL(port), AppID})
 	_ = os.WriteFile(instPath(dir), b, 0o600)
 }
 
@@ -31,26 +35,38 @@ func RemoveInstance(dir, id string) {
 	}
 }
 
-// RunningInstance returns the URL of a copy already running with this
-// settings folder, verified by asking it (/api/ping) for its instance id.
+// RunningInstance returns the URL of a copy already running with this settings folder.
+// It hands off only to a server that proves it is that copy: /api/ping must answer with
+// HashWatch's app id, this build's name and the random instance id (and pid) recorded in
+// instance.json. Any other program on that port (or a stale file) means "not running".
 func RunningInstance(dir string) (string, bool) {
 	b, err := os.ReadFile(instPath(dir))
 	if err != nil {
 		return "", false
 	}
 	var f instanceFile
-	if json.Unmarshal(b, &f) != nil || f.Port == 0 || f.ID == "" {
+	if json.Unmarshal(b, &f) != nil || f.Port <= 0 || f.Port > 65535 || len(f.ID) < 8 {
 		return "", false
 	}
-	c := http.Client{Timeout: 1500 * time.Millisecond}
-	r, err := c.Get("http://127.0.0.1:" + strconv.Itoa(f.Port) + "/api/ping")
+	c := http.Client{Timeout: 1500 * time.Millisecond,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	r, err := c.Get(LocalURL(f.Port) + "/api/ping")
 	if err != nil {
 		return "", false
 	}
 	defer r.Body.Close()
-	var p struct{ App, ID string }
-	if json.NewDecoder(r.Body).Decode(&p) != nil || p.App != AppName || p.ID != f.ID {
+	if r.StatusCode != 200 {
 		return "", false
 	}
-	return f.URL, true
+	var p struct {
+		App   string `json:"app"`
+		AppID string `json:"app_id"`
+		ID    string `json:"id"`
+		PID   int    `json:"pid"`
+	}
+	if json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4096)).Decode(&p) != nil ||
+		p.AppID != AppID || p.App != AppName || p.ID != f.ID || (f.PID != 0 && p.PID != f.PID) {
+		return "", false
+	}
+	return LocalURL(f.Port), true
 }

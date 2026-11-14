@@ -82,7 +82,7 @@ func showRunning(u string) bool {
 }
 
 func main() {
-	defHost, defPort, defDir := "0.0.0.0", 8787, app.DefaultDir()
+	defHost, defPort, defDir := "0.0.0.0", app.DefaultPort, app.DefaultDir()
 	if bakedRemote != "" {
 		defHost = "127.0.0.1"
 	}
@@ -93,7 +93,7 @@ func main() {
 		defDir = filepath.Join(filepath.Dir(app.DefaultDir()), bakedDirName)
 	}
 	host := flag.String("host", defHost, "address to listen on (0.0.0.0 = reachable from your phone on the same Wi-Fi)")
-	port := flag.Int("port", defPort, "port to listen on (the next free port is used if busy)")
+	port := flag.Int("port", 0, fmt.Sprintf("port to listen on (default: the port used last time, else %d; another free port is picked automatically if one is taken)", defPort))
 	noOpen := flag.Bool("no-browser", false, "do not open the browser on start")
 	dir := flag.String("config", defDir, "folder for settings and history")
 	addMiner := flag.String("miner", "", "add a miner by IP (host[:port]) without using the setup screen")
@@ -218,17 +218,22 @@ func main() {
 		poll.Start(m)
 	}
 
-	var ln net.Listener
-	for p := *port; p < *port+20; p++ {
-		if ln, err = net.Listen("tcp", net.JoinHostPort(*host, strconv.Itoa(p))); err == nil {
-			srv.Port = p
-			break
-		}
-	}
-	if ln == nil {
+	// Bind only a port that verifiably reaches this process (never one another program answers on).
+	ln, bound, err := app.Listen(*host, app.PortCandidates(*port, cfg.Port, defPort))
+	if err != nil {
 		log.Fatal(err)
 	}
-	local := fmt.Sprintf("http://localhost:%d", srv.Port)
+	srv.Port = bound
+	if *remote == "" || private {
+		if cfg.Port != bound {
+			cfg.Port = bound
+			cfg.Save()
+		}
+		if *port == 0 && bound != defPort {
+			log.Printf("preferred port %d was busy: using %d", defPort, bound)
+		}
+	}
+	local := app.LocalURL(srv.Port)
 	originHost := "127.0.0.1"
 	if *host != "0.0.0.0" && *host != "" && *host != "localhost" && *host != "::" {
 		originHost = *host
@@ -243,7 +248,7 @@ func main() {
 		if *host != "0.0.0.0" {
 			args = append(args, "-host", *host)
 		}
-		if *port != 8787 {
+		if *port != 0 {
 			args = append(args, "-port", strconv.Itoa(*port))
 		}
 		srv.Auto = autostart.Spec{Exe: autostart.Exe(), Args: args, Dir: absPath(*dir), AppName: app.AppName}
@@ -253,7 +258,7 @@ func main() {
 		}
 	}
 	if *remote == "" || private {
-		app.WriteInstance(*dir, srv.Port, srv.InstanceID, local)
+		app.WriteInstance(*dir, srv.Port, srv.InstanceID)
 	}
 	var quitOnce sync.Once
 	shutdown := func() {
@@ -328,7 +333,7 @@ func main() {
 	if native {
 		srv.Shell = "native"
 		go func() { log.Fatal(http.Serve(ln, srv.Handler())) }()
-		if runNative(shellOpts{URL: fmt.Sprintf("http://127.0.0.1:%d/?shell=%s", srv.Port, runtime.GOOS), Hidden: *hidden, Srv: srv, Quit: shutdown,
+		if runNative(shellOpts{URL: local + "/?shell=" + runtime.GOOS, Origin: local, Hidden: *hidden, Srv: srv, Quit: shutdown,
 			Name: app.AppName, Tagline: app.Tagline, Version: version, Dir: *dir}) {
 			return
 		}

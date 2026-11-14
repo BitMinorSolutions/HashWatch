@@ -99,7 +99,7 @@ restarts, or after a long connection drop. To make that easy to live with:
    old Home Screen icon. Each browser remembers the last link it saw, so it knows when it's new.
 3. For a link that **never** changes, use your own (free) Cloudflare account: in Cloudflare Zero Trust
    → Networks → Tunnels, create a tunnel, add a public hostname (e.g. `miner.example.com`) that points
-   to `http://localhost:8787`, then paste the **tunnel token** and hostname under
+   to `http://127.0.0.1:48412`, then paste the **tunnel token** and hostname under
    **Settings → Remote access → Permanent link**.
 
 Remote access needs outbound internet access to Cloudflare (UDP/TCP port 7844). Some work or
@@ -143,7 +143,7 @@ Finder instead.
 
 Prefer a zip? **HashWatch-macOS.zip** has the same app: unzip it, drag **HashWatch.app** to Applications.
 
-**The Mac app (v0.5.0):** a native window (WKWebView, dark title bar, minimum size; size and
+**The Mac app (v0.5.1):** a native window (WKWebView, dark title bar, minimum size; size and
 position are remembered) with the standard menus: **About**, **Settings… ⌘,**, **Quit ⌘Q**, Edit
 (copy/paste), View → **Reload ⌘R**, and Window. The **menu bar icon** (the hexagon) shows the live
 hashrate and has **Open Dashboard**, **Remote access** on/off and **Quit**. **Closing the window
@@ -151,7 +151,7 @@ keeps HashWatch running in the menu bar** (the Dock icon goes away until you reo
 keep coming. Alerts are native macOS notifications. **Quit** (⌘Q or the menu bar) stops everything,
 remote access included. Opening HashWatch again brings the window back. If the native window
 can't start for some reason, HashWatch falls back to opening the dashboard in your browser.
-You can still open the dashboard in any browser at `http://localhost:8787`, and on your phone.
+You can still open the dashboard in any browser at `http://127.0.0.1:48412`, and on your phone.
 
 If macOS asks whether HashWatch may find devices on your local network, click **Allow** (it needs that
 to read your miner).
@@ -165,13 +165,13 @@ HashWatch, then confirm. You only need to do this once. (The DMG and zip include
 ### Windows and Linux
 1. Download the zip for your computer from the Releases page and unzip it.
 2. Double-click **HashWatch.exe** (Linux: run `./hashwatch`). A small window opens and your browser
-   opens the dashboard at `http://localhost:8787`.
+   opens the dashboard at `http://127.0.0.1:48412`.
 3. Enter your miner's IP address (or tap **Scan my network**).
 
 Keep the window open while you use it; close it (or use **Settings → Quit HashWatch**) to stop.
 
 To watch from your phone, open the address shown under **Settings → On your Wi-Fi**
-(for example `http://192.168.1.20:8787`) while on the same Wi-Fi, then **Share → Add to Home Screen**.
+(for example `http://192.168.1.20:48412`) while on the same Wi-Fi, then **Share → Add to Home Screen**.
 
 ### Windows: "Windows protected your PC" (SmartScreen)
 Click **More info → Run anyway**. If Windows Firewall asks, allow access on **private networks**
@@ -188,7 +188,7 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--port` | `8787` | Web port (the next free port is used if busy) |
+| `--port` | `48412` | Web port. The port used last time is reused; if a port is taken by another program, HashWatch never uses it (it checks that its own address really reaches itself) and picks another free port automatically. |
 | `--host` | `0.0.0.0` | Listen address. Use `127.0.0.1` to allow this computer only |
 | `--miner 192.168.1.50` | | Add a miner without the setup screen |
 | `--poll` | `5s` | How often to read each miner. Failed reads back off to 15s, then 30s, until it recovers |
@@ -220,7 +220,7 @@ go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
-./scripts/build.sh v0.5.0   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
+./scripts/build.sh v0.5.1   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
 ```
 
 The Mac build is a universal `HashWatch.app` (arm64 + x86_64 joined like `lipo -create`),

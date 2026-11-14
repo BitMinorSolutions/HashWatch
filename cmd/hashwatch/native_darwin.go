@@ -179,6 +179,27 @@ func registerClasses() error {
 			}
 			return 0
 		}),
+		// The window only ever shows this copy's own server: any other page (a link, a redirect,
+		// another program) is refused in-window and links the user clicked open in the browser.
+		m("webView:decidePolicyForNavigationAction:decisionHandler:", func(self objc.ID, _ objc.SEL, _, action, handler objc.ID) {
+			var u objc.ID
+			if req := action.Send(sel("request")); req != 0 {
+				u = req.Send(sel("URL"))
+			}
+			s := ""
+			if u != 0 {
+				s = gostr(u.Send(sel("absoluteString")))
+			}
+			if sameOrigin(s, shell.o.Origin) || s == "about:blank" {
+				callBlock(handler, 1) // WKNavigationActionPolicyAllow
+				return
+			}
+			log.Printf("window: refused navigation to %q (not %s)", s, shell.o.Origin)
+			if u != 0 && objc.Send[int](action, sel("navigationType")) == 0 { // link activated
+				cls("NSWorkspace").Send(sel("sharedWorkspace")).Send(sel("openURL:"), u)
+			}
+			callBlock(handler, 0) // WKNavigationActionPolicyCancel
+		}),
 		// Notifications: show banners even while the window is in front; clicking one opens the window.
 		m("userNotificationCenter:willPresentNotification:withCompletionHandler:", func(self objc.ID, _ objc.SEL, _, _, handler objc.ID) {
 			callBlock(handler, 2|8|16) // sound | list | banner
@@ -347,6 +368,7 @@ func (s *macShell) buildWindow() {
 	s.web = cls("WKWebView").Send(sel("alloc")).Send(sel("initWithFrame:configuration:"), nsRect{Size: nsSize{W: 1280, H: 820}}, cfg)
 	s.web.Send(sel("setValue:forKey:"), cls("NSNumber").Send(sel("numberWithBool:"), false), nsstr("drawsBackground"))
 	s.web.Send(sel("setUIDelegate:"), s.delegate)
+	s.web.Send(sel("setNavigationDelegate:"), s.delegate)
 	s.web.Send(sel("setAllowsBackForwardNavigationGestures:"), false)
 	s.web.Send(sel("setAutoresizingMask:"), uint(18))
 	s.win.Send(sel("setContentView:"), s.web)

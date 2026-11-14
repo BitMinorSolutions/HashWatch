@@ -1,6 +1,12 @@
 HashWatch for Mac · Powered by GrumpTech
 ========================================
 
+UPDATING FROM 0.5.0
+Quit the old HashWatch first (menu bar hexagon icon > Quit, or Activity Monitor >
+HashWatch > Quit), delete HashWatch from Applications, then install this one.
+0.5.1 never uses a port another program is using, so it can't open some other
+app's page by mistake. Other software on your Mac is never touched.
+
 INSTALL
 1. Open HashWatch.dmg and drag HashWatch onto the Applications folder.
 2. Eject the disk image, then open HashWatch from Applications (or Launchpad).

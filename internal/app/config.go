@@ -51,6 +51,8 @@ type Config struct {
 	AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
 	NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
 	MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
+	// Port is the local port this copy last served on (kept so phone bookmarks keep working).
+	Port int `json:"port,omitempty"`
 
 	path string
 	mu   sync.Mutex
@@ -92,7 +94,8 @@ func (c *Config) Save() error {
 		AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
 		NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
 		MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
-	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff, c.MoveDeclined}
+		Port         int             `json:"port,omitempty"`
+	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff, c.MoveDeclined, c.Port}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
