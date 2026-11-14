@@ -1,4 +1,4 @@
-/* Hashwatch v0.4 frontend — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.5.2 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -178,60 +178,78 @@ function viewSetup() {
   wireMinerForm("s", async () => boot());
 }
 
-/* ---------------- shell ---------------- */
-const PAGES = [
-  ["overview", "Overview", "layout-dashboard"], ["performance", "Performance", "activity"], ["hardware", "Hardware", "cpu"],
-  ["pools", "Pools", "network"], ["controls", "Controls", "sliders-horizontal"], ["alerts", "Alerts", "bell"], ["raw", "Raw data", "table"], ["settings", "Settings", "settings"] ];
-const NAV = ["overview", "performance", "hardware", "pools", "controls", "alerts", "raw"];
-const TABS = ["overview", "performance", "hardware", "pools", "controls"];
+/* ---------------- shell: ONE scrolling page (v0.5.2) ----------------
+   Everything about the miner lives on the dashboard. Settings (incl. remote access/QR) and alert history open as a sheet. */
+const PAGES = [["dashboard", "Dashboard"], ["settings", "Settings"], ["alerts", "Alerts"]];
+// Old multi-page links (#/pools, #/controls, …) now scroll to that card on the single page.
+const ANCHOR = { overview: "top", performance: "secShares", hardware: "secTemps", pools: "secPools", controls: "secControls", raw: "secRaw" };
 function shell() {
   const ms = S.state.miners || [];
-  root.innerHTML = `<div class="shell">
-    <aside class="sidebar">
-      <div class="brand">${logo}<span class="brand-t"><b>${esc(APP)}</b>${TAG ? `<small>${esc(TAG)}</small>` : ""}</span></div>
-      <div class="miner-pick"><div class="btnish"><span class="m-ico">${ic("server", "sm")}</span><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
+  root.innerHTML = `<div class="shell one">
+    <header class="hdr" id="topbar">
+      <div class="hdr-brand">${logo}<span class="brand-t"><b>${esc(APP)}</b>${TAG ? `<small>${esc(TAG)}</small>` : ""}</span></div>
+      <span class="hdr-div"></span>
+      <div class="hdr-miner miner-pick"><div class="btnish"><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
         ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
-      <nav class="nav">${NAV.map((id, k) => { const [, n, i] = PAGES.find(p => p[0] === id); return (k === 6 ? '<div class="sep"></div>' : "") + `<a href="#/${id}" data-r="${id}" title="${n}">${ic(i)}<span>${n}</span>${id === "alerts" ? '<em class="badge" data-badge></em>' : ""}</a>`; }).join("")}</nav>
-      <div class="side-foot">
-        <div class="side-status" id="sideStatus"><span class="dot warn"></span><span>Connecting…</span></div>
-        <div class="nav"><a href="#/settings" data-r="settings" title="Settings">${ic("settings")}<span>Settings</span></a></div>
-      </div>
-    </aside>
-    <div class="main">
-      <header class="topbar" id="topbar">
-        <span class="top-mobile-only">${logo.replace('width="28" height="28"', 'width="28" height="28" style="border-radius:8px"')}</span>
-        <h1 id="pageTitle">Overview</h1><span class="crumb-sub" id="crumbSub"></span>
-        <span class="grow desk-only"></span>
-        <span class="crumb-sub desk-only" id="liveTop"></span>
-        <div class="top-acts"><a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
-        <a class="icon-btn" href="#/settings" aria-label="Settings">${ic("settings", "sm")}</a></div>
-      </header>
-      <div class="large-title"><h1 id="ltTitle">Overview</h1><div class="lt-sub" id="ltSub"><span class="dot warn"></span>${esc(S.miner.name)}</div></div>
-      <main class="content" id="view"></main>
-    </div>
-    <nav class="tabbar">${TABS.map(id => { const p = PAGES.find(x => x[0] === id); return `<a href="#/${id}" data-r="${id}">${ic(p[2])}<span>${p[1]}</span></a>`; }).join("")}</nav>
+      <span class="hdr-live" id="hdrLive"><span class="dot warn"></span><span>Connecting…</span></span>
+      <span class="grow"></span>
+      <div class="top-acts">
+        <a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Remote access" title="Remote access">${ic("globe", "sm")}<em class="rem-dot" id="remDot"></em></a>
+        <a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts" title="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
+        <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">${ic("settings", "sm")}</a></div>
+    </header>
+    <main class="content" id="view"></main>
   </div>`;
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
   S.data = null; S.hist = []; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {};
-  window.onhashchange = route; route();
+  S.charts.forEach(c => c.destroy()); S.charts = [];
+  const v = $("#view"); v.innerHTML = `<div class="view one-page"><div id="celebrate"></div>${DASH.build()}</div>`;
+  $$(".seg", v).forEach(seg); DASH.wire();
+  window.onhashchange = route; route(true);
   refresh(true); loadAlerts();
   S.timer = setInterval(tick, 1000);
 }
-const onScroll = () => $("#topbar") && $("#topbar").classList.toggle("scrolled", window.scrollY > 24);
+const onScroll = () => $("#topbar") && $("#topbar").classList.toggle("scrolled", window.scrollY > 8);
 window.addEventListener("scroll", onScroll, { passive: true });
-function route() {
-  const r = (location.hash.replace(/^#\/?/, "").split(/[?#]/)[0] || "overview");
-  S.route = PAGES.some(p => p[0] === r) ? r : "overview";
-  const p = PAGES.find(x => x[0] === S.route);
-  $$(".nav a[data-r], .tabbar a").forEach(a => a.classList.toggle("on", a.dataset.r === S.route || (S.route === "raw" && a.dataset.r === "hardware" && a.closest(".tabbar"))));
-  $("#pageTitle").textContent = p[1]; $("#ltTitle").textContent = p[1]; document.title = `${p[1]} · ${APP}`;
-  S.charts.forEach(c => c.destroy()); S.charts = [];
-  const v = $("#view"); v.innerHTML = `<div class="view"><div id="celebrate"></div>${VIEWS[S.route].build()}</div>`;
-  clearTimeout(S.remT); renderCelebrate(); badge();
-  window.scrollTo(0, 0); onScroll();
-  $$(".seg", v).forEach(seg);
-  if (VIEWS[S.route].wire) VIEWS[S.route].wire();
-  if (S.data) update(true);
+function route(first) {
+  const r = (location.hash.replace(/^#\/?/, "").split(/[?#]/)[0] || "");
+  if (r === "settings" || r === "alerts") { S.route = r; openSheet(r); }
+  else {
+    S.route = "dashboard"; closeSheet();
+    const a = ANCHOR[r]; if (a && !first) { const t = a === "top" ? null : $("#" + a); t ? t.scrollIntoView({ block: "start", behavior: "smooth" }) : window.scrollTo({ top: 0, behavior: "smooth" }); }
+    else if (a && first && a !== "top") setTimeout(() => { const t = $("#" + a); if (t) t.scrollIntoView({ block: "start" }); }, 60);
+  }
+  document.title = S.route === "dashboard" ? `${S.miner ? S.miner.name + " · " : ""}${APP}` : `${S.route === "settings" ? "Settings" : "Alerts"} · ${APP}`;
+  renderCelebrate(); badge(); onScroll();
+}
+/* Settings / alerts sheet: centred panel on Mac & iPad, full-height sheet on iPhone. */
+function openSheet(kind) {
+  clearTimeout(S.remT);
+  let sc = $("#shScrim"), sh = $("#sheet");
+  if (!sh) {
+    sc = document.createElement("div"); sc.className = "scrim"; sc.id = "shScrim";
+    sh = document.createElement("div"); sh.className = "msheet"; sh.id = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-modal", "true");
+    document.body.append(sc, sh); sc.onclick = () => { location.hash = "#/"; };
+    requestAnimationFrame(() => { sc.classList.add("on"); sh.classList.add("on"); });
+    document.addEventListener("keydown", sheetKey); document.body.classList.add("sheet-open");
+  }
+  const title = kind === "settings" ? "Settings" : "Alerts";
+  sh.setAttribute("aria-label", title);
+  sh.innerHTML = `<div class="msheet-h"><div class="seg sm" id="shTabs"><button data-k="settings" class="${kind === "settings" ? "on" : ""}">Settings</button><button data-k="alerts" class="${kind === "alerts" ? "on" : ""}">Alerts <em class="badge" data-badge></em></button></div>
+    <span class="grow"></span><button class="icon-btn" id="shX" aria-label="Close">${ic("x", "sm")}</button></div>
+    <div class="msheet-b" id="sheetBody"><div class="view">${VIEWS[kind].build()}</div></div>`;
+  seg($("#shTabs"));
+  $("#shTabs").onclick = (e) => { const b = e.target.closest("button"); if (b && b.dataset.k !== kind) location.hash = "#/" + b.dataset.k; };
+  $("#shX").onclick = () => { location.hash = "#/"; };
+  if (VIEWS[kind].wire) VIEWS[kind].wire();
+  if (VIEWS[kind].update) VIEWS[kind].update();
+  badge();
+}
+function sheetKey(e) { if (e.key === "Escape" && !$(".dialog")) location.hash = "#/"; }
+function closeSheet() {
+  const sc = $("#shScrim"), sh = $("#sheet"); if (!sh) return;
+  clearTimeout(S.remT); document.removeEventListener("keydown", sheetKey); document.body.classList.remove("sheet-open");
+  sc.classList.remove("on"); sh.classList.remove("on"); sc.id = ""; sh.id = ""; setTimeout(() => { sc.remove(); sh.remove(); }, 260);
 }
 let nextIn = 0;
 function tick() { if (--nextIn <= 0) refresh(false); liveUI(); $$("[data-rel]").forEach(el => el.textContent = rel(+el.dataset.rel)); }
@@ -239,11 +257,10 @@ function liveUI() {
   const d = S.data, age = d && d.fetched_at_unix ? Date.now() / 1000 - d.fetched_at_unix : null;
   let k = "good", t;
   if (S.err) { k = "bad"; t = "Can't refresh"; } else if (!d) { k = "warn"; t = "Connecting…"; }
-  else if (!d.ok) { k = "bad"; t = "Miner offline"; } else { const p = S.pollS || 5; if (age > Math.max(60, p * 3)) k = "warn"; t = "Live · " + (age < 60 ? Math.max(0, Math.floor(age)) + "s ago" : rel(d.fetched_at_unix)); }
-  const dot = `<span class="dot ${k === "good" ? "" : k}"></span>`;
-  $("#sideStatus").innerHTML = dot + `<span>${esc(t)}</span>`;
-  $("#liveTop").innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px">${dot}${esc(t)}</span>`;
-  $("#ltSub").innerHTML = dot + `<span>${esc(S.miner.name)}</span><span class="t3">· ${esc(t.replace("Live · ", ""))}</span>`;
+  else if (!d.ok) { k = "bad"; t = "Miner offline"; } else { const p = S.pollS || 5; if (age > Math.max(60, p * 3)) k = "warn"; t = "Online · updated " + (age < 60 ? Math.max(0, Math.floor(age)) + "s ago" : rel(d.fetched_at_unix)); }
+  const el = $("#hdrLive"); if (el) { el.className = "hdr-live k-" + k; el.innerHTML = `<span class="dot ${k === "good" ? "" : k}"></span><span>${esc(t)}</span>`; }
+  const r = S.remote || {}, rd = $("#remDot");
+  if (rd) rd.className = "rem-dot" + (r.enabled ? (r.state === "online" ? " on" : r.state === "error" ? " bad" : " warn") : "");
 }
 async function refresh(full) {
   nextIn = S.pollS || (S.state && S.state.poll_seconds) || 5;
@@ -263,7 +280,7 @@ async function refresh(full) {
   } catch (e) { S.err = e.message; nextIn = Math.max(nextIn, 15); }
   liveUI();
 }
-function update(first) { const v = VIEWS[S.route]; if (v.update) v.update(first); drawCharts(); }
+function update(first) { DASH.update(first); drawCharts(); }
 
 /* ---------------- charts ---------------- */
 function tipPlugin(tip, fmtRow) {
@@ -388,9 +405,7 @@ VIEWS.overview = {
       M("clock", "Uptime", esc(up.human || "—"), "", `since <b>${up.seconds ? esc(absTime(Math.floor(Date.now() / 1000) - up.seconds)) : "—"}</b>`);
     $("#stUpd").innerHTML = `Updated <span data-rel="${d.fetched_at_unix || 0}">${rel(d.fetched_at_unix)}</span>`;
     $("#notices").innerHTML = notices();
-    const sb = sharesBlock();
     linkCard();
-    $("#mining").innerHTML = sb.html + `<div class="list" style="margin-top:6px">${kv([["Best share", si(sh.best_share)], ["Last share", ap && ap.last_share_unix ? `<span data-rel="${ap.last_share_unix}">${rel(ap.last_share_unix)}</span>` : "—"], ["Block height", ap && ap.block_height ? fmt(ap.block_height) : "—"]])}</div>`;
   },
 };
 VIEWS.performance = {
@@ -419,14 +434,16 @@ VIEWS.performance = {
   update: () => {
     const d = D(), hr = d.hashrate || {}, sh = d.shares || {}, er = d.errors || {}, pw = d.power || {}, c = d.control || {};
     const M = (l, v, u, s) => `<div class="metric"><div class="label">${l}</div><div class="val num">${v}<small>${u}</small></div>${s ? `<div class="sub">${s}</div>` : ""}</div>`;
-    $("#hrStrip").innerHTML = M("5 seconds", fmt(hr.ths_5s, 2), "TH/s", "short-term, noisy") + M("1 minute", fmt(hr.ths_1m, 2), "TH/s") + M("5 minutes", fmt(hr.ths_5m, 2), "TH/s", "headline figure") +
-      M("15 minutes", fmt(hr.ths_15m, 2), "TH/s") + M("Lifetime", fmt(hr.ths_avg, 2), "TH/s", `GHS spd <b>${fmt(hr.ghs_spd, 0)}</b> · mm <b>${fmt(hr.ghs_mm, 0)}</b>`);
+    $("#hrList").innerHTML = kv([["5 seconds", `${fmt(hr.ths_5s, 2)} <span class="t3">· short-term</span>`], ["1 minute", fmt(hr.ths_1m, 2)], ["5 minutes", `<span style="color:var(--accent)">${fmt(hr.ths_5m, 2)}</span>`],
+      ["15 minutes", fmt(hr.ths_15m, 2)], ["Lifetime average", fmt(hr.ths_avg, 2)], ["GHS spd · mm", `${fmt(hr.ghs_spd, 0)} · ${fmt(hr.ghs_mm, 0)}`]]);
+    const ap = activePool();
     const echu = (er.echu && er.echu.length) ? er.echu.join(" ") : "0";
     $("#shares").innerHTML = sharesBlock().html + `<div class="list two">${kv([
       ["Rejected", `${fmt(sh.rejected)} <span class="t3">· ${fmt(sh.reject_pct, 2)}%</span>`], ["Stale", `${fmt(sh.stale)} <span class="t3">· ${fmt(sh.stale_pct, 2)}%</span>`],
       ["Hardware errors", `${fmt(sh.hw_errors)} <span class="t3">· ${isNum(sh.dh_pct) ? fmt(sh.dh_pct, 3) + "%" : "—"}</span>`], ["Best share", `<span title="${fmt(sh.best_share)}">${si(sh.best_share)}</span>`],
       ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"], ["Get / remote fails", `${fmt(sh.get_failures)} / ${fmt(sh.remote_failures)}`],
-      ["ECHU / ECMM / CRC", `${esc(echu)} / ${fmt(er.ecmm)} / ${fmt(er.crc)}`], ["Work utility", fmt(hr.wu, 0)], ["GHS avg", fmt(hr.ghs_avg, 1)], ["Blocks found", fmt(sh.found_blocks)]])}</div>`;
+      ["ECHU / ECMM / CRC", `${esc(echu)} / ${fmt(er.ecmm)} / ${fmt(er.crc)}`], ["Work utility", fmt(hr.wu, 0)], ["GHS avg", fmt(hr.ghs_avg, 1)], ["Blocks found", fmt(sh.found_blocks)],
+      ["Last share", ap && ap.last_share_unix ? `<span data-rel="${ap.last_share_unix}">${rel(ap.last_share_unix)}</span>` : "—"], ["Block height", ap && ap.block_height ? fmt(ap.block_height) : "—"]])}</div>`;
     const hv = heroVal();
     $("#powList").innerHTML = kv([["Draw", `${fmt(pw.watts)} W <span class="t3">· ${fmt(pw.voltage_v, 2)} V</span>`], ["Efficiency", isNum(pw.watts) && hv ? `${fmt(pw.watts / hv, 1)} J/TH` : "—"],
       ["MPO limit", isNum(pw.mpo_w) ? fmt(pw.mpo_w) + " W" : "—"], ["Work speed", c.work_name ? cap(c.work_name) : (isNum(pw.work_level) ? "Level " + pw.work_level : "—")],
@@ -604,6 +621,89 @@ function confirmDialog(title, html, okLabel) {
   });
 }
 
+/* ---------------- the single dashboard page ---------------- */
+const skList = (h) => `<div class="sk" style="height:${h}px"></div>`;
+const DASH = {
+  build: () => `
+    <section class="hero" id="secHash">
+      <div class="hero-top">
+        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· 5-minute average</span></div>
+          <div class="hero-num num"><span id="heroV" class="sk">0.000</span><span class="unit">TH/s</span></div>
+          <div class="hero-meta" id="heroMeta"><span class="sk" style="width:280px;height:20px"></span></div></div>
+        <div class="hero-side"><div class="legend" id="hsLegend"></div>${rangeSeg()}</div>
+      </div>
+      <div class="hero-chart reveal" id="chHero"><div class="chart-empty"></div></div>
+      <div class="hero-range">${rangeSeg().replace('id="range"', 'id="range2"')}</div>
+    </section>
+    <div id="linkCard"></div>
+    <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
+    <div class="cols dash">
+      <section class="panel panel-pad span-7" id="secControls">
+        <div class="sec-h"><h2>Controls</h2><span class="t3 ctl-hint">${ic("lock", "sm")}Every change asks you to confirm</span></div>
+        <div id="ctlBanner"></div>
+        <div id="ctlCols">
+          <div class="ctl-row"><div class="ctl-head"><b>Work speed</b><span class="t3" id="wsNow">—</span></div>
+            <div class="seg lg full" id="wsSeg"><button data-l="low">Low</button><button data-l="medium">Medium</button><button data-l="high">High</button></div>
+            <p class="ctl-desc">Higher speed means more hashrate, power, heat and fan noise.</p>
+            <div class="status-line" id="wsMsg"></div></div>
+          <div class="ctl-row" id="ledPanel"><div class="ctl-head"><b>Light</b><span class="t3" id="ledNow">—</span></div>
+            <div class="led-grid">
+              <div class="device" id="dev"><div class="glow"></div><div class="unit"><div class="ring"></div></div><div class="cap" id="devCap"></div></div>
+              <div class="led-fields">
+                <div class="ctl-field"><div class="lab">Colour <span id="hexLab" class="mono"></span></div>
+                  <div class="chips" id="chips">${PRESETS.map(([n, h]) => `<button class="chip-c" data-hex="${h}" title="${n}" aria-label="${n}" style="--sw:${h}"></button>`).join("")}<label class="custom-c" id="customC" title="Custom colour"><input type="color" id="cPick" aria-label="Custom colour"></label></div></div>
+                <div class="ctl-field"><div class="lab">Brightness <span class="num" id="brVal">100%</span></div>
+                  <div class="slider">${ic("lightbulb", "sm")}<input type="range" id="br" min="0" max="100" value="100" aria-label="Brightness"></div></div>
+                <div class="ctl-field"><div class="lab">Mode</div>
+                  <div class="seg full" id="fxSeg">${Object.entries(MODE).map(([k, v]) => `<button data-m="${k}">${v}</button>`).join("")}</div></div>
+              </div>
+            </div>
+            <div class="apply-bar"><span class="t3" id="ledDirty">No changes</span><button class="btn ghost" id="ledReset" disabled>Reset</button><button class="btn" id="ledApply" disabled>Apply light</button></div>
+            <div class="status-line" id="ledMsg"></div></div>
+        </div>
+      </section>
+      <div class="span-5 stack">
+        <section class="panel panel-pad" id="secStatus"><div class="sec-h"><h2>Status</h2><span class="t3" id="stUpd"></span></div><div id="notices">${skList(48)}</div></section>
+        <section class="panel panel-pad"><div class="sec-h"><h2>Hashrate</h2><span class="t3">TH/s</span></div><div class="list" id="hrList">${skList(150)}</div></section>
+      </div>
+      <section class="panel panel-pad span-8" id="secTemps"><div class="sec-h"><h2>Temperature</h2><span class="t3">same range as hashrate</span></div>
+        <div class="legend" id="tLegend" style="margin-bottom:8px"></div><div class="chart reveal" id="chTemp" style="height:calc(var(--chart-h) * .7)"><div class="chart-empty"></div></div></section>
+      <section class="panel panel-pad span-4"><div class="sec-h"><h2>Thermals &amp; fan</h2></div><div class="list" id="thermList">${skList(200)}</div></section>
+      <section class="panel panel-pad span-12" id="secChips"><div class="sec-h"><h2>Chips <span class="t3" id="chipHint"></span></h2><span class="ramp">cool<i></i>hot</span></div>
+        <div class="heat num" id="heat">${Array.from({ length: 10 }, () => '<div class="cell sk"></div>').join("")}</div></section>
+      <section class="panel panel-pad span-6" id="secShares"><div class="sec-h"><h2>Shares &amp; errors</h2></div><div id="shares">${skList(220)}</div></section>
+      <section class="panel panel-pad span-6" id="secPower"><div class="sec-h"><h2>Power <span class="t3">watts</span></h2></div>
+        <div class="chart reveal" id="chPow" style="height:150px"><div class="chart-empty"></div></div><div class="list" id="powList" style="margin-top:12px"></div></section>
+      <section class="panel span-7 pools-card" id="secPools"><div class="sec-h panel-pad-h"><h2>Pools</h2></div><div id="poolList"><div class="pool"><div class="sk" style="height:40px;grid-column:1/-1"></div></div></div>
+        <div class="panel-pad pools-stats"><div class="list two" id="poolStats"></div></div></section>
+      <section class="panel panel-pad span-5" id="secDevice"><div class="sec-h"><h2>Device</h2></div><div class="list" id="devList"></div>
+        <div class="sec-h" style="margin-top:20px"><h2>Network drops <span class="t3" id="nfN"></span></h2></div><div class="list" id="nfList"></div></section>
+      <details class="panel span-12 raw-card" id="secRaw"><summary class="panel-pad-h">${ic("table", "sm t3")}<span class="grow">All miner fields</span><span class="t3" id="rawCount"></span>${ic("chevron-down", "sm t3 chev")}</summary>
+        <div class="raw-in"><div class="search">${ic("search", "sm")}<input class="input" id="rawQ" placeholder="Filter fields" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <div class="raw-table" id="rawT"></div></div></details>
+    </div>
+    <footer class="foot one-foot"><span>${logo.replace('width="28" height="28"', 'width="16" height="16"')}<b>${esc(APP)}</b> ${esc(S.state.version || "")}${TAG ? ` · ${esc(TAG)}` : ""}</span><span id="footHost">${S.miner.kind === "remote" ? "Read-only preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></footer>`,
+  wire: () => {
+    wireRange();
+    chart($("#chHero"), HASH_SERIES(), (u, v) => v.map(x => x.toFixed(1)), v => fmt(v, 3) + " TH/s", hashRange);
+    const lg = $("#hsLegend");
+    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "h5m" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
+    lg.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; S.series[k] = !S.series[k]; b.classList.toggle("off", !S.series[k]);
+      const u = S.charts.find(c => c._keys.includes(k) && c.root.closest("#chHero")); if (u) u.setSeries(u._keys.indexOf(k) + 1, { show: S.series[k] }); };
+    VIEWS.hardware.wire();
+    chart($("#chPow"), [{ k: "w", label: "Power", c: "#d4d7dd", w: 1.75, fill: ["rgba(255,255,255,.10)", "rgba(255,255,255,0)"] }], (u, v) => v.map(x => x + "W"), v => fmt(v) + " W",
+      (u, lo, hi) => lo == null ? [0, 200] : [Math.max(0, Math.floor(lo * .9 / 10) * 10), Math.ceil(hi * 1.08 / 10) * 10]);
+    VIEWS.controls.wire();
+    VIEWS.raw.wire();
+    $("#secRaw").addEventListener("toggle", () => VIEWS.raw.update());
+  },
+  update: (first) => {
+    if (!$("#heroV")) return;
+    [VIEWS.overview, VIEWS.performance, VIEWS.hardware, VIEWS.pools, VIEWS.controls].forEach(v => v.update(first));
+    if ($("#secRaw").open) VIEWS.raw.update();
+  },
+};
+
 /* ---------------- raw ---------------- */
 VIEWS.raw = {
   build: () => `<div class="search">${ic("search", "sm")}<input class="input" id="rawQ" placeholder="Filter fields" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
@@ -728,7 +828,7 @@ VIEWS.settings = {
             <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
             <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
         ${(st.lan_urls || []).length ? `<section class="panel panel-pad">${setH("smartphone", "On your Wi-Fi", "Open this on a phone on the same network:")}${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></section>` : ""}
-        <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change under Controls. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
+        <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change in Controls on the dashboard. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
           ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
           <button class="btn ghost block" id="dbg" style="margin-top:16px">${ic("copy", "sm")}Copy debug info</button>
           ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:8px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including remote access" : ""}. Open the app again to restart it.</p>` : ""}</section>
@@ -763,7 +863,7 @@ VIEWS.settings = {
 async function remoteLoad() {
   clearTimeout(S.remT);
   try { S.rem = await api("/api/remote"); } catch (e) { return; }
-  if (S.route !== "settings") return;
+  if (!$("#remoteSet")) return;
   remoteUI(); autoUI();
   const busy = S.rem.status && ["downloading", "starting", "restarting"].includes(S.rem.status.state);
   S.remT = setTimeout(remoteLoad, busy ? 800 : 5000);
@@ -788,7 +888,7 @@ function remoteUI() {
         <div class="rl-acts"><button class="btn ghost" id="rlCopy">${ic("copy", "sm")}Copy link</button><a class="btn ghost" href="${esc(st.url)}" target="_blank" rel="noopener">${ic("external-link", "sm")}Open</a></div>
         <ol class="steps"><li><span>Scan the code with your phone's camera.</span></li><li><span>Sign in with your ${esc(APP)} password.</span></li><li><span>In Safari tap Share → <b>Add to Home Screen</b>.</span></li></ol></div></div>
       <div class="rl-foot">${ic("circle-check", "sm")}<span>Connected through Cloudflare${st.cloudflared ? " · cloudflared " + esc(st.cloudflared) : ""} · since <span data-rel="${st.since}">${rel(st.since)}</span>${st.restarts ? ` · reconnected ${st.restarts}×` : ""}</span></div>
-      ${R.named ? "" : `<div class="notice-s warn">${ic("triangle-alert", "sm")}<span><b>This free link changes</b> when ${esc(APP)} or the computer restarts. You'll get a “New link” alert and the card on Overview will ask you to re-scan. Turn on <b>Start automatically</b> below so restarts are rare, or set up a permanent link.</span></div>`}`;
+      ${R.named ? "" : `<div class="notice-s warn">${ic("triangle-alert", "sm")}<span><b>This free link changes</b> when ${esc(APP)} or the computer restarts. You'll get a “New link” alert and the card on the dashboard will ask you to re-scan. Turn on <b>Start automatically</b> below so restarts are rare, or set up a permanent link.</span></div>`}`;
   else if (on && st.state === "error") body += `<div class="notice-s bad">${ic("circle-alert", "sm")}<span><b>Couldn't start remote access.</b> ${esc(st.error || "")}</span></div><button class="btn ghost" id="rlRetry" style="margin-top:12px">${ic("refresh-cw", "sm")}Try again</button>`;
   else if (on) body += `<div class="conn"><span class="spin"></span><span>${esc(st.detail || "Connecting to Cloudflare…")}</span></div>${st.error && st.state === "restarting" ? `<p class="fine">${esc(st.error)}</p>` : ""}`;
   else if (R.available) body += `<ul class="facts"><li>${ic("lock", "sm")}<span>Password-protected. Settings like this one can only be changed from home.</span></li>
