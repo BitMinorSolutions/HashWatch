@@ -595,10 +595,10 @@ a.icon-btn { text-decoration: none; }
 .cel-acts { position: relative; display: flex; gap: 8px; flex: none; }
 .celebrate .btn.ghost { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); }
 .confetti { position: absolute; inset: 0; pointer-events: none; }
-.confetti i { position: absolute; top: -12px; left: var(--x); width: 6px; height: 10px; border-radius: 2px; background: var(--c); opacity: .9;
+.confetti i { position: absolute; top: calc(-1 * var(--sz, 18px)); left: var(--x); width: calc(var(--sz, 18px) * .53); height: var(--sz, 18px);
+  background: url("icons/btc-glyph.svg") no-repeat center / contain; opacity: .92; filter: brightness(var(--br, 1));
   animation: fall 3.2s var(--d) cubic-bezier(.3,.6,.5,1) infinite; transform: rotate(var(--r)); }
-.confetti i:nth-child(3n) { width: 5px; height: 5px; border-radius: 50%; }
-@keyframes fall { 0% { transform: translateY(0) rotate(var(--r)); opacity: 0; } 10% { opacity: .95; } 100% { transform: translateY(150px) rotate(calc(var(--r) + 300deg)); opacity: 0; } }
+@keyframes fall { 0% { transform: translate(0, 0) rotate(var(--r)); opacity: 0; } 10% { opacity: .95; } 100% { transform: translate(var(--dx, 0px), 150px) rotate(calc(var(--r) + 300deg)); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .confetti, .cel-ic, .link-card.is-new::after { animation: none !important; } .confetti { display: none; } }
 
 /* alerts history */
@@ -816,8 +816,8 @@ body.sheet-open { overflow: hidden; }
 .big-cel.on { opacity: 1; }
 .bc-flash { position: absolute; inset: 0; background: radial-gradient(60% 60% at 50% 45%, rgba(255,210,122,.55), transparent 70%); animation: bcFlash 1.6s ease-out 3; pointer-events: none; }
 @keyframes bcFlash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
-.confetti.big i { width: calc(8px * var(--s)); height: calc(14px * var(--s)); animation: fallBig 4.2s var(--d) cubic-bezier(.3,.6,.5,1) infinite; }
-@keyframes fallBig { 0% { transform: translateY(-20px) rotate(var(--r)); opacity: 0; } 8% { opacity: 1; } 100% { transform: translateY(105vh) rotate(calc(var(--r) + 540deg)); opacity: .6; } }
+.confetti.big i { width: calc(var(--sz, 22px) * .53); height: var(--sz, 22px); animation: fallBig 4.2s var(--d) cubic-bezier(.3,.6,.5,1) infinite; }
+@keyframes fallBig { 0% { transform: translate(0, -20px) rotate(var(--r)); opacity: 0; } 8% { opacity: 1; } 100% { transform: translate(var(--dx, 0px), 105vh) rotate(calc(var(--r) + 540deg)); opacity: .6; } }
 .bc-card { position: relative; width: min(480px, 100%); text-align: center; padding: 34px 30px 26px; border-radius: 24px;
   background: radial-gradient(100% 120% at 50% 0%, rgba(255,194,102,.30), transparent 60%), linear-gradient(180deg, #2a1b06, #120f0a); border: 1px solid rgba(245,165,36,.5);
   box-shadow: 0 40px 120px -20px rgba(245,165,36,.55), inset 0 1px 0 rgba(255,255,255,.1); animation: celIn .8s cubic-bezier(.2,1.3,.4,1) both; }

@@ -756,7 +756,7 @@ function renderCelebrate() {
   if (b.t > Date.now() / 1000 - 6 * 3600 && LS.get("hw_block_big") !== String(b.id)) { LS.set("hw_block_big", b.id); bigCelebrate(b); }
   if (el.dataset.id === String(b.id) && el.innerHTML) return;
   el.dataset.id = b.id;
-  const bits = Array.from({ length: 22 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 7) * .35}s;--r:${(i * 53) % 360}deg;--c:${["#f5a524", "#ffd60a", "#ffc266", "#3ccf8e", "#ffffff"][i % 5]}"></i>`).join("");
+  const bits = confettiBits(22, false);
   el.innerHTML = `<section class="celebrate" role="status"><div class="confetti" aria-hidden="true">${bits}</div>
     <div class="cel-ic">${ic("party-popper")}</div>
     <div class="cel-txt"><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div><h2>${esc(b.miner_name || "Your miner")} found a block!</h2><p>${esc(b.body)}</p></div>
@@ -1065,6 +1065,11 @@ function autoCard() {
     ${acts.length ? `<div class="acts-log">${acts.map(x => `<div>${ic(x.ok ? "circle-check" : "circle-alert", "sm")}<span>${esc(x.text)}</span><span class="t3" data-rel="${x.t}">${rel(x.t)}</span></div>`).join("")}</div>` : ""}`;
 }
 
+function confettiBits(n, big) {
+  const dStep = big ? .18 : .35, dMod = big ? 11 : 7, min = 14, span = big ? 14 : 8;
+  return Array.from({ length: n }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % dMod) * dStep}s;--r:${(i * 53) % 360}deg;--sz:${min + (i * 11) % (span + 1)}px;--dx:${-40 + (i * 19) % 81}px;--br:${(0.86 + (i % 5) * .07).toFixed(2)}"></i>`).join("");
+}
+
 /* ---------------- block celebration: confetti + sound + flash ---------------- */
 function chime() {
   if (S.feat && S.feat.fun && S.feat.fun.sound_off) return;
@@ -1077,7 +1082,7 @@ function chime() {
 function bigCelebrate(b) {
   if ($("#bigCel")) return;
   const d = document.createElement("div"); d.id = "bigCel"; d.className = "big-cel"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Block found");
-  const bits = Array.from({ length: 90 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 11) * .18}s;--r:${(i * 53) % 360}deg;--s:${.7 + (i % 5) * .15};--c:${["#f5a524", "#ffd60a", "#ffc266", "#3ccf8e", "#ffffff", "#ff8a3d"][i % 6]}"></i>`).join("");
+  const bits = confettiBits(90, true);
   const rw = S.lot && S.lot.reward;
   d.innerHTML = `<div class="bc-flash"></div><div class="confetti big" aria-hidden="true">${bits}</div>
     <div class="bc-card"><div class="bc-ic">${ic("trophy")}</div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
