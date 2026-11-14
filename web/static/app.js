@@ -185,6 +185,7 @@ function viewSetup() {
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
     <form class="panel" id="s-form" autocomplete="off">${minerForm("s")}</form>
+    ${tailscaleSetupHTML()}
     <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p>
     <p class="fine">If another dashboard is already reading this miner, turn on Gentle mode in Settings after you connect.</p></div></div>`;
   wireMinerForm("s", async () => boot());
@@ -862,6 +863,18 @@ VIEWS.alerts = {
 
 /* ---------------- remote link card (overview) ---------------- */
 const qrSrc = (u) => "/api/remote/qr.svg?u=" + encodeURIComponent(u);
+const tsQR = (u) => "/api/tailscale/qr.svg?u=" + encodeURIComponent(u);
+function tailscaleInfo() { return (S.state && S.state.tailscale) || {}; }
+function tailscaleSetupHTML() {
+  const T = tailscaleInfo(), u = T.url;
+  if (!u) return "";
+  return `<div class="panel" style="margin-top:16px;padding:16px 18px;text-align:left">
+    <div class="set-h" style="margin-bottom:8px"><div class="set-ic">${ic("globe")}</div><div class="set-t"><h2 style="margin:0;font-size:15px">Tailscale</h2><p style="margin:4px 0 0">A permanent link on your tailnet. It stays the same after restarts.</p></div></div>
+    <div class="mono" style="font-size:14px;word-break:break-all">${esc(u)}</div>
+    ${T.https ? `<p class="fine" style="margin:8px 0 0">HTTPS through <span class="mono">tailscale serve</span>.</p>` : `<p class="fine" style="margin:8px 0 0">Open this from any device signed into the same Tailscale network.</p>`}
+  </div>`;
+}
+
 async function copyLink(u, btn) {
   try { await navigator.clipboard.writeText(u); } catch (e) { const t = document.createElement("textarea"); t.value = u; document.body.append(t); t.select(); document.execCommand("copy"); t.remove(); }
   toast("Link copied"); if (btn) { const h = btn.innerHTML; btn.innerHTML = ic("check", "sm") + "Copied"; setTimeout(() => btn.innerHTML = h, 1600); }
@@ -987,8 +1000,25 @@ function remoteUI() {
       <label class="f" for="tkT">Tunnel token</label><input class="input mono" id="tkT" type="password" autocomplete="off" placeholder="${R.named ? "•••••••• (saved)" : "eyJhIjoi…"}"${can ? "" : " disabled"}>
       <label class="f" for="tkH">Hostname</label><input class="input mono" id="tkH" placeholder="miner.example.com" value="${esc(R.hostname || "")}"${can ? "" : " disabled"} autocapitalize="off" spellcheck="false">
       <div class="err" id="tkE"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn ghost" id="tkS"${can ? "" : " disabled"}>Save</button>${R.named ? `<button class="btn danger" id="tkC"${can ? "" : " disabled"}>Use free link instead</button>` : ""}</div></div></details>` : "";
-  el.innerHTML = setH("globe", `Remote access ${pill}`, `Open ${esc(APP)} from anywhere, like on mobile data, through a private https link. Off by default.`,
-    sw("remSw", on || S.remForm, !can, "Remote access")) + body + adv;
+  const T = tailscaleInfo();
+  const tsLocal = !!(S.state && S.state.local_viewer);
+  let tsBlock = "";
+  if (T.available && T.url) {
+    tsBlock = `<div class="rl" style="margin:0 0 18px">
+      <div class="rl-qr"><img src="${tsQR(T.url)}" alt="QR code for your Tailscale link" width="168" height="168"></div>
+      <div class="rl-main"><div class="label">Tailscale · permanent</div><div class="rl-url"><span class="mono">${esc(T.url)}</span></div>
+        <div class="rl-acts"><button class="btn ghost" id="tsCopy">${ic("copy", "sm")}Copy link</button><a class="btn ghost" href="${esc(T.url)}" target="_blank" rel="noopener">${ic("external-link", "sm")}Open</a>
+          ${tsLocal && !T.serve ? `<button class="btn ghost" id="tsServe">${ic("lock", "sm")}Use Tailscale HTTPS</button>` : ""}
+          ${tsLocal && T.serve ? `<button class="btn ghost" id="tsServeOff">Turn off HTTPS</button>` : ""}</div>
+        <p class="fine" style="margin:10px 0 0">${T.https ? "HTTPS is on through tailscale serve. This link stays the same after restarts." : "Open this from any device signed into the same Tailscale network. The address does not change when " + esc(APP) + " restarts. Optionally turn on tailscale serve for HTTPS."}</p>
+        ${T.error ? `<p class="fine" style="margin:8px 0 0">${esc(T.error)}</p>` : ""}</div></div>`;
+  } else if (T.available && T.error) {
+    tsBlock = `<div class="notice-s" style="margin:0 0 16px">${ic("info", "sm")}<span>${esc(T.error)}</span></div>`;
+  } else {
+    tsBlock = `<div class="notice-s" style="margin:0 0 16px">${ic("info", "sm")}<span>If this computer already runs Tailscale, ${esc(APP)} will show a permanent link here (IP or MagicDNS). ${esc(APP)} never installs Tailscale for you. Cloudflare, below, stays an optional alternative.</span></div>`;
+  }
+  el.innerHTML = setH("globe", `Remote access ${pill}`, `Open ${esc(APP)} from anywhere. A Tailscale address on this computer is the permanent link when Tailscale is already installed. Cloudflare remains an optional alternative, off by default.`,
+    sw("remSw", on || S.remForm, !can, "Cloudflare remote access")) + tsBlock + body + adv;
   const s = $("#remSw"); if (s) s.onclick = remoteToggle;
   const c = $("#rlCopy"); if (c) c.onclick = (e) => copyLink(st.url, e.currentTarget);
   const rt = $("#rlRetry"); if (rt) rt.onclick = async () => { await remoteSet({ enabled: false }); await remoteSet({ enabled: true }); };
@@ -1000,6 +1030,18 @@ function remoteUI() {
     if (!t && !R.named) { $("#tkE").textContent = "Paste the tunnel token."; return; }
     try { await remoteSet({ enabled: R.enabled, token: t || undefined, hostname: h }); toast("Permanent link saved"); } catch (er) { $("#tkE").textContent = er.message; } };
   const tc = $("#tkC"); if (tc) tc.onclick = async () => { try { await remoteSet({ enabled: R.enabled, token: "", hostname: "" }); toast("Using the free link"); } catch (er) { $("#tkE").textContent = er.message; } };
+  const tsc = $("#tsCopy"); if (tsc) tsc.onclick = (e) => copyLink(tailscaleInfo().url, e.currentTarget);
+  const tss = $("#tsServe"); if (tss) tss.onclick = async () => {
+    if (!await confirmDialog("Turn on Tailscale HTTPS?", "This runs tailscale serve on this computer so your tailnet link is https. " + APP + " does not change your Tailscale settings beyond that, and it will not install Tailscale.", "Turn on")) return;
+    tss.disabled = true;
+    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: true } }); toast("Tailscale HTTPS is on"); remoteUI(); }
+    catch (e) { toast(e.message, "bad"); tss.disabled = false; }
+  };
+  const tso = $("#tsServeOff"); if (tso) tso.onclick = async () => {
+    if (!await confirmDialog("Turn off Tailscale HTTPS?", "This runs tailscale serve reset. Your http Tailscale address will still work.", "Turn off")) return;
+    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: false } }); toast("Tailscale HTTPS is off"); remoteUI(); }
+    catch (e) { toast(e.message, "bad"); }
+  };
 }
 async function remoteSet(body) {
   const r = await api("/api/remote", { method: "POST", body });

@@ -88,6 +88,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/password", s.auth(s.admin(s.password)))
 	mux.HandleFunc("GET /api/remote", s.auth(s.adminOnly(s.remoteGet)))
 	mux.HandleFunc("GET /api/remote/qr.svg", s.auth(s.adminOnly(s.remoteQR)))
+	mux.HandleFunc("GET /api/tailscale", s.auth(s.adminOnly(s.tailscaleGet)))
+	mux.HandleFunc("GET /api/tailscale/qr.svg", s.auth(s.adminOnly(s.tailscaleQR)))
+	mux.HandleFunc("POST /api/tailscale/serve", s.auth(s.admin(s.tailscaleServe)))
 	mux.HandleFunc("POST /api/remote/rotate", s.auth(s.admin(s.remoteRotate)))
 	mux.HandleFunc("GET /v/{token}", s.viewLink)
 	mux.HandleFunc("GET /api/security", s.auth(s.adminOnly(s.securityGet)))
@@ -279,6 +282,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		out["local_viewer"] = IsLocal(r)
 		if role == RoleAdmin {
 			out["remote"] = s.remoteBrief()
+			out["tailscale"] = s.tailscaleBrief()
 		} else {
 			out["lan_urls"] = nil
 		}

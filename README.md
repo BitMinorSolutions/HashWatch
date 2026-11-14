@@ -113,6 +113,15 @@ restarts, or after a long connection drop. To make that easy to live with:
    to `http://127.0.0.1:48412`, then paste the **tunnel token** and hostname under
    **Settings → Remote access → Permanent link**.
 
+### Tailscale (if already installed)
+
+If this computer already runs [Tailscale](https://tailscale.com), **Settings → Remote access**
+and the first-run screen show its MagicDNS name or Tailscale IP as a **permanent** link. The
+address stays the same after restarts. HashWatch never installs Tailscale for you. From your
+home network you can optionally turn on `tailscale serve` for HTTPS. Cloudflare, above, stays
+an optional alternative. The Raspberry Pi installer also prints the Tailscale URL when Tailscale
+is present.
+
 Remote access needs outbound internet access to Cloudflare (UDP/TCP port 7844). Some work or
 school networks block it.
 

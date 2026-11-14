@@ -374,8 +374,19 @@ print_ip() {
 
 if command -v tailscale >/dev/null 2>&1; then
 	ts=$(tailscale ip -4 2>/dev/null || true)
-	if [ -n "$ts" ]; then
+	# MagicDNS name from status --json (no jq required).
+	tsname=$(tailscale status --json 2>/dev/null | tr ',' '\n' | sed -n 's/.*"DNSName":"\([^"]*\)".*/\1/p' | head -n 1)
+	tsname=${tsname%.}
+	if [ -n "$tsname" ]; then
+		echo "  On Tailscale:      http://$tsname:$port"
+		[ -n "$ts" ] && echo "  Tailscale IP:      http://$ts:$port"
+	elif [ -n "$ts" ]; then
 		echo "  On Tailscale:      http://$ts:$port"
+	fi
+	# If tailscale serve is already proxying HTTPS, print that URL too.
+	tsserve=$(tailscale serve status --json 2>/dev/null || true)
+	if [ -n "$tsname" ] && printf '%s' "$tsserve" | grep -q ':443'; then
+		echo "  Tailscale HTTPS:   https://$tsname"
 	fi
 elif [ -d /sys/class/net/tailscale0 ]; then
 	ts=$(ip -4 -o addr show dev tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1)

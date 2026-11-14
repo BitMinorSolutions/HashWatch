@@ -204,6 +204,8 @@ func TestViewOnlyRole(t *testing.T) {
 		{"POST", "/api/control/reboot", `{"miner":"m","password":"lookonly"}`},
 		{"GET", "/api/update", ""},
 		{"POST", "/api/update", `{"apply":true}`},
+		{"GET", "/api/tailscale", ""},
+		{"POST", "/api/tailscale/serve", `{"enabled":true}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/sessions/revoke", `{}`},
 		{"GET", "/api/remote", ""},
