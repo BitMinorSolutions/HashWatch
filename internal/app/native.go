@@ -109,6 +109,9 @@ func (s *Server) debug(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s (%s/%s, %s)\nos: %s\n", AppName, s.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), osVersion())
 	fmt.Fprintf(&b, "time: %s\npreview: %v  port: %d  lan: %v  wifi: %v  gentle: %v  poll: %v\n", time.Now().Format(time.RFC3339), s.Locked, s.Port, s.LANOK, s.Cfg.WifiOn(), s.Cfg.Gentle, s.Poll.Every)
+	if u := s.updateBrief(); true {
+		fmt.Fprintf(&b, "update: service=%v url_set=%v channel=%v current=%v latest=%v\n", u["service"], u["url_set"], u["channel"], u["current"], u["latest"])
+	}
 	fmt.Fprintf(&b, "password set: %v  shell: %s\n", s.Cfg.PasswordHash != "", s.Shell)
 	for _, m := range s.Cfg.Miners {
 		v, _ := s.Poll.Live(m.ID, 1<<62)

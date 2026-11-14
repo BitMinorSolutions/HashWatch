@@ -14,7 +14,7 @@ import (
 var remoteMu sync.Mutex // serialises enable/disable
 
 func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"app": AppName, "app_id": AppID, "id": s.InstanceID, "pid": os.Getpid()})
+	writeJSON(w, 200, map[string]any{"app": AppName, "app_id": AppID, "id": s.InstanceID, "pid": os.Getpid(), "version": s.Version})
 }
 
 func (s *Server) remoteBrief() map[string]any {

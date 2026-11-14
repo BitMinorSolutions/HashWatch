@@ -1,0 +1,29 @@
+[Unit]
+Description=HashWatch miner dashboard
+Documentation=file:///opt/hashwatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hashwatch
+Group=hashwatch
+Environment=HASHWATCH_SERVICE=1
+Environment=HASHWATCH_BIN=/opt/hashwatch/hashwatch
+Environment=HASHWATCH_CONFIG=/var/lib/hashwatch
+# HASHWATCH_UPDATE_URL is filled in by install-pi.sh when a release URL is set.
+WorkingDirectory=/var/lib/hashwatch
+ExecStart=/opt/hashwatch/supervise
+Restart=always
+RestartSec=3
+TimeoutStartSec=45
+# The updater (running as this user) must be able to replace the binary.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hashwatch /opt/hashwatch
+PrivateTmp=yes
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

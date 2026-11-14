@@ -18,6 +18,7 @@ import (
 	"github.com/hashwatch/hashwatch/internal/netdata"
 	"github.com/hashwatch/hashwatch/internal/source"
 	"github.com/hashwatch/hashwatch/internal/tunnel"
+	"github.com/hashwatch/hashwatch/internal/update"
 )
 
 type Server struct {
@@ -40,9 +41,10 @@ type Server struct {
 	Shell      string           // "browser", "macos-native", "windows-native"
 	ShowWindow func()           // native shells: bring the window forward (second launch)
 
-	Net   *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
-	Stats *Stats           // lottery stats, badges, summaries
-	Auto  *Automations     // schedule, light effects
+	Net    *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
+	Stats  *Stats           // lottery stats, badges, summaries
+	Auto   *Automations     // schedule, light effects
+	Update *update.Runner   // OTA for the Pi service; never talks to a miner
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -97,6 +99,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/features", s.auth(s.mutating(s.featuresSet)))
 	mux.HandleFunc("POST /api/privacy", s.auth(s.admin(s.privacySet)))
 	mux.HandleFunc("POST /api/prefs", s.auth(s.admin(s.prefsSet)))
+	mux.HandleFunc("GET /api/update", s.auth(s.adminOnly(s.updateStatus)))
+	mux.HandleFunc("POST /api/update", s.auth(s.admin(s.updateSet)))
 	mux.HandleFunc("POST /api/remote", s.admin(s.remoteSet)) // checks auth itself (may create the password)
 	mux.HandleFunc("POST /api/autostart", s.auth(s.admin(s.autostartSet)))
 	mux.HandleFunc("GET /api/alerts", s.auth(s.alertsGet))
@@ -232,9 +236,12 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	role := s.role(r)
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
-		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
+		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !ServiceMode(), "tagline": Tagline, "shell": s.Shell, "service": ServiceMode()}
 	wifi, gentle, advanced := s.Cfg.Prefs()
 	out["allow_wifi"], out["gentle"], out["advanced_controls"] = wifi, gentle, advanced
+	if role == RoleAdmin || (ok && !s.Locked && role != RoleView) {
+		out["update"] = s.updateBrief()
+	}
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install
 	}

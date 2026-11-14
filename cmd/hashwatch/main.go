@@ -189,6 +189,16 @@ func main() {
 		poll.SetGentle(true)
 	}
 	srv := &app.Server{Cfg: cfg, Poll: poll, Static: web.FS, Version: version, Host: listenHost, LANOK: app.WildcardHost(listenHost), InstanceID: app.NewID()}
+	exe := autostart.Exe()
+	if v := os.Getenv("HASHWATCH_BIN"); v != "" {
+		exe = v
+	} else if self, err := os.Executable(); err == nil {
+		exe = self
+	}
+	srv.Update = app.NewUpdateRunner(cfg, version, exe, *dir)
+	if srv.Update.Snapshot().URLSet {
+		go srv.Update.Loop(context.Background())
+	}
 	alerts := app.NewAlerts(*dir)
 	alerts.Enabled = cfg.AlertOn
 	srv.Alerts = alerts
@@ -297,6 +307,7 @@ func main() {
 	if *remote == "" || private {
 		app.WriteInstance(*dir, srv.Port, srv.InstanceID)
 	}
+	go srv.ConfirmPendingUpdate()
 	var quitOnce sync.Once
 	shutdown := func() {
 		quitOnce.Do(func() {

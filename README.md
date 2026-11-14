@@ -188,7 +188,32 @@ To watch from your phone, open the address shown under **Settings → On your Wi
 Click **More info → Run anyway**. If Windows Firewall asks, allow access on **private networks**
 so your phone can reach the dashboard.
 
-### Raspberry Pi / Linux
+### Raspberry Pi (always-on dashboard)
+
+HashWatch can run as a systemd service on Raspberry Pi OS Lite (64-bit) — no Docker, no Umbrel.
+It binds `0.0.0.0` by default on the Pi so you can open it from your LAN or Tailscale, starts on boot, and can update itself.
+
+Once a release host is set (see **Hosting updates** below):
+
+```sh
+curl -fsSL "$RELEASE/install-pi.sh" | sudo env HASHWATCH_RELEASE_URL="$RELEASE" sh
+```
+
+The installer creates a `hashwatch` system user, puts the binary in `/opt/hashwatch`, stores data in `/var/lib/hashwatch`, and enables `hashwatch.service` (`Restart=always`). It is safe to run again (it keeps your settings). Uninstall with `sudo install-pi.sh --uninstall` (add `--purge` to also delete `/var/lib/hashwatch`).
+
+Or, from a checkout:
+
+```sh
+make pi-bins                          # linux/arm64 + linux/amd64
+sudo ./packaging/linux/install-pi.sh --bin dist/hashwatch-linux-arm64
+```
+
+On a 32-bit Pi use `make linux-armv7` and `--bin dist/hashwatch-linux-armv7`.
+
+Updates check a signed manifest about every five minutes (or **Settings → Updates → Update now**). Each download is SHA-256 checked and the manifest is ed25519-verified with a public key baked into the binary. A failed health check rolls the previous binary back automatically. The updater never talks to the miner. Pick the **stable** or **dev** channel in Settings.
+
+### Raspberry Pi / Linux (manual)
+
 ```sh
 unzip hashwatch-linux-arm64.zip && cd hashwatch-linux-arm64
 ./hashwatch            # add --no-browser on a headless Pi
@@ -206,7 +231,7 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 | `--no-browser` | | Don't open a browser on start |
 | `--serve` | | Server only, no app window (browser-based) |
 | `--hidden` | | Start in the menu bar without opening the window (used by auto-start) |
-| `--config DIR` | OS config dir | Where settings and chart history are stored |
+| `--config DIR` | OS config dir | Where settings and chart history are stored. The Pi service uses `/var/lib/hashwatch`. |
 
 Settings live in your user config folder (`~/Library/Application Support/Hashwatch`,
 `%AppData%\Hashwatch`, or `~/.config/Hashwatch`). Delete it to start over.
@@ -234,7 +259,24 @@ go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls includ
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
 ./scripts/build.sh v0.6.0   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
+make pi-bins                 # linux/arm64 and linux/amd64 only (for the Pi and for testing here)
+make pi-release VERSION=v0.6.0
+# sign: go run ./cmd/hwsign keygen -out ./secrets
+#       HASHWATCH_UPDATE_KEY=./secrets/ed25519.priv HASHWATCH_RELEASE_URL=$RELEASE make pi-release VERSION=v0.6.0
+# bake the public key into the binary with HASHWATCH_UPDATE_PUBKEY=$(cat secrets/ed25519.pub)
 ```
+
+### Hosting updates
+
+The installer and the updater take a release URL you choose; nothing is hardcoded to a vendor account. Put `install-pi.sh`, `manifest.signed.json` and the `hashwatch-linux-*` binaries at that URL.
+
+Options:
+
+1. **GitHub Releases** on a repo you own (recommended to start). Free, versioned, HTTPS, and the install one-liner is just `curl …/releases/latest/download/install-pi.sh`. Attach `manifest.signed.json` and the Linux binaries to each release (or keep a dedicated “updates” release whose manifest points at versioned assets).
+2. **Cloudflare R2** (or another S3-compatible bucket) plus a custom domain. Better if the binaries shouldn’t be public, or if you already use Cloudflare for the tunnel. Overwrite `manifest.signed.json` in place when you ship a channel update.
+3. **GitHub Pages** or a branch of the same repo, if the binaries stay small. Fine for a personal setup; less convenient than Releases for versioned assets.
+
+Recommendation: **GitHub Releases** until there’s a reason to hide the binaries — no extra account, an audit trail, and a simple one-liner. Keep the ed25519 private key offline (not in the repo). Bake the matching public key into Pi builds with `HASHWATCH_UPDATE_PUBKEY`. Leave `HASHWATCH_RELEASE_URL` / `HASHWATCH_UPDATE_URL` pointed at that host. This repository does not create the GitHub repo or the bucket for you.
 
 The Mac build is a universal `HashWatch.app` (arm64 + x86_64 joined like `lipo -create`),
 with `Info.plist` (`app.hashwatch`, macOS 11+, local-network ATS exception), an `.icns` icon and an ad-hoc
@@ -263,6 +305,8 @@ cmd/hashwatch/      entry point (flags, browser launch, native macOS shell)
 packaging/macos/    Info.plist, icon (.icns + generator), Read me first.txt, lipo/verify helpers, DMG builder + background
 internal/install/   "Move to Applications?" (macOS app run from Downloads or a disk image)
 internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset, switchpool, setpool, reboot)
+internal/update/    signed OTA updater for the Pi service (never talks to the miner)
+packaging/linux/    install-pi.sh, systemd unit, supervise + rollback helper
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
 internal/app/       config, polling + history, discovery, HTTP API, password, alerts, single-instance

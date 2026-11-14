@@ -904,6 +904,7 @@ VIEWS.settings = {
             <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
             <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
         <section class="panel panel-pad" id="accessSet"><div class="sk" style="height:120px"></div></section>
+        <section class="panel panel-pad" id="updateSet" hidden></section>
         <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change in Controls on the dashboard. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
           ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
           <button class="btn ghost block" id="dbg" style="margin-top:16px">${ic("copy", "sm")}Copy debug info</button>
@@ -933,7 +934,7 @@ VIEWS.settings = {
       root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
         <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
     };
-    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); accessUI(); loadFeatures();
+    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); accessUI(); updateSetUI(); loadFeatures();
     const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $({ alerts: "#alertsSet", remote: "#remoteSet", auto: "#autoFeat", security: "#secSet" }[q] || null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
   },
 };
@@ -1383,6 +1384,68 @@ function accessUI() {
       if (!await confirmDialog("Turn off advanced miner controls?", "Pool edits and reboot will be refused until you turn this back on.", "Turn off")) return;
       await tog({ advanced_controls: false }, "Advanced miner controls are off");
     }
+  };
+}
+
+
+/* ---------------- settings: OTA updates (Pi service) ---------------- */
+function updateSetUI() {
+  const el = $("#updateSet"); if (!el) return;
+  const st = S.state, u = st.update, locked = st.locked || isView();
+  const show = !!(st.service || (u && (u.url_set || u.enabled || u.service)));
+  el.hidden = !show;
+  if (!show) { el.innerHTML = ""; return; }
+  const ch = (u && u.channel) || "stable";
+  const cur = (u && u.current) || st.version || "";
+  const latest = (u && u.latest) || "";
+  const avail = !!(u && u.available);
+  const can = !!(u && u.can_apply) && !locked;
+  const err = (u && u.error) || "";
+  let status;
+  if (!u || !u.url_set) status = "No release URL is configured yet. The installer sets this when a host is chosen.";
+  else if (!u.has_key) status = "This build has no update signing key, so it will not install a download.";
+  else if (avail && latest) status = "Version " + latest + " is available.";
+  else if (latest && latest === cur) status = "You're up to date.";
+  else if (latest) status = "Latest on this channel: " + latest + ".";
+  else status = "No update check yet.";
+  if (u && u.rolled_back) status += " The last update failed its health check and was rolled back.";
+  el.innerHTML = setH("refresh-cw", "Updates", "The always-on dashboard can update itself from a signed release. This never talks to the miner.") +
+    `<p class="t2" style="margin:0 0 10px;font-size:13.5px;line-height:1.55">${esc(status)}</p>
+    <div class="au-row"><span class="t3">Channel</span>
+      <div class="seg sm" id="updCh">${["stable", "dev"].map(k => `<button class="${ch === k ? "on" : ""}" data-k="${k}"${locked || !can && !u ? " disabled" : ""}>${k === "dev" ? "Dev" : "Stable"}</button>`).join("")}</div></div>
+    <div class="set-meta">${ic("info", "sm")}<span>This copy is ${esc(cur || "dev")}${latest && latest !== cur ? " · latest " + esc(latest) : ""}${u && u.last_check ? " · last checked " + esc(u.last_check) : ""}.</span></div>
+    ${err ? `<p class="fine" style="margin-top:8px">${esc(err)}</p>` : ""}
+    ${u && u.notes ? `<p class="fine" style="margin-top:8px">${esc(u.notes)}</p>` : ""}
+    <div class="apply-bar" style="margin-top:12px">
+      <button class="btn ghost" id="updCheck"${locked ? " disabled" : ""}>Check now</button>
+      <button class="btn accent" id="updNow"${!can ? " disabled" : ""}>Update now</button>
+    </div>`;
+  const segEl = $("#updCh"); if (segEl) { seg(segEl); segEl.onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b || locked) return;
+    try {
+      const r = await api("/api/update", { method: "POST", body: { channel: b.dataset.k, check: true } });
+      if (r.update) S.state.update = r.update;
+      toast(b.dataset.k === "dev" ? "Dev channel" : "Stable channel");
+    } catch (err) { toast(err.message, "bad"); }
+    updateSetUI();
+  }; }
+  const chk = $("#updCheck"); if (chk) chk.onclick = async () => {
+    chk.disabled = true;
+    try {
+      const r = await api("/api/update", { method: "POST", body: { check: true } });
+      if (r.update) S.state.update = r.update;
+      toast(r.update && r.update.available ? "An update is available" : "You're up to date");
+    } catch (err) { toast(err.message, "bad"); }
+    updateSetUI();
+  };
+  const now = $("#updNow"); if (now) now.onclick = async () => {
+    if (!await confirmDialog("Update HashWatch now?", "The dashboard will download a signed build, replace its own binary, and restart. Your miner is not contacted or changed. If the new version does not come back healthy, it rolls back automatically.", "Update now")) return;
+    now.disabled = true;
+    try {
+      const r = await api("/api/update", { method: "POST", body: { apply: true } });
+      if (r.update) S.state.update = r.update;
+      toast("Update installed · restarting");
+    } catch (err) { toast(err.message, "bad"); now.disabled = false; }
   };
 }
 
