@@ -74,8 +74,8 @@ type ConfigData struct {
 	// Advanced enables pool URL/worker/password and reboot writes. Off by default.
 	// The server rejects those writes unless this is on, even if the UI is bypassed.
 	Advanced bool `json:"advanced_controls,omitempty"`
-	// UpdateURL is the signed release manifest (OTA). Empty means "do not check".
-	// HASHWATCH_UPDATE_URL, if set, overrides this (the Pi unit file uses that).
+	// UpdateURL is the signed release manifest or the release folder (OTA).
+	// Empty uses the public GitHub Releases URL (stable). HASHWATCH_UPDATE_URL, if set, overrides this.
 	UpdateURL string `json:"update_url,omitempty"`
 	// UpdateChannel is "stable" (default) or "dev".
 	UpdateChannel string `json:"update_channel,omitempty"`

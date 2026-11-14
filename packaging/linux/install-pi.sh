@@ -2,8 +2,8 @@
 # Install HashWatch as a systemd service on Raspberry Pi OS (or any systemd Linux).
 # No Docker. Idempotent: a second run refreshes the binary and unit, and keeps data.
 #
-# One-liner (once a release host is set):
-#   curl -fsSL "$RELEASE/install-pi.sh" | sudo env HASHWATCH_RELEASE_URL="$RELEASE" sh
+# One-liner:
+#   curl -fsSL https://github.com/BitMinorSolutions/HashWatch/releases/latest/download/install-pi.sh | sudo sh
 #
 # Local / test:
 #   sudo ./install-pi.sh --bin ./hashwatch --update-url http://host/manifest.signed.json
@@ -19,7 +19,8 @@ DATA=/var/lib/hashwatch
 UNIT=/etc/systemd/system/hashwatch.service
 USER=hashwatch
 CHANNEL="${HASHWATCH_CHANNEL:-stable}"
-RELEASE="${HASHWATCH_RELEASE_URL:-}"
+DEFAULT_RELEASE="https://github.com/BitMinorSolutions/HashWatch/releases/latest/download"
+RELEASE="${HASHWATCH_RELEASE_URL:-$DEFAULT_RELEASE}"
 UPDATE_URL="${HASHWATCH_UPDATE_URL:-}"
 BIN_SRC="${HASHWATCH_BIN:-}"
 ROOT="${HASHWATCH_ROOT:-}"

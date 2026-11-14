@@ -35,6 +35,7 @@ func defaultClient() *http.Client {
 
 // FetchEnvelope downloads a signed manifest envelope from url.
 func FetchEnvelope(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	url = ManifestURL(url)
 	if !validUpdateURL(url) {
 		return nil, fmt.Errorf("update URL must be http(s)")
 	}

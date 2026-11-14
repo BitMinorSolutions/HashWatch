@@ -1,5 +1,8 @@
 /dist/
 /build/
+/secrets/
+/private/
+creds.env
 *.exe
 /hashwatch
 config.json

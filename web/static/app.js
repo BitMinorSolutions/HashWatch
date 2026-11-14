@@ -1,4 +1,4 @@
-/* HashWatch v0.6.0 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.7.0 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -191,7 +191,7 @@ function viewSetup() {
   wireMinerForm("s", async () => boot());
 }
 
-/* ---------------- shell: ONE scrolling page (v0.6.0) ----------------
+/* ---------------- shell: ONE scrolling page (v0.7.0) ----------------
    Everything about the miner lives on the dashboard. Settings (incl. remote access/QR) and alert history open as a sheet. */
 const PAGES = [["dashboard", "Dashboard"], ["settings", "Settings"], ["alerts", "Alerts"]];
 // Old multi-page links (#/pools, #/controls, …) now scroll to that card on the single page.

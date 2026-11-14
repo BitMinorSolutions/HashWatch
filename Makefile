@@ -1,6 +1,6 @@
 # HashWatch — common build targets. See scripts/build.sh for a full release
 # (every OS, the Mac app and optional DMG).
-VERSION    ?= dev
+VERSION    ?= 0.7.0
 UPDATE_KEY ?= $(HASHWATCH_UPDATE_PUBKEY)
 LDFLAGS     = -s -w -X main.version=$(VERSION)
 ifneq ($(UPDATE_KEY),)

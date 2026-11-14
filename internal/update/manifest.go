@@ -11,13 +11,35 @@ import (
 	"strings"
 )
 
+// DefaultReleaseURL is the public GitHub Releases folder HashWatch checks for
+// updates (stable channel). A directory URL is normalized to manifest.signed.json.
+const DefaultReleaseURL = "https://github.com/BitMinorSolutions/HashWatch/releases/latest/download"
+
+const ManifestName = "manifest.signed.json"
+
 // PublicKey is the hex-encoded ed25519 public key used to verify release
-// manifests. Release builds set it with
+// manifests. The default is the HashWatch v0.7+ release key. Builds may
+// override it with
 //
 //	-ldflags "-X github.com/hashwatch/hashwatch/internal/update.PublicKey=..."
 //
 // A build with an empty key will not apply updates.
-var PublicKey string
+var PublicKey = "a34f05937c8dfe6bdfb925adc3cfe3ecfc8aed260441e74b8e4bcb484c8c468c"
+
+// ManifestURL turns a release folder or a direct manifest URL into the
+// signed-manifest URL the updater fetches.
+func ManifestURL(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return ""
+	}
+	u = strings.TrimRight(u, "/")
+	low := strings.ToLower(u)
+	if strings.HasSuffix(low, "/"+ManifestName) || strings.HasSuffix(low, ManifestName) {
+		return u
+	}
+	return u + "/" + ManifestName
+}
 
 // Envelope is a signed release document: Manifest is the exact JSON that was
 // signed, Signature is a standard-base64 ed25519 signature of those bytes.

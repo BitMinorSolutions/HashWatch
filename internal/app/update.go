@@ -17,11 +17,14 @@ func ServiceMode() bool { return os.Getenv("HASHWATCH_SERVICE") == "1" }
 
 func (c *Config) updateURL() string {
 	if v := strings.TrimSpace(os.Getenv("HASHWATCH_UPDATE_URL")); v != "" {
-		return v
+		return update.ManifestURL(v)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return strings.TrimSpace(c.UpdateURL)
+	if u := strings.TrimSpace(c.UpdateURL); u != "" {
+		return update.ManifestURL(u)
+	}
+	return update.ManifestURL(update.DefaultReleaseURL)
 }
 
 func (c *Config) updateChannel() string {

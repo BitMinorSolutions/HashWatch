@@ -312,6 +312,9 @@ func TestGoListDepsExcludeMiner(t *testing.T) {
 }
 
 func TestCheckRefusesUnsignedBuild(t *testing.T) {
+	old := PublicKey
+	PublicKey = ""
+	t.Cleanup(func() { PublicKey = old })
 	r := &Runner{Version: "1", URL: func() string { return "http://127.0.0.1/x" }, Channel: func() string { return "stable" }}
 	_, err := r.Check(context.Background(), false)
 	if err == nil || !strings.Contains(err.Error(), "signing key") {
@@ -342,5 +345,16 @@ func TestSignRoundTripSize(t *testing.T) {
 	}
 	if string(payload) != man || got.Channels["stable"].Version != "1.2.3" {
 		t.Fatalf("%s %+v", payload, got)
+	}
+}
+
+func TestManifestURL(t *testing.T) {
+	base := DefaultReleaseURL
+	want := base + "/" + ManifestName
+	if ManifestURL(base) != want || ManifestURL(base+"/") != want || ManifestURL(want) != want {
+		t.Fatalf("ManifestURL(%q)=%q want %q", base, ManifestURL(base), want)
+	}
+	if ManifestURL("") != "" {
+		t.Fatal("empty")
 	}
 }
