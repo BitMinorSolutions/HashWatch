@@ -277,7 +277,7 @@ async function refresh(full) {
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
     if (r.poll_seconds) S.pollS = r.poll_seconds;
-    if (r.data) { const first = !S.data; S.data = r.data; update(first); } else if (full) setTimeout(() => refresh(true), 1500);
+    if (r.data) { const first = !S.data; S.data = r.data; update(first); loadLotto(); } else if (full) setTimeout(() => refresh(true), 1500);
     // Ask again just after the server's next read (its interval includes any backoff), so data is never a full cycle stale.
     // r.next_poll_unix is when the server starts its next read; ask ~1.5 s after it (reads take ~1 s).
     const p = S.pollS || 5, nx = r.next_poll_unix, serverNow = r.server_time || Date.now() / 1000;
@@ -989,14 +989,15 @@ const isView = () => !!(S.state && S.state.view_only);
 const opt = (k) => !(S.state && S.state.optional && S.state.optional[k] === false);
 
 async function loadLotto() {
-  clearTimeout(S.lotT); if (!S.miner || !$("#secLotto")) return;
+  if (!S.miner || !$("#secLotto")) return;
   try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); } catch (e) {}
-  S.lotT = setTimeout(() => { loadLotto(); loadFeatures(); }, 30000);
 }
 async function loadFeatures() {
+  clearTimeout(S.featT);
   if (!S.miner) return;
-  try { S.feat = await api("/api/features?miner=" + encodeURIComponent(S.miner.id)); } catch (e) { return; }
+  try { S.feat = await api("/api/features?miner=" + encodeURIComponent(S.miner.id)); } catch (e) { S.featT = setTimeout(loadFeatures, 30000); return; }
   autoCard(); if ($("#autoFeat")) autoSetUI(); if ($("#funSet")) funSetUI();
+  S.featT = setTimeout(loadFeatures, 30000);
 }
 const LOTTO = {
   build: () => `
@@ -1206,8 +1207,8 @@ function funSetUI() {
     </div>
     <div class="set-h" style="margin-top:22px">${""}<div class="set-ic">${ic("eye-off")}</div><div class="set-t"><h2>Privacy</h2><p>Only public network data is fetched, from mempool.space. Nothing about you or your miner is sent.</p></div></div>
     <div class="toggles">
-      <div class="tg-row"><div class="tg-ic">${ic("blocks", "sm")}</div><div class="tg-t"><b>Network data</b><span>Difficulty, newest blocks and who found them, every 10 minutes. Needed for live odds.</span></div>${sw("pvNet", !p.network_off, S.state.locked || isView(), "Network data")}</div>
-      <div class="tg-row"><div class="tg-ic">${ic("bitcoin", "sm")}</div><div class="tg-t"><b>Bitcoin price</b><span>For the block reward in dollars, every 30 minutes.</span></div>${sw("pvPrice", !p.price_off, S.state.locked || isView(), "Bitcoin price")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("blocks", "sm")}</div><div class="tg-t"><b>Network data</b><span>Difficulty, newest blocks and who found them, every 30 seconds. Needed for live odds.</span></div>${sw("pvNet", !p.network_off, S.state.locked || isView(), "Network data")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("bitcoin", "sm")}</div><div class="tg-t"><b>Bitcoin price</b><span>For the block reward in dollars, every 60 seconds.</span></div>${sw("pvPrice", !p.price_off, S.state.locked || isView(), "Bitcoin price")}</div>
     </div>`;
   seg($("#fnSum"));
   const putFun = async (patch) => { try { S.feat = await api("/api/features", { method: "POST", body: { miner: S.miner.id, fun: { ...f, ...patch } } }); funSetUI(); } catch (e) { toast(e.message, "bad"); } };

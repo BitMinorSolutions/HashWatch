@@ -24,6 +24,14 @@ import (
 // DefaultBase is the public mempool.space API.
 const DefaultBase = "https://mempool.space/api"
 
+// Default refresh intervals. On HTTP 429 or any other fetch error the
+// wait doubles, up to MaxBackoff, then returns to these on the next success.
+const (
+	DefaultEvery      = 30 * time.Second
+	DefaultPriceEvery = 60 * time.Second
+	MaxBackoff        = 5 * time.Minute
+)
+
 // Block is one recent network block.
 type Block struct {
 	Height    int64   `json:"height"`
@@ -59,8 +67,8 @@ type Fetcher struct {
 	PriceURL   string // defaults to Base + "/v1/prices"
 	Client     *http.Client
 	Path       string        // cache file
-	Every      time.Duration // network refresh (default 2 min)
-	PriceEvery time.Duration // price refresh (default 10 min)
+	Every      time.Duration // network refresh (default 30s)
+	PriceEvery time.Duration // price refresh (default 60s)
 	// Enabled reports which sources may be contacted right now (privacy settings).
 	Enabled func() (network, price bool)
 	Now     func() time.Time
@@ -71,7 +79,7 @@ type Fetcher struct {
 }
 
 func New(dir string) *Fetcher {
-	f := &Fetcher{Base: DefaultBase, Path: filepath.Join(dir, "netcache.json"), Every: 2 * time.Minute, PriceEvery: 10 * time.Minute,
+	f := &Fetcher{Base: DefaultBase, Path: filepath.Join(dir, "netcache.json"), Every: DefaultEvery, PriceEvery: DefaultPriceEvery,
 		Client: &http.Client{Timeout: 12 * time.Second}, Now: time.Now, kick: make(chan struct{}, 1)}
 	if b, err := os.ReadFile(f.Path); err == nil {
 		_ = json.Unmarshal(b, &f.snap)
@@ -96,33 +104,105 @@ func (f *Fetcher) Kick() {
 	}
 }
 
-// Run refreshes until ctx is done.
+// nextBackoff doubles cur, capped at max. cur should already be the last wait
+// (normally the default interval), so the first error waits twice as long.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	if max <= 0 {
+		max = MaxBackoff
+	}
+	if cur <= 0 {
+		cur = time.Second
+	}
+	next := cur * 2
+	if next > max || next <= cur { // cap, and guard overflow
+		return max
+	}
+	return next
+}
+
+func (f *Fetcher) netEvery() time.Duration {
+	if f.Every > 0 {
+		return f.Every
+	}
+	return DefaultEvery
+}
+
+func (f *Fetcher) priceEvery() time.Duration {
+	if f.PriceEvery > 0 {
+		return f.PriceEvery
+	}
+	return DefaultPriceEvery
+}
+
+// Run refreshes until ctx is done. Failed fetches (including HTTP 429) keep
+// the last good values and their timestamps, and double the wait up to
+// MaxBackoff. A successful fetch, or Kick, resets the wait to the default.
 func (f *Fetcher) Run(ctx context.Context) {
 	var lastNet, lastPrice time.Time
+	netWait, priceWait := f.netEvery(), f.priceEvery()
 	for {
 		net, price := true, true
 		if f.Enabled != nil {
 			net, price = f.Enabled()
 		}
 		now := f.Now()
-		if net && now.Sub(lastNet) >= f.Every {
-			f.RefreshNetwork(ctx)
+		if net && (lastNet.IsZero() || now.Sub(lastNet) >= netWait) {
+			if err := f.RefreshNetwork(ctx); err != nil {
+				netWait = nextBackoff(netWait, MaxBackoff)
+			} else {
+				netWait = f.netEvery()
+			}
 			lastNet = now
 		}
-		if price && now.Sub(lastPrice) >= f.PriceEvery {
-			f.RefreshPrice(ctx)
+		if price && (lastPrice.IsZero() || now.Sub(lastPrice) >= priceWait) {
+			if err := f.RefreshPrice(ctx); err != nil {
+				priceWait = nextBackoff(priceWait, MaxBackoff)
+			} else {
+				priceWait = f.priceEvery()
+			}
 			lastPrice = now
 		}
-		t := time.NewTimer(20 * time.Second)
+		wait := timeUntil(now, net, lastNet, netWait, price, lastPrice, priceWait)
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
 			return
 		case <-f.kick:
+			t.Stop()
 			lastNet, lastPrice = time.Time{}, time.Time{}
+			netWait, priceWait = f.netEvery(), f.priceEvery()
 		case <-t.C:
 		}
 	}
+}
+
+// timeUntil is how long Run should sleep before the next due refresh.
+func timeUntil(now time.Time, net bool, lastNet time.Time, netWait time.Duration, price bool, lastPrice time.Time, priceWait time.Duration) time.Duration {
+	wait := MaxBackoff
+	due := func(on bool, last time.Time, interval time.Duration) {
+		if !on {
+			return
+		}
+		var d time.Duration
+		if last.IsZero() {
+			d = 0
+		} else {
+			d = interval - now.Sub(last)
+		}
+		if d < wait {
+			wait = d
+		}
+	}
+	due(net, lastNet, netWait)
+	due(price, lastPrice, priceWait)
+	if !net && !price {
+		return 20 * time.Second
+	}
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 func (f *Fetcher) get(ctx context.Context, url string, out any) error {
