@@ -757,7 +757,7 @@ function renderCelebrate() {
   if (el.dataset.id === String(b.id) && el.innerHTML) return;
   el.dataset.id = b.id;
   el.innerHTML = `<section class="celebrate" role="status"><canvas class="coins" aria-hidden="true"></canvas>
-    <div class="cel-ic">${ic("party-popper")}</div>
+    <div class="cel-ic"><img class="cel-coin" src="/assets/icons/btc-coin.webp" alt="" width="512" height="512"></div>
     <div class="cel-txt"><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div><h2>${esc(b.miner_name || "Your miner")} found a block!</h2><p>${esc(b.body)}</p></div>
     <div class="cel-acts"><a class="btn ghost" href="#/alerts">Details</a><button class="btn accent" id="celOk">Dismiss</button></div></section>`;
   $("#celOk").onclick = () => { LS.set("hw_block_ack", b.id); el.firstChild.classList.add("out"); setTimeout(renderCelebrate, 260); };
@@ -1162,7 +1162,7 @@ function bigCelebrate(b) {
   const rw = S.lot && S.lot.reward;
   const still = reducedMotion();
   d.innerHTML = `<div class="bc-flash"></div><div class="bc-glow" aria-hidden="true"></div><canvas class="coins" aria-hidden="true"></canvas>
-    <div class="bc-card">${still ? `<img class="bc-coin" src="/assets/icons/btc-coin.webp" alt="" width="96" height="96">` : ""}<div class="bc-ic">${ic("trophy")}</div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
+    <div class="bc-card"><div class="bc-ic"><img class="bc-coin" src="/assets/icons/btc-coin.webp" alt="" width="512" height="512"></div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
       <h1>${esc(b.miner_name || "Your miner")} found a block!</h1>
       <p>${rw ? `About <b>${rw.usd ? usd(rw.usd) : btc(rw.total_sat)}</b> (${btc(rw.total_sat)}) is heading to your payout address.` : esc(b.body)}</p>
       <p class="fine">Odds were ${S.lot && S.lot.odds && S.lot.odds.one_in_per_block ? oneIn(S.lot.odds.one_in_per_block) + " per block" : "astronomical"}. Check your pool or wallet; the reward unlocks after 100 confirmations.</p>

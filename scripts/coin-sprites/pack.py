@@ -12,4 +12,4 @@ for i in range(N):
     sheet.alpha_composite(grade(Image.open(f'frames/{i:02d}.png'), CELL), ((i%COLS)*CELL, (i//COLS)*CELL))
 sheet.save('out/btc-coin-sprites.webp', 'WEBP', quality=86, method=6, alpha_quality=90)
 sheet.save('out/btc-coin-sprites.png', optimize=True)
-grade(Image.open('frames/hero.png'), 256).save('out/btc-coin.webp', 'WEBP', quality=88, method=6, alpha_quality=92)
+grade(Image.open('frames/hero.png'), 512).save('out/btc-coin.webp', 'WEBP', quality=90, method=6, alpha_quality=95)

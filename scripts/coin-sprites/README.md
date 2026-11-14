@@ -1,7 +1,7 @@
 # Block-celebration coin sprites
 
-`web/static/icons/btc-coin-sprites.webp` (6x4 sheet, 24 frames x 128px) and `btc-coin.webp` (256px still, used for
-reduced motion) are rendered from the same three.js scene as the Camaro wallpaper video
+`web/static/icons/btc-coin-sprites.webp` (6x4 sheet, 24 frames x 128px) and `btc-coin.webp` (512px still, used for the
+celebration card and banner icon, and for reduced motion) are rendered from the same three.js scene as the Camaro wallpaper video
 (`/workspace/btc-mac/proj/main9.js` -> `bitcoin-greencar-mac-v5.mp4`): the official bitcoin.org "B" extruded with a
 10-segment bevel, `MeshPhysicalMaterial` gold `#F0BC4C` (metalness 1, roughness 0.17, clearcoat 0.4), the same key and
 rim lights, and the `studio_small_09.hdr` studio environment at the same rotation, ACES tone mapping, then graded like
