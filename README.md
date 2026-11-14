@@ -68,12 +68,15 @@ HashWatch watches every miner on each poll (every 5 seconds; after a failed read
 | Running hot | the max chip temperature stays above the miner's own target for 5 minutes |
 | Pool disconnected | no pool is connected for two polls in a row, and when it reconnects |
 | Remote link changed | the remote-access link changes |
+| Daily summary | once a day at a local time you set (default 9:00 AM): uptime %, average hashrate, top temperature, best share and current odds / time-to-block over the last 24 hours |
 
 Each alert shows up three ways: a native notification on the computer running HashWatch
 (macOS Notification Center, Windows notifications, or `notify-send` on Linux), a toast in any open
 HashWatch window, and the **Alerts** page, which keeps the last 300. A block find also gets a banner
 on every page until you dismiss it. Turn each alert type, and desktop notifications, on or off under
-**Settings → Alerts**. There's also a **Send a test alert** button there.
+**Settings → Alerts**. There's also a **Send a test alert** button there. The daily
+summary time (default 9:00 AM local) is set in the same section. That briefing is
+separate from the midnight "yesterday" digest under lottery extras.
 
 ### iPhone and Apple Watch (ntfy)
 

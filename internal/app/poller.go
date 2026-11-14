@@ -243,6 +243,24 @@ func (p *Poller) Live(id string, since int64) (LiveView, bool) {
 	return v, true
 }
 
+// HistorySince returns stored samples at or after since (unix seconds),
+// including the full 24 h window the poller keeps.
+func (p *Poller) HistorySince(id string, since int64) []model.Sample {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	st := p.m[id]
+	if st == nil {
+		return nil
+	}
+	var out []model.Sample
+	for _, h := range st.History {
+		if h.T >= since {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // SaveNow writes history to disk (used on shutdown).
 func (p *Poller) SaveNow() { p.saveHistory() }
 

@@ -222,6 +222,9 @@ func main() {
 	poll.OnPoll = func(id, name string, snap *model.Snapshot, hist []model.Sample) {
 		alerts.Observe(id, name, snap, hist)
 		stats.Observe(id, name, snap)
+		cut := time.Now().Add(-24 * time.Hour).Unix()
+		at := cfg.DailySummaryAt
+		stats.MaybeDailySummary(id, name, snap, poll.HistorySince(id, cut), at)
 		autos.Observe(id, name, snap)
 	}
 

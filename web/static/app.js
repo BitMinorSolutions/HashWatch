@@ -798,7 +798,7 @@ const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activ
 async function loadAlerts() {
   try {
     const r = await api("/api/alerts");
-    S.alerts = r.items || []; S.kinds = r.kinds || []; S.desktop = r.desktop; S.desktopOK = r.desktop_available;
+    S.alerts = r.items || []; S.kinds = r.kinds || []; S.desktop = r.desktop; S.desktopOK = r.desktop_available; S.dailyAt = r.daily_summary_at || "09:00";
     const seen = +LS.get("hw_alert_seen", 0);
     S.alertSeen = Math.max(seen, r.latest || 0); LS.set("hw_alert_seen", S.alertSeen);
     if (!LS.get("hw_alert_read")) LS.set("hw_alert_read", r.latest || 0);
@@ -1079,12 +1079,19 @@ function alertsSetUI() {
   el.innerHTML = setH("bell", "Alerts", `${esc(APP)} watches your miners and tells you here and with a notification on this computer. No extra app needed.`) +
     `<div class="toggles">${S.kinds.map(k => `<div class="tg-row"><div class="tg-ic">${ic(KIND_ICON[k.kind] || "bell", "sm")}</div><div class="tg-t"><b>${esc(k.label)}</b><span>${esc(k.desc)}</span></div>${sw("ak-" + k.kind, k.on, locked, k.label)}</div>`).join("")}
       <div class="tg-row tg-sep"><div class="tg-ic">${ic("monitor", "sm")}</div><div class="tg-t"><b>Desktop notifications</b><span>${S.desktopOK ? "Native notifications on the computer running " + esc(APP) + "." : "Off in the preview. The preview runs on a server with no screen."}</span></div>${sw("akDesk", S.desktop, locked || !S.desktopOK, "Desktop notifications")}</div></div>
+    <label class="f" for="dailyAt">Daily summary time</label>
+    <input class="input" id="dailyAt" type="time" value="${esc(S.dailyAt || "09:00")}" ${locked ? "disabled" : ""}>
+    <p class="fine" style="margin:8px 0 0">Once a day at this local time, a briefing of the last 24 hours is added to Alerts: uptime, average hashrate, top temperature, best share and current odds. It is also sent to your phone if iPhone alerts are on.</p>
     <div class="set-foot"><button class="btn ghost" id="akTest"${locked ? " disabled" : ""}>${ic("bell-ring", "sm")}Send a test alert</button><a class="t2 link" href="#/alerts">View history${ic("chevron-right", "sm")}</a></div>`;
   $$(".tg-row .switch", el).forEach(b => b.onclick = async () => {
     const on = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", on); b.disabled = true;
     const body = b.id === "akDesk" ? { desktop: on } : { kinds: { [b.id.slice(3)]: on } };
-    try { const r = await api("/api/alerts/settings", { method: "POST", body }); S.kinds = r.kinds; S.desktop = r.desktop; } catch (e) { toast(e.message, "bad"); }
+    try { const r = await api("/api/alerts/settings", { method: "POST", body }); S.kinds = r.kinds; S.desktop = r.desktop; S.dailyAt = r.daily_summary_at || S.dailyAt; } catch (e) { toast(e.message, "bad"); }
     alertsSetUI(); });
+  const dat = $("#dailyAt"); if (dat) dat.onchange = async () => {
+    try { const r = await api("/api/alerts/settings", { method: "POST", body: { daily_summary_at: dat.value } }); S.dailyAt = r.daily_summary_at || dat.value; toast("Daily summary time saved"); }
+    catch (e) { toast(e.message, "bad"); dat.value = S.dailyAt || "09:00"; }
+  };
   $("#akTest").onclick = async () => { try { await api("/api/alerts/test", { method: "POST", body: {} }); refresh(false); } catch (e) { toast(e.message, "bad"); } };
 }
 

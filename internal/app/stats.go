@@ -68,21 +68,22 @@ type BlockRec struct {
 }
 
 type MinerStats struct {
-	FirstSeen    int64            `json:"first_seen"`
-	LastPoll     int64            `json:"last_poll"`
-	LastUptime   int64            `json:"last_uptime"`
-	SessionBest  float64          `json:"session_best"`
-	Leaderboard  []ShareRec       `json:"leaderboard"`
-	TicketsAll   float64          `json:"tickets_all"`
-	ExpectedAll  float64          `json:"expected_all"`
-	Days         []DayRec         `json:"days"`
-	Blocks       []BlockRec       `json:"blocks"`
-	FoundCounter float64          `json:"found_counter"`
-	HaveFound    bool             `json:"have_found"`
-	Badges       map[string]int64 `json:"badges"`
-	Summaries    []Summary        `json:"summaries"`
-	LastWeekly   string           `json:"last_weekly"`
-	PBCount      int              `json:"pb_count"` // times the personal best was beaten
+	FirstSeen        int64            `json:"first_seen"`
+	LastPoll         int64            `json:"last_poll"`
+	LastUptime       int64            `json:"last_uptime"`
+	SessionBest      float64          `json:"session_best"`
+	Leaderboard      []ShareRec       `json:"leaderboard"`
+	TicketsAll       float64          `json:"tickets_all"`
+	ExpectedAll      float64          `json:"expected_all"`
+	Days             []DayRec         `json:"days"`
+	Blocks           []BlockRec       `json:"blocks"`
+	FoundCounter     float64          `json:"found_counter"`
+	HaveFound        bool             `json:"have_found"`
+	Badges           map[string]int64 `json:"badges"`
+	Summaries        []Summary        `json:"summaries"`
+	LastWeekly       string           `json:"last_weekly"`
+	LastDailySummary string           `json:"last_daily_summary,omitempty"` // local date 2006-01-02 last 9am briefing was sent
+	PBCount          int              `json:"pb_count"`                     // times the personal best was beaten
 }
 
 const (

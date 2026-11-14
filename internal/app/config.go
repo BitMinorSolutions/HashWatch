@@ -81,6 +81,8 @@ type ConfigData struct {
 	UpdateChannel string `json:"update_channel,omitempty"`
 	// Ntfy sends selected alerts to an ntfy topic (iPhone / Apple Watch).
 	Ntfy NtfySettings `json:"ntfy,omitempty"`
+	// DailySummaryAt is the local time (HH:MM, default 09:00) for the last-24h briefing.
+	DailySummaryAt string `json:"daily_summary_at,omitempty"`
 	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
 	Locations   []Location   `json:"locations,omitempty"`
 	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"

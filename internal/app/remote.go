@@ -178,14 +178,20 @@ func (s *Server) alertsGet(w http.ResponseWriter, r *http.Request) {
 	for _, k := range AlertKinds {
 		kinds = append(kinds, map[string]any{"kind": k.Kind, "label": k.Label, "desc": k.Desc, "on": s.Cfg.AlertOn(k.Kind)})
 	}
+	at := s.Cfg.DailySummaryAt
+	if at == "" {
+		at = DefaultDailySummaryAt
+	}
 	writeJSON(w, 200, map[string]any{"items": items, "latest": latest, "kinds": kinds,
-		"desktop": !s.Cfg.NotifyOff && !s.Locked, "desktop_available": !s.Locked})
+		"desktop": !s.Cfg.NotifyOff && !s.Locked, "desktop_available": !s.Locked,
+		"daily_summary_at": at})
 }
 
 func (s *Server) alertsSet(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Kinds   map[string]bool
-		Desktop *bool
+		Kinds   map[string]bool `json:"kinds"`
+		Desktop *bool           `json:"desktop"`
+		DailyAt *string         `json:"daily_summary_at"`
 	}
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
 	s.Cfg.mu.Lock()
@@ -203,6 +209,15 @@ func (s *Server) alertsSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Desktop != nil {
 		s.Cfg.NotifyOff = !*b.Desktop
+	}
+	if b.DailyAt != nil {
+		at, err := normalizeDailyAt(*b.DailyAt)
+		if err != nil {
+			s.Cfg.mu.Unlock()
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		s.Cfg.DailySummaryAt = at
 	}
 	s.Cfg.mu.Unlock()
 	s.Cfg.Save()
