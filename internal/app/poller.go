@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashwatch/hashwatch/internal/cgminer"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/source"
 )
@@ -24,6 +25,9 @@ type minerState struct {
 	History []model.Sample  `json:"history"`
 	src     source.Source
 	stop    chan struct{}
+	ctlMu   sync.Mutex // one control command at a time per miner
+	lastCtl time.Time
+	ledMemo *model.Control // last light settings we applied (for firmwares that don't report them)
 }
 
 type Poller struct {
@@ -96,6 +100,9 @@ func (p *Poller) pollOnce(id string, st *minerState) {
 	snap := st.src.Fetch()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if c, m := snap.Control, st.ledMemo; c != nil && m != nil && c.LEDHex == "" {
+		c.LEDHex, c.LEDBright, c.LEDTemper = m.LEDHex, m.LEDBright, m.LEDTemper
+	}
 	st.Latest = snap
 	if snap.OK {
 		st.LastOK, st.LastErr = time.Now().Unix(), ""
@@ -142,4 +149,41 @@ func (p *Poller) saveHistory() {
 		b, _ := json.Marshal(st.History)
 		_ = os.WriteFile(p.histFile(id), b, 0o600)
 	}
+}
+
+var ErrNoControl = fmt.Errorf("this miner can't be controlled from here")
+
+// Control runs one control action against a direct (CGMiner) miner, then re-reads it.
+func (p *Poller) Control(id string, do func(source.Controller) (cgminer.Result, error), memo *model.Control) (cgminer.Result, *model.Snapshot, error) {
+	p.mu.RLock()
+	st := p.m[id]
+	p.mu.RUnlock()
+	if st == nil {
+		return cgminer.Result{}, nil, fmt.Errorf("unknown miner")
+	}
+	ctl, ok := st.src.(source.Controller)
+	if !ok {
+		return cgminer.Result{}, nil, ErrNoControl
+	}
+	if !st.ctlMu.TryLock() {
+		return cgminer.Result{}, nil, fmt.Errorf("another change is still being applied")
+	}
+	defer st.ctlMu.Unlock()
+	if wait := 3*time.Second - time.Since(st.lastCtl); wait > 0 {
+		return cgminer.Result{}, nil, fmt.Errorf("wait a few seconds between changes")
+	}
+	st.lastCtl = time.Now()
+	res, err := do(ctl)
+	if err == nil && res.OK && memo != nil {
+		p.mu.Lock()
+		st.ledMemo = memo
+		p.mu.Unlock()
+	}
+	log.Printf("control %s: sent %q -> ok=%v status=%s msg=%q err=%v", id, res.Sent, res.OK, res.Status, res.Message, err)
+	time.Sleep(1500 * time.Millisecond) // let the miner apply it before reading back
+	p.pollOnce(id, st)
+	p.mu.RLock()
+	snap := st.Latest
+	p.mu.RUnlock()
+	return res, snap, err
 }

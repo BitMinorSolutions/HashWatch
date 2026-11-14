@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/hashwatch/hashwatch/internal/cgminer"
+	"github.com/hashwatch/hashwatch/internal/model"
+	"github.com/hashwatch/hashwatch/internal/source"
 )
 
 type Server struct {
@@ -45,6 +47,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.mutating(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.mutating(s.discover)))
 	mux.HandleFunc("POST /api/password", s.auth(s.mutating(s.password)))
+	mux.HandleFunc("POST /api/control/workmode", s.auth(s.mutating(s.ctlWorkmode)))
+	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
 	return secHeaders(mux)
 }
 
@@ -227,7 +231,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
-		"last_err": v.LastErr, "history": v.History})
+		"last_err": v.LastErr, "history": v.History, "can_control": s.canControl(id)})
 }
 
 func (s *Server) addMiner(w http.ResponseWriter, r *http.Request) {
@@ -308,4 +312,90 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		s.issue(w, r)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// canControl is true only for direct CGMiner miners outside preview mode.
+func (s *Server) canControl(id string) bool {
+	if s.Locked {
+		return false
+	}
+	for _, m := range s.Cfg.Miners {
+		if m.ID == id {
+			return m.Kind == "cgminer"
+		}
+	}
+	return false
+}
+
+func (s *Server) ctlReply(w http.ResponseWriter, res cgminer.Result, snap *model.Snapshot, err error) {
+	out := map[string]any{"ok": err == nil && res.OK, "status": res.Status, "message": res.Message, "sent": res.Sent}
+	if snap != nil {
+		out["control"] = snap.Control
+		out["data"] = snap
+	}
+	switch {
+	case err == ErrNoControl:
+		writeJSON(w, 403, map[string]string{"error": err.Error()})
+	case err != nil && res.Sent == "":
+		writeJSON(w, 409, map[string]string{"error": err.Error()})
+	case err != nil:
+		out["error"] = "Couldn't reach the miner: " + err.Error()
+		writeJSON(w, 502, out)
+	case !res.OK:
+		out["error"] = "The miner refused the change: " + res.Message
+		writeJSON(w, 422, out)
+	default:
+		writeJSON(w, 200, out)
+	}
+}
+
+var levelNames = map[string]int{"low": 0, "medium": 1, "high": 2}
+
+func (s *Server) ctlWorkmode(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Miner, Mode string }
+	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
+	lvl, ok := levelNames[strings.ToLower(b.Mode)]
+	if !ok {
+		writeJSON(w, 400, map[string]string{"error": "mode must be low, medium or high"})
+		return
+	}
+	if !s.canControl(b.Miner) {
+		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
+		return
+	}
+	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) { return c.SetWorkMode(lvl) }, nil)
+	s.ctlReply(w, res, snap, err)
+}
+
+func (s *Server) ctlLED(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Miner, Mode, Color string
+		Brightness         int
+		Temper             *int
+	}
+	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
+	eff := -1
+	for i, m := range cgminer.LEDModes {
+		if m == strings.ToLower(b.Mode) {
+			eff = i
+		}
+	}
+	temper := 50
+	if b.Temper != nil {
+		temper = *b.Temper
+	}
+	if _, err := cgminer.LEDParam(eff, b.Brightness, temper, b.Color); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.canControl(b.Miner) {
+		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
+		return
+	}
+	br, tp := b.Brightness, temper
+	memo := &model.Control{LEDHex: strings.ToLower("#" + strings.TrimPrefix(b.Color, "#")), LEDBright: &br, LEDTemper: &tp}
+	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) {
+		return c.SetLED(eff, b.Brightness, temper, b.Color)
+	}, memo)
+	s.ctlReply(w, res, snap, err)
 }

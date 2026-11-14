@@ -23,10 +23,26 @@ type Source interface {
 	Fetch() *model.Snapshot
 }
 
+// Controller is implemented ONLY by the direct CGMiner source. The remote/preview
+// source deliberately does not implement it, so no control request can ever be
+// sent through it.
+type Controller interface {
+	SetWorkMode(level int) (cgminer.Result, error)
+	SetLED(effect, bright, temper int, hex string) (cgminer.Result, error)
+}
+
 // CGMiner reads a miner directly over the LAN.
 type CGMiner struct{ Addr string }
 
 func (c CGMiner) Fetch() *model.Snapshot { return cgminer.Fetch(c.Addr, 4*time.Second) }
+
+func (c CGMiner) SetWorkMode(level int) (cgminer.Result, error) {
+	return cgminer.SetWorkMode(c.Addr, level)
+}
+
+func (c CGMiner) SetLED(effect, bright, temper int, hex string) (cgminer.Result, error) {
+	return cgminer.SetLED(c.Addr, effect, bright, temper, hex)
+}
 
 // Remote reads an existing Avalon Nano 3 dashboard (GET /api, GET /control/state).
 // It only ever performs the login POST and GETs on those two paths.

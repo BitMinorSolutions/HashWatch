@@ -223,6 +223,31 @@ function viewDash() {
         <div class="pools" id="pools"><div class="sk" style="height:60px"></div><div class="sk" style="height:60px"></div></div>
       </section>
 
+      <section class="card c-ctl" id="ctlCard">
+        <div class="card-h"><div class="card-t">Controls <span class="hint" id="ctlHint"></span></div><span id="ctlBadge"></span></div>
+        <div id="ctlNote"></div>
+        <div class="ctl-grid">
+          <div class="ctl-block">
+            <div class="ctl-label"><span>Work speed</span><span class="dim" id="ctlSpeedNow">Current: —</span></div>
+            <div class="seg big" id="ctlSpeed" role="group" aria-label="Work speed">
+              <button type="button" data-level="low">Low</button><button type="button" data-level="medium">Medium</button><button type="button" data-level="high">High</button></div>
+            <p class="fine" style="margin:8px 0 0">Changes hashrate, power draw, heat and fan noise.</p>
+          </div>
+          <div class="ctl-block">
+            <div class="ctl-label"><span>Light</span><span class="dim" id="ctlLedNow">—</span></div>
+            <div class="swatches" id="ctlSwatches"></div>
+            <div class="row" style="margin-top:12px;gap:12px">
+              <label class="color-pick" title="Custom colour"><input type="color" id="ctlColor" value="#f7931a" aria-label="Custom light colour"><span class="mono" id="ctlHex">#f7931a</span></label>
+              <div class="grow range-wrap"><input type="range" id="ctlBright" min="0" max="100" value="100" aria-label="Brightness"><b class="num" id="ctlBrightVal">100%</b></div>
+            </div>
+            <div class="seg modes" id="ctlMode" role="group" aria-label="Light mode" style="margin-top:12px">
+              <button type="button" data-mode="off">Off</button><button type="button" data-mode="fixed">Steady</button><button type="button" data-mode="flash">Flash</button><button type="button" data-mode="pulse">Pulse</button><button type="button" data-mode="loop">Loop</button></div>
+            <button type="button" class="btn block" id="ctlApplyLed" style="margin-top:14px">Apply light</button>
+          </div>
+        </div>
+        <div class="ctl-msg" id="ctlMsg" role="status" aria-live="polite"></div>
+      </section>
+
       <section class="card c-device">
         <div class="card-h"><div class="card-t">Device</div></div>
         <div class="kv" id="devKv"><div><span class="sk">Model</span><b class="sk">Avalon</b></div></div>
@@ -241,8 +266,9 @@ function viewDash() {
   $("#range").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.range = +b.dataset.r;
     $("#range").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); drawCharts(); };
   $("#rawQ").oninput = renderRaw;
-  S.data = null; S.hist = []; S.charts = {};
+  S.data = null; S.hist = []; S.charts = {}; S.can = false; S.ctlInit = false; S.ctlMode = "fixed";
   initCharts();
+  ctlWire();
   refresh(true);
   S.timer = setInterval(tick, 1000);
 }
@@ -271,7 +297,8 @@ async function refresh(full) {
     S.err = null;
     if (full) S.hist = r.history || []; else S.hist = S.hist.concat(r.history || []);
     const cutoff = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cutoff) S.hist.shift();
-    if (r.data) { S.data = r.data; render(); }
+    S.can = !!r.can_control;
+    if (r.data) { S.data = r.data; render(); ctlRender(); }
     else if (full) setTimeout(() => refresh(true), 1500);
     drawCharts();
   } catch (e) { S.err = e.message; }
@@ -498,6 +525,92 @@ function drawCharts() {
   S.charts.temp.setData([ts, col("tmax"), col("tavg"), col("tamb"), col("tout"), h.map(() => isNum(tgt) ? +tgt : null)]);
   const msg = h.length < 2 ? `Collecting history… charts fill in as ${esc(APP)} runs (a point every ${(S.state && S.state.poll_seconds) || 15}s).` : "";
   $("#chHashE").textContent = msg; $("#chTempE").textContent = msg;
+}
+
+/* ---------------- controls ---------------- */
+const PRESETS = [["Red", "#ff0000"], ["Orange", "#ff6a00"], ["Amber", "#f0a020"], ["Yellow", "#ffff00"], ["Green", "#00ff00"],
+  ["Cyan", "#00ffff"], ["Blue", "#0000ff"], ["Purple", "#8000ff"], ["Pink", "#ff40a0"], ["White", "#ffffff"]];
+const LEVEL = { low: "Low", medium: "Medium", high: "High" };
+const MODE = { off: "Off", fixed: "Steady", flash: "Flash", pulse: "Pulse", loop: "Loop" };
+function ctlWire() {
+  const sw = $("#ctlSwatches");
+  sw.innerHTML = PRESETS.map(([n, h]) => `<button type="button" class="swatch" data-hex="${h}" title="${n}" aria-label="${n}" style="--sw:${h}"></button>`).join("");
+  sw.onclick = (e) => { const b = e.target.closest(".swatch"); if (!b) return; setColor(b.dataset.hex); };
+  $("#ctlColor").oninput = (e) => setColor(e.target.value);
+  $("#ctlBright").oninput = (e) => { $("#ctlBrightVal").textContent = e.target.value + "%"; paintRange(); };
+  $("#ctlMode").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.ctlMode = b.dataset.mode; markMode(); };
+  $("#ctlSpeed").onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b || !S.can) return;
+    const lvl = b.dataset.level, cur = S.data && S.data.control ? S.data.control.work_name : null;
+    if (lvl === cur) { ctlMsg(`Work speed is already ${LEVEL[lvl]}.`, "ok"); return; }
+    if (!await confirmDialog(`Change work speed to ${LEVEL[lvl]}?`,
+      `From ${cur ? LEVEL[cur] || cur : "the current setting"} to <b>${LEVEL[lvl]}</b>. This changes hashrate, power use, heat and fan noise. The miner may take a minute to settle.`, `Set ${LEVEL[lvl]}`)) return;
+    ctlSend("/api/control/workmode", { miner: S.miner.id, mode: lvl }, `Work speed → ${LEVEL[lvl]}`);
+  };
+  $("#ctlApplyLed").onclick = async () => {
+    if (!S.can) return;
+    const color = $("#ctlColor").value, br = +$("#ctlBright").value, mode = S.ctlMode;
+    if (!await confirmDialog("Change the miner light?",
+      `<span class="sw-inline" style="background:${esc(color)}"></span><b>${MODE[mode]}</b> · <span class="mono">${esc(color)}</span> · ${br}% brightness`, "Apply light")) return;
+    const c = S.data && S.data.control;
+    const body = { miner: S.miner.id, mode, color, brightness: br };
+    if (c && Number.isInteger(c.led_temper)) body.temper = c.led_temper;
+    ctlSend("/api/control/led", body, "Light updated");
+  };
+  markMode(); paintRange();
+}
+function setColor(h) { h = h.toLowerCase(); $("#ctlColor").value = h; $("#ctlHex").textContent = h; markSwatch(); }
+function markSwatch() { const v = $("#ctlColor").value.toLowerCase(); document.querySelectorAll("#ctlSwatches .swatch").forEach(s => s.classList.toggle("on", s.dataset.hex === v)); }
+function markMode() { document.querySelectorAll("#ctlMode button").forEach(b => b.classList.toggle("on", b.dataset.mode === S.ctlMode)); }
+function paintRange() { const r = $("#ctlBright"); r.style.setProperty("--p", r.value + "%"); }
+function ctlMsg(text, kind) { const el = $("#ctlMsg"); el.className = "ctl-msg on " + (kind || ""); el.innerHTML = text; }
+function ctlBusy(b) { document.querySelectorAll("#ctlCard button, #ctlCard input").forEach(x => x.disabled = b || !S.can); $("#ctlCard").classList.toggle("busy", b); }
+function ctlRender() {
+  const card = $("#ctlCard"); if (!card || !S.data) return;
+  const c = S.data.control || {}, remote = S.data.source === "remote";
+  card.classList.toggle("disabled", !S.can);
+  $("#ctlBadge").innerHTML = S.can ? '<span class="pill info plain">Direct · port 4028</span>' : '<span class="pill plain">Disabled</span>';
+  $("#ctlNote").innerHTML = S.can ? "" : `<div class="alert" style="margin-bottom:16px">${I.warn}<div>${remote
+    ? "Controls are turned off in this preview, so nothing here can change this miner. In Hashwatch on your own network they talk directly to your miner."
+    : "Controls are turned off for this miner."}</div></div>`;
+  $("#ctlSpeedNow").textContent = "Current: " + (c.work_name ? (LEVEL[c.work_name] || c.work_name) : "—");
+  document.querySelectorAll("#ctlSpeed button").forEach(b => b.classList.toggle("on", b.dataset.level === c.work_name));
+  $("#ctlLedNow").innerHTML = c.led_mode ? `${c.led_hex ? `<span class="sw-inline" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(MODE[c.led_mode] || c.led_mode)}${c.led_hex ? " · " + esc(c.led_hex) : ""}${Number.isInteger(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : "—";
+  if (!S.ctlInit && (c.led_mode || c.led_hex)) {
+    if (c.led_hex) setColor(c.led_hex);
+    if (Number.isInteger(c.led_brightness)) { $("#ctlBright").value = c.led_brightness; $("#ctlBrightVal").textContent = c.led_brightness + "%"; }
+    if (c.led_mode && MODE[c.led_mode]) S.ctlMode = c.led_mode;
+    S.ctlInit = true; markMode(); paintRange();
+  }
+  markSwatch();
+  if (!card.classList.contains("busy")) ctlBusy(false);
+}
+async function ctlSend(path, body, okText) {
+  ctlBusy(true); ctlMsg('<span class="spin"></span>Sending to the miner, then reading it back…', "");
+  try {
+    const r = await api(path, { method: "POST", body });
+    if (r.data) { S.data = r.data; render(); }
+    ctlBusy(false); ctlRender();
+    const c = r.control || {};
+    ctlMsg(`${I.ok}<span><b>${esc(okText)}.</b> Miner replied “${esc(r.message || "OK")}”. Now: ${esc(LEVEL[c.work_name] || c.work_name || "—")} · light ${esc(MODE[c.led_mode] || c.led_mode || "—")}.</span>`, "ok");
+    toast(okText);
+  } catch (e) { ctlBusy(false); ctlRender(); ctlMsg(`${I.warn}<span><b>Not applied.</b> ${esc(e.message)}</span>`, "bad"); }
+}
+function confirmDialog(title, html, okLabel) {
+  return new Promise((resolve) => {
+    const scrim = document.createElement("div"); scrim.className = "scrim";
+    const d = document.createElement("div"); d.className = "dialog"; d.setAttribute("role", "alertdialog"); d.setAttribute("aria-modal", "true");
+    d.innerHTML = `<h2>${esc(title)}</h2><p>${html}</p><div class="row" style="justify-content:flex-end;gap:10px;margin-top:20px">
+      <button class="btn ghost" data-a="0">Cancel</button><button class="btn" data-a="1">${esc(okLabel)}</button></div>`;
+    document.body.append(scrim, d);
+    requestAnimationFrame(() => { scrim.classList.add("on"); d.classList.add("on"); });
+    const done = (v) => { scrim.classList.remove("on"); d.classList.remove("on"); setTimeout(() => { scrim.remove(); d.remove(); }, 200); document.removeEventListener("keydown", key); resolve(v); };
+    const key = (e) => { if (e.key === "Escape") done(false); };
+    document.addEventListener("keydown", key);
+    scrim.onclick = () => done(false);
+    d.querySelectorAll("[data-a]").forEach(b => b.onclick = () => done(b.dataset.a === "1"));
+    d.querySelector('[data-a="1"]').focus();
+  });
 }
 
 /* ---------------- settings sheet ---------------- */

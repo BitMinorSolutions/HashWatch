@@ -146,8 +146,9 @@ type Device struct {
 	Status  string `json:"status"`
 }
 
-// Control is the read-only work-mode / light state (only some sources expose it).
+// Control is the work-mode / light state read back from the miner.
 type Control struct {
+	LEDTemper *int   `json:"led_temper,omitempty"`
 	WorkLevel *int   `json:"work_level"`
 	WorkName  string `json:"work_name"`
 	LEDMode   string `json:"led_mode"`

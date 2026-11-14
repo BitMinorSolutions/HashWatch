@@ -269,9 +269,7 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	if d := first(devs, "DEVS"); d != nil {
 		s.Device = model.Device{Name: str(d["Name"]), Enabled: str(d["Enabled"]), Status: str(d["Status"])}
 	}
-	if wl := s.Power.WorkLevel; wl != nil {
-		s.Control = &model.Control{WorkLevel: wl, WorkName: WorkName(*wl)}
-	}
+	s.Control = ControlState(mm)
 	s.Warnings = Warnings(s)
 }
 
@@ -318,4 +316,55 @@ func Warnings(s *model.Snapshot) []string {
 		w = append(w, "No pool is currently active.")
 	}
 	return w
+}
+
+// LEDModes are the ledset "effect" values (Canaan Nano 3S API: 0=off 1=on 2=flash 3=breath 4=loop).
+var LEDModes = []string{"off", "fixed", "flash", "pulse", "loop"}
+
+func LEDModeName(n int) string {
+	if n >= 0 && n < len(LEDModes) {
+		return LEDModes[n]
+	}
+	return fmt.Sprintf("mode %d", n)
+}
+
+// ControlState reads work level and light settings from the MM fields.
+// WORKLEVEL (fallback WORKMODE) is the work speed. LEDUser[effect-bright-temper-r-g-b]
+// is the light on firmwares that report it (Nano 3S); otherwise Led[n] gives the effect only.
+func ControlState(mm map[string]string) *model.Control {
+	c := &model.Control{}
+	lv := num(mm["WORKLEVEL"])
+	if lv == nil {
+		lv = num(mm["WORKMODE"])
+	}
+	if lv != nil {
+		c.WorkLevel = intp(lv)
+		c.WorkName = WorkName(*c.WorkLevel)
+	}
+	if u := strings.Split(mm["LEDUser"], "-"); len(u) == 6 {
+		v := make([]int, 6)
+		ok := true
+		for i, x := range u {
+			n, err := strconv.Atoi(strings.TrimSpace(x))
+			if err != nil {
+				ok = false
+				break
+			}
+			v[i] = n
+		}
+		if ok {
+			c.LEDMode = LEDModeName(v[0])
+			c.LEDBright, c.LEDTemper = &v[1], &v[2]
+			c.LEDHex = fmt.Sprintf("#%02x%02x%02x", v[3]&255, v[4]&255, v[5]&255)
+		}
+	}
+	if c.LEDMode == "" {
+		if n := num(mm["Led"]); n != nil {
+			c.LEDMode = LEDModeName(int(*n))
+		}
+	}
+	if c.WorkLevel == nil && c.LEDMode == "" {
+		return nil
+	}
+	return c
 }

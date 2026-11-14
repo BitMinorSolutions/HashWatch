@@ -8,12 +8,35 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 - Per-chip temperature, voltage and nonce heat map
 - Pools, shares, rejects, stale, hardware-error rate, best share, network drops
 - Health warnings (over target temperature, high hardware-error rate, no active pool, PSU fault…)
+- Controls: work speed (Low / Medium / High) and the miner light (colour, brightness, Off / Steady / Flash / Pulse / Loop)
 - Multiple miners, network auto-discovery, optional password
 - Works great on iPhone, Android, iPad and desktop. Add it to your home screen as an app.
 
-Hashwatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028)
-and only ever sends read commands (`summary`, `stats`/`estats`, `pools`, `devs`, `version`).
-It never changes miner settings. Your data never leaves your network.
+Hashwatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
+For stats it only sends read commands (`summary`, `estats`/`stats`, `pools`, `devs`, `version`).
+It changes something only when you use the Controls panel and confirm. Your data never leaves your network.
+
+## Controls
+
+The **Controls** panel changes your miner's settings through its API. Every change asks you
+to confirm, then Hashwatch reads the miner back and shows the result (or the miner's error).
+
+| Control | Command sent to the miner (port 4028) |
+| --- | --- |
+| Work speed Low / Medium / High | `ascset\|0,workmode,set,0` / `…,1` / `…,2` |
+| Light | `ascset\|0,ledset,EFFECT-BRIGHTNESS-TEMPERATURE-R-G-B` with effect 0 Off, 1 Steady, 2 Flash, 3 Pulse (breath), 4 Loop; brightness 0–100; colour as 0–255 RGB |
+
+The commands are sent as cgminer JSON, e.g. `{"command":"ascset","parameter":"0,workmode,set,1"}`.
+They follow Canaan's published API for the Avalon Nano 3S and Avalon Q. Hashwatch never sends
+reboot, pool, fan or standby commands.
+
+- Work speed takes effect within about a minute. Hashrate, power and temperatures move gradually.
+- Some firmware (for example the original Nano 3) reports only the light mode, not its colour and
+  brightness. Hashwatch then shows the last colour you applied from Hashwatch.
+- The colour-temperature value is kept at what the miner reports, or 50 if it doesn't report one.
+- If you set a password, you must be signed in to use the controls.
+- Some community reports say older Nano 3 firmware ignores `workmode`. If the miner replies with
+  an error, or the speed doesn't change, use the Avalon app instead.
 
 ## Run it
 
@@ -70,6 +93,8 @@ Requires Go 1.24+. No other dependencies (the frontend and uPlot are embedded).
 ```sh
 go test ./...
 go run ./cmd/hashwatch
+go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4028
+go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 ./scripts/build.sh v0.1.0   # cross-compiles every platform into dist/
 ```
 
@@ -77,8 +102,9 @@ Layout:
 
 ```
 cmd/hashwatch/      entry point (flags, browser launch)
-internal/cgminer/   CGMiner TCP client + Avalon "MM ID" field parser (read-only allow-list)
-internal/source/    data sources (direct CGMiner; read-only remote dashboard for previews)
+internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
+internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
+internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
 internal/app/       config, polling + history, discovery, HTTP API, optional password
 internal/model/     the snapshot model shared by sources and UI
 web/static/         the dashboard (vanilla JS, uPlot, Geist fonts) embedded into the binary
