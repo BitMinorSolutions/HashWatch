@@ -41,7 +41,7 @@ var AlertKinds = []AlertKind{
 	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
 	{"badge", "Badges", "When you earn a badge (streaks, big shares, ticket milestones)."},
 	{"summary", "Daily / weekly summary", "Average hashrate, time online, best share and tickets for the day or week."},
-	{"auto", "Automations", "Whenever the schedule or a light effect changes something on the miner."},
+	{"auto", "Automations", "Whenever the schedule, backup-pool failover or a light effect changes something on the miner."},
 }
 
 // Alert thresholds (vars so tests can shorten them).
