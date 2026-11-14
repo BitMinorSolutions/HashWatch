@@ -32,6 +32,7 @@ type Server struct {
 	Alerts     *Alerts
 	Auto       autostart.Spec
 	InstanceID string
+	Quit       func() // stops the server and cloudflared cleanly; nil in preview
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -51,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/live", s.auth(s.live))
 	mux.HandleFunc("GET /api/ping", s.ping)
+	mux.HandleFunc("POST /api/quit", s.auth(s.admin(s.quit)))
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
@@ -207,7 +209,7 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := s.authed(r)
 	out := map[string]any{"app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
-		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second)}
+		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !s.Locked}
 	if ok {
 		var ms []map[string]any
 		for _, m := range s.Cfg.Miners {
@@ -466,4 +468,17 @@ func (s *Server) ctlLED(w http.ResponseWriter, r *http.Request) {
 		return c.SetLED(eff, b.Brightness, temper, b.Color)
 	}, memo)
 	s.ctlReply(w, res, snap, err)
+}
+
+// quit answers first, then shuts down (tunnel, history, instance file) and exits.
+func (s *Server) quit(w http.ResponseWriter, r *http.Request) {
+	if s.Quit == nil {
+		writeJSON(w, 403, map[string]string{"error": "Quit isn't available here."})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	go func() { time.Sleep(300 * time.Millisecond); s.Quit() }()
 }

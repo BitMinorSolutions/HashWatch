@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +27,9 @@ import (
 )
 
 var version = "dev"
+
+// bundleGOOS is the OS whose .app layout triggers launcher mode (overridable in tests).
+var bundleGOOS = "darwin"
 
 func openBrowser(url string) {
 	var cmd *exec.Cmd
@@ -46,6 +51,11 @@ func absPath(p string) string {
 	return p
 }
 
+// inAppBundle reports whether we're the executable inside Hashwatch.app.
+func inAppBundle() bool {
+	return runtime.GOOS == bundleGOOS && strings.Contains(autostart.Exe(), ".app/Contents/MacOS/")
+}
+
 func main() {
 	host := flag.String("host", "0.0.0.0", "address to listen on (0.0.0.0 = reachable from your phone on the same Wi-Fi)")
 	port := flag.Int("port", 8787, "port to listen on (the next free port is used if busy)")
@@ -53,7 +63,43 @@ func main() {
 	dir := flag.String("config", app.DefaultDir(), "folder for settings and history")
 	addMiner := flag.String("miner", "", "add a miner by IP (host[:port]) without using the setup screen")
 	remote := flag.String("remote", "", "preview mode: read a Nano 3 web dashboard at this URL (read-only); credentials from HASHWATCH_REMOTE_USER / HASHWATCH_REMOTE_PASS")
+	// Older macOS passes a -psn_… process serial number to apps opened from Finder.
+	for i := 1; i < len(os.Args); i++ {
+		if strings.HasPrefix(os.Args[i], "-psn_") {
+			os.Args = append(os.Args[:i], os.Args[i+1:]...)
+			i--
+		}
+	}
+	serve := flag.Bool("serve", false, "run the server in this process (used by the macOS app and auto-start)")
 	flag.Parse()
+
+	// Inside Hashwatch.app the visible executable is only a launcher: it starts the
+	// server as a detached background process and exits, so macOS shows no Terminal,
+	// and double-clicking the app again launches a fresh launcher that just reopens
+	// the browser (a still-running bundle would swallow the second double-click).
+	if inAppBundle() && !*serve && *remote == "" {
+		if u, ok := app.RunningInstance(*dir); ok {
+			if !*noOpen {
+				openBrowser(u)
+			}
+			return
+		}
+		if err := os.MkdirAll(*dir, 0o755); err != nil {
+			log.Fatal(err)
+		}
+		logf, err := os.OpenFile(filepath.Join(*dir, "hashwatch.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			log.Fatal(err)
+		}
+		cmd := exec.Command(autostart.Exe(), append([]string{"-serve"}, os.Args[1:]...)...)
+		cmd.Stdout, cmd.Stderr = logf, logf
+		detach(cmd)
+		if err := cmd.Start(); err != nil {
+			log.Fatal(err)
+		}
+		_ = cmd.Process.Release()
+		return
+	}
 
 	// Only one copy per settings folder: running it again just opens the browser.
 	if *remote == "" {
@@ -133,7 +179,7 @@ func main() {
 	if *remote == "" {
 		srv.Tunnel = &tunnel.Manager{Dir: filepath.Join(*dir, "cloudflared"), Origin: "http://" + net.JoinHostPort(originHost, strconv.Itoa(srv.Port)),
 			Token: cfg.Remote.Token, Hostname: cfg.Remote.Hostname, OnURL: srv.TunnelURL}
-		args := []string{"-no-browser", "-config", absPath(*dir)}
+		args := []string{"-serve", "-no-browser", "-config", absPath(*dir)}
 		if *host != "0.0.0.0" {
 			args = append(args, "-host", *host)
 		}
@@ -147,18 +193,28 @@ func main() {
 		}
 		app.WriteInstance(*dir, srv.Port, srv.InstanceID, local)
 	}
+	var quitOnce sync.Once
+	shutdown := func() {
+		quitOnce.Do(func() {
+			log.Printf("%s: stopping", app.AppName)
+			if srv.Tunnel != nil {
+				srv.Tunnel.Stop()
+			}
+			poll.SaveNow()
+			if *remote == "" {
+				app.RemoveInstance(*dir, srv.InstanceID)
+			}
+			os.Exit(0)
+		})
+	}
+	if *remote == "" {
+		srv.Quit = shutdown
+	}
 	go func() {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 		<-ch
-		if srv.Tunnel != nil {
-			srv.Tunnel.Stop()
-		}
-		poll.SaveNow()
-		if *remote == "" {
-			app.RemoveInstance(*dir, srv.InstanceID)
-		}
-		os.Exit(0)
+		shutdown()
 	}()
 	fmt.Printf("\n  %s %s is running.\n\n  On this computer:  %s\n", app.AppName, version, local)
 	if *host == "0.0.0.0" {
@@ -166,7 +222,11 @@ func main() {
 			fmt.Printf("  On your phone:     http://%s:%d\n", a, srv.Port)
 		}
 	}
-	fmt.Printf("\n  Settings: %s\n  Keep this window open. Close it (or press Ctrl+C) to stop.\n  Running %s again just opens your browser to this copy.\n\n", *dir, app.AppName)
+	if inAppBundle() {
+		fmt.Printf("\n  Settings: %s\n  Running in the background. Quit from Settings → Quit %s.\n\n", *dir, app.AppName)
+	} else {
+		fmt.Printf("\n  Settings: %s\n  Keep this window open. Close it (or press Ctrl+C) to stop.\n  Running %s again just opens your browser to this copy.\n\n", *dir, app.AppName)
+	}
 	if !*noOpen && *remote == "" {
 		go func() { time.Sleep(400 * time.Millisecond); openBrowser(local) }()
 	}

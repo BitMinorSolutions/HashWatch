@@ -678,7 +678,8 @@ VIEWS.settings = {
             <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
         ${(st.lan_urls || []).length ? `<section class="panel panel-pad">${setH("smartphone", "On your Wi-Fi", "Open this on a phone on the same network:")}${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></section>` : ""}
         <section class="panel panel-pad">${setH("info", "About", "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change under Controls. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
-          ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}</section>
+          ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
+          ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:${st.auth_required ? 8 : 16}px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including remote access" : ""}. Open the app again to restart it.</p>` : ""}</section>
       </div></div>`;
   },
   wire: () => {
@@ -692,6 +693,14 @@ VIEWS.settings = {
         catch (er) { $("#pwe").textContent = er.message; } };
     }
     const so = $("#so"); if (so) so.onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); boot(); };
+    const qb = $("#quit"); if (qb) qb.onclick = async () => {
+      if (!await confirmDialog("Quit " + APP + "?", `Monitoring, alerts and remote access stop until you open ${esc(APP)} again.`, "Quit")) return;
+      qb.disabled = true;
+      try { await api("/api/quit", { method: "POST", body: {} }); } catch (e) { toast(e.message, "bad"); qb.disabled = false; return; }
+      clearInterval(S.timer);
+      root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+        <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
+    };
     S.remForm = false; remoteLoad(); alertsSetUI();
     const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $(q === "alerts" ? "#alertsSet" : q === "remote" ? "#remoteSet" : null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
   },

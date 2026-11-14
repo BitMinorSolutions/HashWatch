@@ -108,34 +108,51 @@ school networks block it.
 **Settings → Start automatically** starts Hashwatch in the background when you log in, with
 no window and no browser tab:
 
-- **macOS**: a LaunchAgent (`~/Library/LaunchAgents/com.hashwatch.agent.plist`), effective from your next login.
+- **macOS**: a LaunchAgent (`~/Library/LaunchAgents/com.hashwatch.agent.plist`) that runs the binary inside
+  `Hashwatch.app` (`/Applications/Hashwatch.app/Contents/MacOS/Hashwatch -serve …`), effective from your next login.
   Logs go to `~/Library/Application Support/Hashwatch/hashwatch.log`.
 - **Windows**: a Startup entry (`HKCU\…\CurrentVersion\Run`) that runs Hashwatch through a hidden launcher.
 - **Linux**: a systemd user service (`~/.config/systemd/user/hashwatch.service`), or a desktop autostart
   entry if your system has no user systemd. On a headless Raspberry Pi also run
   `loginctl enable-linger $USER` so it starts without logging in.
 
-Put Hashwatch somewhere permanent first (e.g. Applications or your home folder, not Downloads),
-because the entry points at the file's location. Turn the switch off to remove it.
+Put Hashwatch somewhere permanent first (on a Mac: drag it to Applications; elsewhere e.g. your home
+folder, not Downloads), because the entry points at the file's location. Turn the switch off to remove it.
 
 To open Hashwatch, just run it again. If a copy is already running (for the same settings folder),
 it opens your browser to that copy instead of starting a second one.
 
 ## Run it
 
-1. Download the zip for your computer from the Releases page and unzip it.
-2. Double-click **Hashwatch** (Windows: `Hashwatch.exe`). A small window opens and your browser
-   opens the dashboard at `http://localhost:8787`.
-3. Enter your miner's IP address (or tap **Scan my network**). That's it.
+### Mac
+1. Download **Hashwatch-macOS.zip** from the Releases page (one app for both Apple Silicon and Intel Macs,
+   macOS 11 Big Sur or newer) and double-click it to unzip.
+2. Drag **Hashwatch.app** into **Applications**.
+3. Double-click **Hashwatch**. It runs quietly in the background (no Terminal window, no Dock icon)
+   and your browser opens the dashboard at `http://localhost:8787`.
+4. Enter your miner's IP address (or tap **Scan my network**). That's it.
 
-Keep the window open while you use it; close it to stop Hashwatch.
+To open the dashboard again later, double-click Hashwatch again: it reopens your browser to the copy
+that's already running. To stop it, use **Settings → Quit Hashwatch**.
+If macOS asks whether Hashwatch may find devices on your local network, click **Allow** (it needs that
+to read your miner).
+
+**"Apple could not verify Hashwatch" / "cannot be opened":** Hashwatch is ad-hoc signed but not
+notarized by Apple yet, so the first launch is blocked once. Click **Done**, then open
+**System Settings → Privacy & Security**, scroll to **Security** and click **Open Anyway** next to
+Hashwatch, then confirm. You only need to do this once. (The zip includes these steps in
+`How to open.txt`.)
+
+### Windows and Linux
+1. Download the zip for your computer from the Releases page and unzip it.
+2. Double-click **Hashwatch.exe** (Linux: run `./hashwatch`). A small window opens and your browser
+   opens the dashboard at `http://localhost:8787`.
+3. Enter your miner's IP address (or tap **Scan my network**).
+
+Keep the window open while you use it; close it (or use **Settings → Quit Hashwatch**) to stop.
+
 To watch from your phone, open the address shown under **Settings → On your Wi-Fi**
 (for example `http://192.168.1.20:8787`) while on the same Wi-Fi, then **Share → Add to Home Screen**.
-
-### macOS: "cannot be opened because the developer cannot be verified"
-The app is not notarized yet. **Right-click (or Control-click) Hashwatch → Open → Open.**
-You only need to do this once. On newer macOS versions you may instead need
-**System Settings → Privacy & Security → Open Anyway**.
 
 ### Windows: "Windows protected your PC" (SmartScreen)
 Click **More info → Run anyway**. If Windows Firewall asks, allow access on **private networks**
@@ -156,6 +173,7 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 | `--host` | `0.0.0.0` | Listen address. Use `127.0.0.1` to allow this computer only |
 | `--miner 192.168.1.50` | | Add a miner without the setup screen |
 | `--no-browser` | | Don't open a browser on start |
+| `--serve` | | Run the server in this process (used inside Hashwatch.app and by auto-start) |
 | `--config DIR` | OS config dir | Where settings and chart history are stored |
 
 Settings live in your user config folder (`~/Library/Application Support/Hashwatch`,
@@ -181,13 +199,23 @@ go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
-./scripts/build.sh v0.4.0   # cross-compiles every platform into dist/
+./scripts/build.sh v0.4.1   # cross-compiles every platform into dist/ (+ SHA256SUMS.txt)
 ```
+
+The Mac build is a universal `Hashwatch.app` (arm64 + x86_64 joined like `lipo -create`),
+with `Info.plist` (`app.hashwatch`, `LSUIElement`, macOS 11+), an `.icns` icon and an ad-hoc
+signature. On a Mac the script uses `lipo`, `codesign --force --deep -s -` and `ditto`; on Linux it
+uses `packaging/macos/lipo.py`, [rcodesign](https://github.com/indygreg/apple-platform-rs)
+(`RCODESIGN=/path/to/rcodesign`) and a zip writer that keeps exec bits. Check a built bundle with
+`python3 packaging/macos/verify_sig.py Hashwatch.app` (or `codesign --verify --deep --strict` on a Mac).
+Inside the app, the visible executable is a launcher: it starts the server (`-serve`) in the background
+and exits, so the app never holds a Terminal and opening it again just reopens the browser.
 
 Layout:
 
 ```
-cmd/hashwatch/      entry point (flags, browser launch)
+cmd/hashwatch/      entry point (flags, browser launch, macOS app launcher)
+packaging/macos/    Info.plist, icon (.icns + generator), How to open.txt, lipo/verify helpers
 internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
