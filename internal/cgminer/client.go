@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"sync"
 	"time"
 )
 
@@ -18,11 +19,24 @@ var ReadOnly = map[string]bool{"version": true, "summary": true, "pools": true, 
 
 var trailingComma = regexp.MustCompile(`,\s*([}\]])`)
 
+// addrLocks keeps HashWatch to one open connection per miner at a time (reads,
+// controls and automations alike), so it stays gentle on the miner's small API
+// server and coexists with another dashboard polling the same miner.
+var addrLocks sync.Map
+
+func lockAddr(addr string) func() {
+	v, _ := addrLocks.LoadOrStore(addr, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
+
 // Query sends one read-only command and returns the decoded reply.
 func Query(addr, command string, timeout time.Duration) (map[string]any, error) {
 	if !ReadOnly[command] {
 		return nil, fmt.Errorf("command %q is not allowed", command)
 	}
+	defer lockAddr(addr)()
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err

@@ -57,6 +57,7 @@ func LEDParam(effect, bright, temper int, hex string) (string, error) {
 // ascset sends one validated ascset parameter and interprets the STATUS reply.
 func ascset(addr, param string, timeout time.Duration) (Result, error) {
 	res := Result{Sent: "ascset|" + param}
+	defer lockAddr(addr)()
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return res, err
@@ -117,6 +118,7 @@ func command(addr, cmd, param string, timeout time.Duration) (Result, error) {
 	if param != "" {
 		res.Sent += "|" + param
 	}
+	defer lockAddr(addr)()
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return res, err

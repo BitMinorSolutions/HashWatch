@@ -40,6 +40,8 @@ type Miner struct {
 	spikeC   int
 	Restarts int
 	downTill time.Time // not answering while "restarting"
+	conc     int       // open API connections right now
+	MaxConc  int       // most connections ever open at once
 }
 
 func New() *Miner {
@@ -92,6 +94,12 @@ func (m *Miner) Listen(addr string) (net.Listener, error) {
 
 func (m *Miner) handle(c net.Conn) {
 	defer c.Close()
+	m.mu.Lock()
+	m.conc++
+	m.MaxConc = max(m.MaxConc, m.conc)
+	m.mu.Unlock()
+	defer func() { m.mu.Lock(); m.conc--; m.mu.Unlock() }()
+	time.Sleep(2 * time.Millisecond) // a real miner isn't instant; makes overlap visible
 	m.mu.Lock()
 	off := m.Offline || time.Now().Before(m.downTill)
 	m.mu.Unlock()
@@ -198,6 +206,15 @@ func (m *Miner) reply(cmd, param string) string {
 		return `{"STATUS":"RESTART"}`
 	}
 	return status("E", 14, "Invalid command") + `,"id":1}`
+}
+
+// Concurrency returns the most API connections that were ever open at once (and resets it).
+func (m *Miner) Concurrency() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := m.MaxConc
+	m.MaxConc = m.conc
+	return n
 }
 
 // Log returns the commands received so far.

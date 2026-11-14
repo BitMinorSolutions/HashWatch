@@ -33,6 +33,21 @@ USING IT
 - Quit fully: HashWatch menu > Quit HashWatch (Cmd-Q), or the menu bar icon > Quit.
 - Settings: HashWatch menu > Settings (Cmd-,).
 
+RUNS SEPARATELY FROM OTHER MINER DASHBOARDS
+HashWatch is fully independent of any other dashboard on the same Mac or network
+(for example GrumpTech's own dashboard reading the same Nano 3):
+- Its own port (48412, or the next free one). It never uses a port another program
+  answers on and checks that its own address really reaches HashWatch.
+- Its own folder: ~/Library/Application Support/Hashwatch. Nothing else is read or written.
+- Remote access uses HashWatch's own copy of cloudflared in that folder and its own
+  tunnel. It never touches, reuses or stops any other cloudflared or other program.
+- Installing HashWatch never changes your miner. Work speed schedule, auto-throttle,
+  backup pool failover, auto-restart, status light and celebration light flashes are
+  all OFF until you turn each one on in Settings.
+- Gentle on the miner: one connection at a time, short timeouts, a read every 5 s
+  and slower (15 s, then 30 s) if the miner stops answering, so another dashboard
+  can poll the same miner at the same time.
+
 SOMETHING WRONG?
 Settings > Copy debug info, then paste it into a message to us. It includes the
 app and macOS versions, the miner's raw replies and recent errors; passwords are

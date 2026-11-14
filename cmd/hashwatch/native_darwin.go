@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"structs"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -105,6 +106,7 @@ type macShell struct {
 	itHash   objc.ID
 	itDetail objc.ID
 	itRemote objc.ID
+	icon     objc.ID // the hexagon, shown until there's a sparkline
 }
 
 var shell *macShell
@@ -168,6 +170,7 @@ func registerClasses() error {
 		m("toggleRemote:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.toggleRemote() }),
 		m("showAbout:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.about() }),
 		m("menuWillOpen:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.refreshMenu() }),
+		m("refreshSpark:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.refreshSpark() }),
 		m("windowWillClose:", func(self objc.ID, _ objc.SEL, _ objc.ID) {
 			// Keep running in the menu bar; drop the Dock icon until the window comes back.
 			shell.nsApp.Send(sel("setActivationPolicy:"), policyAccessory)
@@ -295,6 +298,7 @@ func (s *macShell) buildStatusItem() {
 	img.Send(sel("setTemplate:"), true)
 	btn := s.status.Send(sel("button"))
 	btn.Send(sel("setImage:"), img)
+	s.icon = img
 	btn.Send(sel("setToolTip:"), nsstr(s.o.Name))
 	s.itHash = s.item("…", "", "", 0)
 	s.itHash.Send(sel("setEnabled:"), false)
@@ -313,6 +317,34 @@ func (s *macShell) buildStatusItem() {
 	m.Send(sel("setDelegate:"), s.delegate)
 	s.status.Send(sel("setMenu:"), m)
 	s.refreshMenu()
+	s.refreshSpark()
+	go func() { // the menu bar sparkline: redraw on the main thread every 15 s
+		for range time.Tick(15 * time.Second) {
+			s.delegate.Send(sel("performSelectorOnMainThread:withObject:waitUntilDone:"), sel("refreshSpark:"), objc.ID(0), false)
+		}
+	}()
+}
+
+// refreshSpark shows the last hour of hashrate as a sparkline in the menu bar
+// (Settings → Lottery → Menu bar sparkline), or the hexagon when there's no data yet.
+func (s *macShell) refreshSpark() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("menu bar sparkline: %v", r)
+		}
+	}()
+	btn := s.status.Send(sel("button"))
+	b := s.o.Srv.SparklinePNG(64, 32)
+	if b == nil {
+		btn.Send(sel("setImage:"), s.icon)
+		return
+	}
+	data := cls("NSData").Send(sel("dataWithBytes:length:"), unsafe.Pointer(&b[0]), uint(len(b)))
+	img := cls("NSImage").Send(sel("alloc")).Send(sel("initWithData:"), data)
+	img.Send(sel("setSize:"), nsSize{W: 32, H: 16})
+	img.Send(sel("setTemplate:"), true)
+	btn.Send(sel("setImage:"), img)
+	img.Send(sel("release")) // the button keeps its own reference
 }
 
 func (s *macShell) refreshMenu() {
