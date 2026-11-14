@@ -8,7 +8,7 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const root = $("#root");
 const S = { state: null, miner: null, data: null, hist: [], range: 3600, err: null, charts: [], can: false, route: "overview",
   ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { h5s: false, h15m: true, h5m: true },
-  alerts: [], alertSeen: 0, kinds: [], desktop: false, desktopOK: false, remote: {}, rem: null };
+  alerts: [], alertSeen: null, kinds: [], desktop: false, desktopOK: false, remote: {}, rem: null };
 const LS = { get: (k, d = "") => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
 
 /* ---------------- utils ---------------- */
@@ -736,7 +736,7 @@ async function loadAlerts() {
   } catch (e) {}
 }
 function newAlerts(items, latest) {
-  if (!S.alertSeen) return; // first load sets the baseline (loadAlerts)
+  if (S.alertSeen == null) return; // loadAlerts sets the baseline, including 0 when the list is empty
   const fresh = items.filter(a => a.id > S.alertSeen && !S.alerts.some(x => x.id === a.id));
   if (!fresh.length) return;
   fresh.forEach(a => S.alerts.unshift(a));
