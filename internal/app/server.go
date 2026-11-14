@@ -52,7 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/live", s.auth(s.live))
 	mux.HandleFunc("GET /api/ping", s.ping)
-	mux.HandleFunc("POST /api/quit", s.auth(s.admin(s.quit)))
+	mux.HandleFunc("POST /api/quit", s.auth(s.quitGuard(s.quit)))
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
@@ -209,7 +209,7 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := s.authed(r)
 	out := map[string]any{"app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
-		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !s.Locked}
+		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil}
 	if ok {
 		var ms []map[string]any
 		for _, m := range s.Cfg.Miners {
@@ -481,4 +481,24 @@ func (s *Server) quit(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 	go func() { time.Sleep(300 * time.Millisecond); s.Quit() }()
+}
+
+// quitGuard is admin without the preview lock: a private preview build can still be quit,
+// but only same-origin JSON from this computer's network (never through a tunnel).
+func (s *Server) quitGuard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
+			writeJSON(w, 403, map[string]string{"error": "cross-site request"})
+			return
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			writeJSON(w, 415, map[string]string{"error": "json required"})
+			return
+		}
+		if !IsLocal(r) {
+			writeJSON(w, 403, map[string]string{"error": "For safety, this can only be changed from your home network."})
+			return
+		}
+		h(w, r)
+	}
 }

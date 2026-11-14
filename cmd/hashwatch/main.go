@@ -31,6 +31,10 @@ var version = "dev"
 // bundleGOOS is the OS whose .app layout triggers launcher mode (overridable in tests).
 var bundleGOOS = "darwin"
 
+// Private builds can bake in a read-only preview source (set with -ldflags -X, never committed):
+// they skip setup, listen on 127.0.0.1, and use their own port and settings folder.
+var bakedRemote, bakedUser, bakedPass, bakedPort, bakedDirName string
+
 func openBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -42,6 +46,13 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	_ = cmd.Start()
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
 
 func absPath(p string) string {
@@ -57,12 +68,22 @@ func inAppBundle() bool {
 }
 
 func main() {
-	host := flag.String("host", "0.0.0.0", "address to listen on (0.0.0.0 = reachable from your phone on the same Wi-Fi)")
-	port := flag.Int("port", 8787, "port to listen on (the next free port is used if busy)")
+	defHost, defPort, defDir := "0.0.0.0", 8787, app.DefaultDir()
+	if bakedRemote != "" {
+		defHost = "127.0.0.1"
+	}
+	if n, err := strconv.Atoi(bakedPort); err == nil {
+		defPort = n
+	}
+	if bakedDirName != "" {
+		defDir = filepath.Join(filepath.Dir(app.DefaultDir()), bakedDirName)
+	}
+	host := flag.String("host", defHost, "address to listen on (0.0.0.0 = reachable from your phone on the same Wi-Fi)")
+	port := flag.Int("port", defPort, "port to listen on (the next free port is used if busy)")
 	noOpen := flag.Bool("no-browser", false, "do not open the browser on start")
-	dir := flag.String("config", app.DefaultDir(), "folder for settings and history")
+	dir := flag.String("config", defDir, "folder for settings and history")
 	addMiner := flag.String("miner", "", "add a miner by IP (host[:port]) without using the setup screen")
-	remote := flag.String("remote", "", "preview mode: read a Nano 3 web dashboard at this URL (read-only); credentials from HASHWATCH_REMOTE_USER / HASHWATCH_REMOTE_PASS")
+	remote := flag.String("remote", bakedRemote, "preview mode: read a Nano 3 web dashboard at this URL (read-only); credentials from HASHWATCH_REMOTE_USER / HASHWATCH_REMOTE_PASS")
 	// Older macOS passes a -psn_… process serial number to apps opened from Finder.
 	for i := 1; i < len(os.Args); i++ {
 		if strings.HasPrefix(os.Args[i], "-psn_") {
@@ -72,12 +93,13 @@ func main() {
 	}
 	serve := flag.Bool("serve", false, "run the server in this process (used by the macOS app and auto-start)")
 	flag.Parse()
+	private := bakedRemote != "" && *remote == bakedRemote // baked private preview: full app lifecycle
 
 	// Inside Hashwatch.app the visible executable is only a launcher: it starts the
 	// server as a detached background process and exits, so macOS shows no Terminal,
 	// and double-clicking the app again launches a fresh launcher that just reopens
 	// the browser (a still-running bundle would swallow the second double-click).
-	if inAppBundle() && !*serve && *remote == "" {
+	if inAppBundle() && !*serve && (*remote == "" || private) {
 		if u, ok := app.RunningInstance(*dir); ok {
 			if !*noOpen {
 				openBrowser(u)
@@ -102,7 +124,7 @@ func main() {
 	}
 
 	// Only one copy per settings folder: running it again just opens the browser.
-	if *remote == "" {
+	if *remote == "" || private {
 		if u, ok := app.RunningInstance(*dir); ok {
 			fmt.Printf("\n  %s is already running: %s\n\n", app.AppName, u)
 			if !*noOpen {
@@ -131,7 +153,7 @@ func main() {
 			cfg.SetPassword(pw)
 		}
 		cfg.Miners = []app.Miner{{ID: "remote", Name: "Avalon Nano 3", Host: "remote", Kind: "remote",
-			RemoteURL: *remote, RemoteUser: os.Getenv("HASHWATCH_REMOTE_USER"), RemotePass: os.Getenv("HASHWATCH_REMOTE_PASS")}}
+			RemoteURL: *remote, RemoteUser: envOr("HASHWATCH_REMOTE_USER", bakedUser), RemotePass: envOr("HASHWATCH_REMOTE_PASS", bakedPass)}}
 	} else if *addMiner != "" {
 		h, p, err := net.SplitHostPort(*addMiner)
 		pn := 4028
@@ -191,6 +213,8 @@ func main() {
 			srv.Tunnel.Start()
 			fmt.Println("  Remote access: starting…")
 		}
+	}
+	if *remote == "" || private {
 		app.WriteInstance(*dir, srv.Port, srv.InstanceID, local)
 	}
 	var quitOnce sync.Once
@@ -201,13 +225,13 @@ func main() {
 				srv.Tunnel.Stop()
 			}
 			poll.SaveNow()
-			if *remote == "" {
+			if *remote == "" || private {
 				app.RemoveInstance(*dir, srv.InstanceID)
 			}
 			os.Exit(0)
 		})
 	}
-	if *remote == "" {
+	if *remote == "" || private {
 		srv.Quit = shutdown
 	}
 	go func() {
@@ -227,7 +251,7 @@ func main() {
 	} else {
 		fmt.Printf("\n  Settings: %s\n  Keep this window open. Close it (or press Ctrl+C) to stop.\n  Running %s again just opens your browser to this copy.\n\n", *dir, app.AppName)
 	}
-	if !*noOpen && *remote == "" {
+	if !*noOpen && (*remote == "" || private) {
 		go func() { time.Sleep(400 * time.Millisecond); openBrowser(local) }()
 	}
 	log.Fatal(http.Serve(ln, srv.Handler()))
