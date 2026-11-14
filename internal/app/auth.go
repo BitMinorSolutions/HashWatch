@@ -21,7 +21,7 @@ const (
 
 const ErrViewOnly = "View-only access: controls and settings are turned off for this sign-in."
 
-const sessTTL = 30 * 24 * time.Hour
+const sessTTL = 7 * 24 * time.Hour
 
 type session struct {
 	ID       string    `json:"id"` // public id (not the cookie)
@@ -54,7 +54,8 @@ func (s *Server) sessionOf(r *http.Request) *session {
 		return nil
 	}
 	now := s.Now()
-	if now.After(se.Exp) {
+	// At most 7 days from sign-in, and 7 days idle.
+	if !now.Before(se.Exp) || now.Sub(se.Created) >= sessTTL || now.Sub(se.LastSeen) >= sessTTL {
 		delete(s.sessions, c.Value)
 		return nil
 	}

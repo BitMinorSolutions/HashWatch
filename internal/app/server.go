@@ -111,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
 	mux.HandleFunc("POST /api/control/pool", s.auth(s.admin(s.ctlPool)))
 	mux.HandleFunc("POST /api/control/reboot", s.auth(s.admin(s.ctlReboot)))
-	s.handler = secHeaders(mux)
+	s.handler = s.csrfWrap(secHeaders(mux))
 	s.mu.Unlock()
 	return s.handler
 }
@@ -181,6 +181,10 @@ func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, 415, map[string]string{"error": "json required"})
 			return
 		}
+		if s.Cfg.PasswordHash == "" && !IsLoopback(r) {
+			writeJSON(w, 403, map[string]string{"error": "Set an admin password in Settings first. Changes from other devices are blocked until you do."})
+			return
+		}
 		h(w, r)
 	}
 }
@@ -211,6 +215,15 @@ func viaTunnel(r *http.Request) bool {
 	return r.Header.Get("Cf-Ray") != "" || r.Header.Get("Cf-Connecting-Ip") != "" || r.Header.Get("Cf-Visitor") != ""
 }
 
+// IsLoopback: the visitor is this computer itself, not a phone on Wi-Fi or the tunnel.
+func IsLoopback(r *http.Request) bool {
+	if viaTunnel(r) {
+		return false
+	}
+	ip := peerIP(r)
+	return ip != nil && ip.IsLoopback()
+}
+
 // IsLocal: the visitor is on this computer or the home network, not the tunnel.
 func IsLocal(r *http.Request) bool {
 	if viaTunnel(r) {
@@ -237,8 +250,12 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !ServiceMode(), "tagline": Tagline, "shell": s.Shell, "service": ServiceMode()}
+	if tok := s.csrfToken(r); tok != "" {
+		out["csrf"] = tok
+	}
 	wifi, gentle, advanced := s.Cfg.Prefs()
 	out["allow_wifi"], out["gentle"], out["advanced_controls"] = wifi, gentle, advanced
+	out["wifi_no_password"] = wifi && s.Cfg.PasswordHash == ""
 	if role == RoleAdmin || (ok && !s.Locked && role != RoleView) {
 		out["update"] = s.updateBrief()
 	}
@@ -425,11 +442,14 @@ func (s *Server) ctlReply(w http.ResponseWriter, res cgminer.Result, snap *model
 var levelNames = map[string]int{"low": 0, "medium": 1, "high": 2}
 
 func (s *Server) ctlWorkmode(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Miner, Mode string }
+	var b struct{ Miner, Mode, Password string }
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
 	lvl, ok := levelNames[strings.ToLower(b.Mode)]
 	if !ok {
 		writeJSON(w, 400, map[string]string{"error": "mode must be low, medium or high"})
+		return
+	}
+	if !s.requireMinerPassword(w, b.Password) {
 		return
 	}
 	if !s.canControl(b.Miner) {
@@ -442,11 +462,14 @@ func (s *Server) ctlWorkmode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ctlLED(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Miner, Mode, Color string
-		Brightness         int
-		Temper             *int
+		Miner, Mode, Color, Password string
+		Brightness                   int
+		Temper                       *int
 	}
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
+	if !s.requireMinerPassword(w, b.Password) {
+		return
+	}
 	eff := -1
 	for i, m := range cgminer.LEDModes {
 		if m == strings.ToLower(b.Mode) {

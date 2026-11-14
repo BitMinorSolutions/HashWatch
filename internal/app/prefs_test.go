@@ -104,6 +104,21 @@ func postJSON(t *testing.T, url, body string) (int, map[string]any) {
 	t.Helper()
 	req, _ := http.NewRequest("POST", url, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	st, err := http.NewRequest("GET", req.URL.Scheme+"://"+req.URL.Host+"/api/state", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr, err := (&http.Client{Timeout: 4 * time.Second}).Do(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range sr.Cookies() {
+		if c.Name == csrfCookie && c.MaxAge >= 0 {
+			req.AddCookie(c)
+			req.Header.Set("X-CSRF-Token", c.Value)
+		}
+	}
+	sr.Body.Close()
 	r, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
 	if err != nil {
 		t.Fatal(err)

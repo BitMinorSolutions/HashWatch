@@ -28,12 +28,19 @@ function toast(msg, level = "good", sub = "") { const t = $("#toast"), [i, c] = 
   t.className = "t-" + c; t.innerHTML = ic(i) + `<span><b>${esc(msg)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>`;
   requestAnimationFrame(() => t.classList.add("on")); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), sub ? 5200 : 2600); }
 async function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
   const o = { credentials: "same-origin", cache: "no-store", ...opts, headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } };
+  if (method !== "GET" && method !== "HEAD" && S.csrf) o.headers["X-CSRF-Token"] = S.csrf;
   if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
   const r = await fetch(path, o); let j = {}; try { j = await r.json(); } catch (e) {}
+  if (j && j.csrf) S.csrf = j.csrf;
   if (r.status === 401 && path !== "/api/login" && path !== "/api/password") { boot(); throw new Error("Signed out"); }
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
+}
+async function askMinerPassword() {
+  if (!S.state || !S.state.auth_required) return "";
+  return promptDialog("Admin password", "Enter your HashWatch admin password. The view-only password will not work.", "Admin password", "password", "Send");
 }
 function tween(el, to, d, suffix = "") {
   if (!el) return;
@@ -75,7 +82,7 @@ async function loadSprite() {
 }
 async function boot() {
   clearInterval(S.timer); await loadSprite();
-  try { S.state = await api("/api/state"); }
+  try { S.state = await api("/api/state"); if (S.state && S.state.csrf) S.csrf = S.state.csrf; }
   catch (e) { root.innerHTML = `<div class="center"><div class="auth"><h1>Can't reach ${esc(APP)}</h1><p class="lead">${esc(e.message)}</p></div></div>`; return; }
   if (S.state.auth_required && !S.state.authed) return viewLogin();
   if (S.state.setup_needed) return viewSetup();
@@ -209,7 +216,8 @@ function shell() {
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
   S.data = null; S.hist = []; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {};
   S.charts.forEach(c => c.destroy()); S.charts = [];
-  const v = $("#view"); v.innerHTML = `<div class="view one-page"><div id="celebrate"></div>${DASH.build()}</div>`;
+  const warn = (S.state.wifi_no_password && !isView()) ? `<div class="banner" style="margin:0 0 16px">${ic("triangle-alert")}<div><b>No password, and phones can reach this dashboard.</b> Set a password in Settings. Until you do, only this computer can change settings or the miner.</div></div>` : "";
+  const v = $("#view"); v.innerHTML = `<div class="view one-page">${warn}<div id="celebrate"></div>${DASH.build()}</div>`;
   $$(".seg", v).forEach(seg); DASH.wire();
   window.onhashchange = route; route(true);
   refresh(true); loadAlerts(); S.lot = null; S.feat = null; S.rules = null; loadLotto(); loadFeatures();
@@ -556,7 +564,8 @@ VIEWS.controls = {
       const l = b.dataset.l, cur = (D().control || {}).work_name;
       if (l === cur) return;
       if (!await confirmDialog(`Set work speed to ${LEVEL[l]}?`, `From ${cur ? LEVEL[cur] || cur : "the current setting"} to <b style="color:var(--t1)">${LEVEL[l]}</b>. Hashrate, power use, heat and fan noise will change. The miner may take a minute to settle.`, `Set ${LEVEL[l]}`)) return;
-      send("/api/control/workmode", { miner: S.miner.id, mode: l }, `Work speed set to ${LEVEL[l]}`, "#wsMsg");
+      const pw = await askMinerPassword(); if (pw == null) return;
+      send("/api/control/workmode", { miner: S.miner.id, mode: l, password: pw }, `Work speed set to ${LEVEL[l]}`, "#wsMsg");
     };
     $("#chips").onclick = (e) => { const b = e.target.closest(".chip-c"); if (b) setLed({ color: b.dataset.hex }); };
     $("#cPick").oninput = (e) => setLed({ color: e.target.value });
@@ -566,7 +575,8 @@ VIEWS.controls = {
     $("#ledApply").onclick = async () => {
       if (!S.can) return; const { mode, color, bright } = S.ctl;
       if (!await confirmDialog("Update the miner light?", `<span class="sw-i" style="background:${esc(color)}"></span><b style="color:var(--t1)">${MODE[mode]}</b> · <span class="mono">${esc(color)}</span> · ${bright}% brightness`, "Apply")) return;
-      const c = D().control || {}, body = { miner: S.miner.id, mode, color, brightness: bright }; if (Number.isInteger(c.led_temper)) body.temper = c.led_temper;
+      const pw = await askMinerPassword(); if (pw == null) return;
+      const c = D().control || {}, body = { miner: S.miner.id, mode, color, brightness: bright, password: pw }; if (Number.isInteger(c.led_temper)) body.temper = c.led_temper;
       send("/api/control/led", body, "Light updated", "#ledMsg", () => { S.ctl.dirty = false; ledUI(); });
     };
     wireAdvanced();
@@ -1344,7 +1354,9 @@ function accessUI() {
   const st = S.state, locked = st.locked || isView();
   const wifi = !!st.allow_wifi, gentle = !!st.gentle, poll = st.poll_seconds || (gentle ? 30 : 5);
   const urls = st.lan_urls || [];
+  const openWifi = !!(st.wifi_no_password || (wifi && !st.auth_required));
   el.innerHTML = setH("smartphone", "This computer", "How phones reach this dashboard, and how often the miner is read.") +
+    (openWifi ? `<div class="banner" style="margin:0 0 14px">${ic("triangle-alert")}<div><b>No password, and phones can reach this dashboard.</b> Anyone on your Wi-Fi can open ${esc(APP)}. Set a password in Settings. Until you do, changes and miner controls from other devices are blocked; only this computer can change anything.</div></div>` : "") +
     `<div class="toggles">
       <div class="tg-row"><div class="tg-ic">${ic("smartphone", "sm")}</div><div class="tg-t"><b>Allow phones on Wi-Fi</b><span>Let phones on your Wi-Fi open ${esc(APP)}. Off, only this computer can. Remote access through your Cloudflare link still works.</span></div>${sw("wifiSw", wifi, locked, "Allow phones on Wi-Fi")}</div>
     </div>
@@ -1361,7 +1373,7 @@ function accessUI() {
       const r = await api("/api/prefs", { method: "POST", body });
       if (r.rebinding) {
         await new Promise(ok => setTimeout(ok, 400));
-        try { S.state = await api("/api/state"); } catch (e) {
+        try { S.state = await api("/api/state"); if (S.state && S.state.csrf) S.csrf = S.state.csrf; } catch (e) {
           await new Promise(ok => setTimeout(ok, 800));
           S.state = await api("/api/state");
         }

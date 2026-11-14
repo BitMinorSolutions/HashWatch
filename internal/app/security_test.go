@@ -13,19 +13,65 @@ import (
 )
 
 type tclient struct {
-	t  *testing.T
-	ts *httptest.Server
-	ck *http.Cookie
-	ip string // when set, the request looks like it came through the tunnel from this address
+	t    *testing.T
+	ts   *httptest.Server
+	ck   *http.Cookie
+	csrf *http.Cookie
+	tok  string
+	ip   string // when set, the request looks like it came through the tunnel from this address
+}
+
+func (c *tclient) grabCSRF() {
+	c.t.Helper()
+	if c.tok != "" && c.csrf != nil {
+		return
+	}
+	req, _ := http.NewRequest("GET", c.ts.URL+"/api/state", nil)
+	if c.ck != nil {
+		req.AddCookie(c.ck)
+	}
+	if c.csrf != nil {
+		req.AddCookie(c.csrf)
+	}
+	if c.ip != "" {
+		req.Header.Set("Cf-Ray", "test")
+		req.Header.Set("Cf-Connecting-Ip", c.ip)
+	}
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer r.Body.Close()
+	c.takeCookies(r)
+}
+
+func (c *tclient) takeCookies(r *http.Response) {
+	for _, k := range r.Cookies() {
+		switch {
+		case k.Name == "hw_session" && k.MaxAge >= 0:
+			c.ck = k
+		case k.Name == csrfCookie && k.MaxAge >= 0:
+			c.csrf, c.tok = k, k.Value
+		}
+	}
 }
 
 func (c *tclient) do(method, path, body string) (*http.Response, map[string]any) {
+	if method != "GET" && method != "HEAD" {
+		c.grabCSRF()
+	}
 	req, _ := http.NewRequest(method, c.ts.URL+path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if method != "GET" && method != "HEAD" && c.tok != "" {
+		req.Header.Set("X-CSRF-Token", c.tok)
+	}
 	if c.ck != nil {
 		req.AddCookie(c.ck)
+	}
+	if c.csrf != nil {
+		req.AddCookie(c.csrf)
 	}
 	if c.ip != "" {
 		req.Header.Set("Cf-Ray", "test")
@@ -40,12 +86,19 @@ func (c *tclient) do(method, path, body string) (*http.Response, map[string]any)
 	b, _ := io.ReadAll(r.Body)
 	var out map[string]any
 	json.Unmarshal(b, &out)
-	for _, k := range r.Cookies() {
-		if k.Name == "hw_session" && k.MaxAge >= 0 {
-			c.ck = k
-		}
-	}
+	c.takeCookies(r)
 	return r, out
+}
+
+// attachCSRF adds a valid anti-forgery cookie and header to a raw request.
+func attachCSRF(t *testing.T, ts *httptest.Server, req *http.Request) {
+	t.Helper()
+	c := &tclient{t: t, ts: ts}
+	c.grabCSRF()
+	req.Header.Set("X-CSRF-Token", c.tok)
+	if c.csrf != nil {
+		req.AddCookie(c.csrf)
+	}
 }
 
 func secServer(t *testing.T) (*httptest.Server, *Server, *time.Time) {

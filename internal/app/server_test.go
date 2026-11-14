@@ -34,6 +34,7 @@ func post(t *testing.T, ts *httptest.Server, path, body string, cookie *http.Coo
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
+	attachCSRF(t, ts, req)
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +74,7 @@ func TestControlGuards(t *testing.T) {
 			ck = c
 		}
 	}
-	if r := post(t, ts, "/api/control/workmode", `{"miner":"d1","mode":"low"}`, ck); r.StatusCode != 200 {
+	if r := post(t, ts, "/api/control/workmode", `{"miner":"d1","mode":"low","password":"secret123"}`, ck); r.StatusCode != 200 {
 		t.Fatalf("signed in: %d", r.StatusCode)
 	}
 	if m.WorkLevel != 0 {

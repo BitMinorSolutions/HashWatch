@@ -28,6 +28,21 @@ func (s *Server) requireAdminPassword(w http.ResponseWriter, pw string) bool {
 	return true
 }
 
+// requireMinerPassword re-checks the admin password on every miner write
+// (workmode, ledset, setpool, reboot). The view-only password never matches.
+// If no HashWatch password is set, the write is allowed only because mutating()
+// has already blocked non-localhost clients.
+func (s *Server) requireMinerPassword(w http.ResponseWriter, pw string) bool {
+	if s.Cfg.PasswordHash == "" {
+		return true
+	}
+	if !s.Cfg.CheckPassword(pw) {
+		writeJSON(w, 403, map[string]string{"error": "That isn't the admin password."})
+		return false
+	}
+	return true
+}
+
 func (s *Server) requireAdvanced(w http.ResponseWriter, id string) bool {
 	if !s.advancedOK() {
 		writeJSON(w, 403, map[string]string{"error": "Advanced miner controls are off. Turn them on in Settings first."})

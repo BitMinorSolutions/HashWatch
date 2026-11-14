@@ -34,6 +34,7 @@ func TestRemoteAccessGuards(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Cf-Ray", "x")
 	req.Header.Set("Cf-Connecting-Ip", "203.0.113.9")
+	attachCSRF(t, ts, req)
 	if r, _ := http.DefaultClient.Do(req); r.StatusCode != 403 {
 		t.Fatalf("tunnel admin: want 403, got %d", r.StatusCode)
 	}
