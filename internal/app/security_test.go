@@ -147,6 +147,8 @@ func TestViewOnlyRole(t *testing.T) {
 		{"POST", "/api/features", `{"miner":"m","fun":{"summary":"off"}}`},
 		{"POST", "/api/features", `{"miner":"m","failover":{"on":true,"dead_min":5}}`},
 		{"POST", "/api/prefs", `{"allow_wifi":true,"gentle":true}`},
+		{"POST", "/api/control/pool", `{"miner":"m","pool":0,"url":"stratum+tcp://example.com:3333","worker":"w","worker_pass":"x","password":"lookonly"}`},
+		{"POST", "/api/control/reboot", `{"miner":"m","password":"lookonly"}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/sessions/revoke", `{}`},
 		{"GET", "/api/remote", ""},

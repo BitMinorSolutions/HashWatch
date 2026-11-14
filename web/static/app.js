@@ -569,11 +569,13 @@ VIEWS.controls = {
       const c = D().control || {}, body = { miner: S.miner.id, mode, color, brightness: bright }; if (Number.isInteger(c.led_temper)) body.temper = c.led_temper;
       send("/api/control/led", body, "Light updated", "#ledMsg", () => { S.ctl.dirty = false; ledUI(); });
     };
+    wireAdvanced();
     ctlFromMiner(); ledUI();
   },
   update: () => {
     const c = D().control || {}, remote = D().source === "remote";
     $("#ctlBanner").innerHTML = S.can ? "" : `<div class="banner">${ic(remote ? "lock" : "info")}<div><b>${remote ? "Read-only preview." : "Controls unavailable."}</b> ${remote ? "Controls are switched off here, so nothing on this page can change this miner. When you run ${esc(APP)} on your own network, they talk directly to your miner." : "This miner can't be controlled from here."}</div></div>`;
+    const adv = $("#advCtl"); if (adv) { adv.hidden = !S.state.advanced_controls || isView(); if (S.state.advanced_controls && !adv.dataset.ready) { fillAdvPool(0); adv.dataset.ready = "1"; } }
     $("#ctlCols").classList.toggle("ctl-locked", !S.can);
     $$("#ctlCols button, #ctlCols input").forEach(x => x.disabled = !S.can || x.id === "ledApply" && !S.ctl.dirty || x.id === "ledReset" && !S.ctl.dirty);
     $("#wsNow").textContent = c.work_name ? "Currently " + (LEVEL[c.work_name] || c.work_name) : "—";
@@ -613,6 +615,39 @@ async function send(path, body, okText, msgSel, after) {
     if (mm) { mm.className = "status-line on ok"; mm.innerHTML = `${ic("circle-check", "sm")}<span><b style="color:var(--t1);font-weight:550">${esc(okText)}.</b> Miner replied “${esc(r.message || "OK")}”. Now ${esc(LEVEL[c.work_name] || c.work_name || "—")} · light ${esc(MODE[c.led_mode] || c.led_mode || "—")}.</span>`; }
     toast(okText);
   } catch (e) { update(false); const mm = $(msgSel); if (mm) { mm.className = "status-line on bad"; mm.innerHTML = `${ic("circle-alert", "sm")}<span><b>Not applied.</b> ${esc(e.message)}</span>`; } }
+}
+function fillAdvPool(n) {
+  const ps = (D().pools || []), p = ps[n] || {};
+  const sel = $("#advPool"); if (sel) segSet(sel, "n", String(n));
+  const u = $("#advURL"), w = $("#advWorker");
+  if (u) u.value = p.url || "";
+  if (w) w.value = p.user || "";
+  S.advPool = n;
+}
+function wireAdvanced() {
+  const seg = $("#advPool"); if (!seg) return;
+  S.advPool = 0;
+  seg.onclick = (e) => { const b = e.target.closest("button"); if (b) fillAdvPool(+b.dataset.n); };
+  const ask = async (title, html, okLabel) => {
+    if (!S.state.auth_required) { toast("Set an admin password in Settings first.", "bad"); return null; }
+    if (!await confirmDialog(title, html + `<p class="fine" style="margin-top:10px">This command is from Canaan's Nano 3S / Avalon Q docs and hasn't been tested on a real Nano 3.</p>`, okLabel)) return null;
+    return promptDialog("Admin password", "Enter your HashWatch admin password. The view-only password will not work.", "Admin password", "password", "Send");
+  };
+  $("#advPoolGo").onclick = async () => {
+    if (!S.can) return;
+    const n = S.advPool || 0, url = $("#advURL").value.trim(), worker = $("#advWorker").value.trim(), wpass = $("#advWPass").value;
+    if (!url || !worker) { toast("Enter the pool URL and worker name.", "bad"); return; }
+    const pw = await ask("Save pool " + (n + 1) + "?", `This writes the new URL, worker and password to pool ${n + 1} on the miner. Canaan says the change only takes effect after a reboot.<br><br><span class="mono">${esc(url)}</span><br>${esc(worker)}`, "Save pool");
+    if (!pw) return;
+    const body = { miner: S.miner.id, pool: n, url, worker, worker_pass: wpass, password: pw, web_user: $("#advWebUser").value.trim(), web_pass: $("#advWebPass").value };
+    send("/api/control/pool", body, "Pool saved · reboot the miner for it to take effect", "#advMsg");
+  };
+  $("#advReboot").onclick = async () => {
+    if (!S.can) return;
+    const pw = await ask("Reboot the miner?", "The miner will go offline for a minute or two, then come back. Any saved pool change will start being used after this restart.", "Reboot");
+    if (!pw) return;
+    send("/api/control/reboot", { miner: S.miner.id, password: pw }, "Reboot sent", "#advMsg");
+  };
 }
 function confirmDialog(title, html, okLabel) {
   return new Promise((resolve) => {
@@ -667,6 +702,29 @@ const DASH = {
             </div>
             <div class="apply-bar"><span class="t3" id="ledDirty">No changes</span><button class="btn ghost" id="ledReset" disabled>Reset</button><button class="btn" id="ledApply" disabled>Apply light</button></div>
             <div class="status-line" id="ledMsg"></div></div>
+          <div class="ctl-row" id="advCtl" hidden>
+            <div class="ctl-head"><b>Advanced miner controls</b><span class="pill warn">Untested on a real Nano 3</span></div>
+            <p class="ctl-desc">Change a pool's URL, worker and password, or reboot the miner. These are the commands Canaan publishes for the Nano 3S, Mini 3 and Avalon Q. They have not been tried on a real Nano 3, and a pool change only takes effect after a reboot.</p>
+            <div class="ctl-field"><div class="lab">Pool</div>
+              <div class="seg full" id="advPool">${[0,1,2].map(n => `<button data-n="${n}">Pool ${n+1}</button>`).join("")}</div></div>
+            <label class="f" for="advURL">Pool URL</label>
+            <input class="input mono" id="advURL" placeholder="stratum+tcp://solo.ckpool.org:3333" autocapitalize="off" spellcheck="false" autocomplete="off">
+            <label class="f" for="advWorker">Worker name</label>
+            <input class="input mono" id="advWorker" placeholder="yourwallet.Nano3" autocapitalize="off" spellcheck="false" autocomplete="off">
+            <label class="f" for="advWPass">Worker password</label>
+            <input class="input mono" id="advWPass" type="password" placeholder="often x" autocomplete="off">
+            <details class="disclose"><summary>Miner web login <span class="t3">· default admin / admin</span></summary>
+              <label class="f" for="advWebUser">Username</label>
+              <input class="input" id="advWebUser" value="admin" autocapitalize="off" spellcheck="false" autocomplete="off">
+              <label class="f" for="advWebPass">Password</label>
+              <input class="input" id="advWebPass" type="password" value="admin" autocomplete="off">
+              <p class="fine">Canaan's setpool command needs the miner's own web login, not your HashWatch password.</p></details>
+            <div class="apply-bar" style="margin-top:12px">
+              <button class="btn accent" id="advPoolGo">Save pool</button>
+              <button class="btn danger" id="advReboot">Reboot miner</button>
+            </div>
+            <div class="status-line" id="advMsg"></div>
+          </div>
         </div>
       </section>
       <div class="${isView() ? "span-12 stack two-up" : "span-5 stack"}">
@@ -1293,6 +1351,9 @@ function accessUI() {
     <div class="toggles" style="margin-top:8px">
       <div class="tg-row"><div class="tg-ic">${ic("timer", "sm")}</div><div class="tg-t"><b>Gentle mode</b><span>Poll the miner every 30 seconds instead of 5, so it stays friendly if another dashboard (like a Pi) is also reading it.</span></div>${sw("gentleSw", gentle, locked, "Gentle mode")}</div>
     </div>
+    <div class="toggles" style="margin-top:8px">
+      <div class="tg-row"><div class="tg-ic">${ic("sliders-horizontal", "sm")}</div><div class="tg-t"><b>Advanced miner controls</b><span>Off by default. Lets you change a pool's URL, worker and password, and reboot the miner. Those commands are from Canaan's Nano 3S / Avalon Q docs and have not been tested on a real Nano 3. Each action asks you to confirm and re-enter your admin password.</span></div>${sw("advSw", !!st.advanced_controls, locked, "Advanced miner controls")}</div>
+    </div>
     <div class="set-meta">${ic("info", "sm")}<span>Currently reading the miner every ${poll}s${gentle ? " · gentle mode is on" : ""}.</span></div>`;
   const tog = async (body, okMsg) => {
     try {
@@ -1304,7 +1365,7 @@ function accessUI() {
           S.state = await api("/api/state");
         }
       } else {
-        S.state = Object.assign(S.state, { allow_wifi: r.allow_wifi, gentle: r.gentle, lan_urls: r.lan_urls, poll_seconds: r.poll_seconds });
+        S.state = Object.assign(S.state, { allow_wifi: r.allow_wifi, gentle: r.gentle, advanced_controls: r.advanced_controls, lan_urls: r.lan_urls, poll_seconds: r.poll_seconds });
       }
       toast(okMsg);
     } catch (e) { toast(e.message, "bad"); }
@@ -1312,6 +1373,17 @@ function accessUI() {
   };
   const ws = $("#wifiSw"); if (ws) ws.onclick = () => tog({ allow_wifi: !wifi }, wifi ? "Phones on Wi-Fi can no longer connect" : "Phones on your Wi-Fi can open " + APP);
   const gs = $("#gentleSw"); if (gs) gs.onclick = () => tog({ gentle: !gentle }, gentle ? "Polling every 5 seconds again" : "Gentle mode on · polling every 30 seconds");
+  const asw = $("#advSw"); if (asw) asw.onclick = async () => {
+    const on = !!st.advanced_controls;
+    if (!on) {
+      if (!st.auth_required) { toast("Set an admin password in Settings first.", "bad"); return; }
+      if (!await confirmDialog("Turn on advanced miner controls?", "This unlocks changing a pool's URL, worker and password, and rebooting the miner. Those commands can take the miner offline or point it at a different pool. They come from Canaan's published Nano 3S / Avalon Q API and have not been tested on a real Nano 3. Each action will ask you to confirm and re-enter your admin password.", "Turn on")) return;
+      await tog({ advanced_controls: true }, "Advanced miner controls are on");
+    } else {
+      if (!await confirmDialog("Turn off advanced miner controls?", "Pool edits and reboot will be refused until you turn this back on.", "Turn off")) return;
+      await tog({ advanced_controls: false }, "Advanced miner controls are off");
+    }
+  };
 }
 
 /* ---------------- settings: lottery extras + privacy ---------------- */

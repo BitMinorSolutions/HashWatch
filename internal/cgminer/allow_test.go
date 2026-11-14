@@ -19,6 +19,12 @@ func TestOnlyDocumentedWrites(t *testing.T) {
 		if AllowedWrite(p) {
 			t.Errorf("must refuse %q", p)
 		}
+		if p == "0,reboot,0" {
+			if !AllowedCommand("ascset", p) {
+				t.Errorf("reboot should be allowed as ascset|%s", p)
+			}
+			continue
+		}
 		if _, err := writeCmd("127.0.0.1:1", "ascset", p, 0); err == nil || !strings.Contains(err.Error(), "refusing") {
 			t.Errorf("ascset sent %q (%v)", p, err)
 		}
@@ -56,5 +62,45 @@ func TestSwitchPoolAllowedOnly(t *testing.T) {
 	}
 	if _, err := SwitchPool("127.0.0.1:1", -1); err == nil {
 		t.Error("pool -1 accepted")
+	}
+}
+
+func TestSetPoolAndRebootAllowed(t *testing.T) {
+	ok, err := SetPoolParam("", "", 0, "stratum+tcp://solo.ckpool.org:3333", "bc1qworker.Nano3", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok != "admin,admin,0,stratum+tcp://solo.ckpool.org:3333,bc1qworker.Nano3,x" {
+		t.Fatalf("param %q", ok)
+	}
+	if !AllowedCommand("setpool", ok) {
+		t.Fatalf("should allow %q", ok)
+	}
+	if !AllowedCommand("ascset", RebootParam) {
+		t.Fatal("should allow reboot")
+	}
+	bad := []string{
+		"admin,admin,3,stratum+tcp://solo.ckpool.org:3333,w,x",
+		"admin,admin,0,http://evil.example/pool,w,x",
+		"admin,admin,0,stratum+tcp://host:3333,w,x,extra",
+		"admin,admin,0,stratum+tcp://host:3333,we,r,ker,x",
+		"admin,admin,01,stratum+tcp://solo.ckpool.org:3333,w,x",
+		"admin,admin,0,stratum+tcp://host:99999,w,x",
+		"admin,admin,0,stratum+tcp://host:3333,w ith space,x",
+		"",
+	}
+	for _, p := range bad {
+		if AllowedCommand("setpool", p) {
+			t.Errorf("must refuse setpool|%q", p)
+		}
+		if _, err := writeCmd("127.0.0.1:1", "setpool", p, 0); err == nil || !strings.Contains(err.Error(), "refusing") {
+			t.Errorf("setpool sent %q (%v)", p, err)
+		}
+	}
+	if _, err := SetPoolParam("admin", "admin", 0, "ftp://nope", "w", "x"); err == nil {
+		t.Fatal("bad URL accepted")
+	}
+	if _, err := Reboot("127.0.0.1:1"); err == nil {
+		t.Fatal("reboot to a closed port should fail at the network, not be refused")
 	}
 }

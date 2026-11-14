@@ -71,6 +71,9 @@ type ConfigData struct {
 	// Gentle slows miner polling to 30 s so another dashboard can share the API.
 	// Off by default. Failed-read backoff is unchanged (never faster than the interval).
 	Gentle bool `json:"gentle,omitempty"`
+	// Advanced enables pool URL/worker/password and reboot writes. Off by default.
+	// The server rejects those writes unless this is on, even if the UI is bypassed.
+	Advanced bool `json:"advanced_controls,omitempty"`
 	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
 	Locations   []Location   `json:"locations,omitempty"`
 	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"

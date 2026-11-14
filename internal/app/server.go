@@ -105,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/alerts/test", s.auth(s.mutating(s.alertsTest)))
 	mux.HandleFunc("POST /api/control/workmode", s.auth(s.mutating(s.ctlWorkmode)))
 	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
+	mux.HandleFunc("POST /api/control/pool", s.auth(s.admin(s.ctlPool)))
+	mux.HandleFunc("POST /api/control/reboot", s.auth(s.admin(s.ctlReboot)))
 	s.handler = secHeaders(mux)
 	s.mu.Unlock()
 	return s.handler
@@ -231,8 +233,8 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
-	wifi, gentle := s.Cfg.Prefs()
-	out["allow_wifi"], out["gentle"] = wifi, gentle
+	wifi, gentle, advanced := s.Cfg.Prefs()
+	out["allow_wifi"], out["gentle"], out["advanced_controls"] = wifi, gentle, advanced
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install
 	}
@@ -363,6 +365,11 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Cfg.SetPassword(b.New)
+	if b.New == "" {
+		s.Cfg.mu.Lock()
+		s.Cfg.Advanced = false
+		s.Cfg.mu.Unlock()
+	}
 	s.Cfg.Save()
 	s.mu.Lock()
 	s.sessions = map[string]*session{}

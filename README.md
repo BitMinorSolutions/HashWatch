@@ -10,7 +10,7 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 - Per-chip temperature, voltage and nonce heat map
 - Pools, shares, rejects, stale, hardware-error rate, best share, network drops
 - Health warnings (over target temperature, high hardware-error rate, no active pool, PSU fault…)
-- Controls: work speed (Low / Medium / High) and the miner light (colour, brightness, Off / Steady / Flash / Pulse / Loop)
+- Controls: work speed (Low / Medium / High) and the miner light (colour, brightness, Off / Steady / Flash / Pulse / Loop). Optional Advanced miner controls (off by default) can change a pool URL/worker/password and reboot the miner
 - **Alerts** for block found, miner offline / back online, hashrate drops, overheating and pool
   disconnects, as desktop notifications and inside the app (with a celebration when you find a block)
 - **Remote access** (optional, off by default): a private https link through Cloudflare, with a QR code for your phone
@@ -21,7 +21,9 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 HashWatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
 For stats it only sends read commands (`summary`, `estats`/`stats`, `pools`, `devs`, `version`).
 It changes something only when you use the Controls panel and confirm, or when you turn on an
-automation (the work-speed schedule or backup-pool failover). Your data stays on your
+automation (the work-speed schedule or backup-pool failover). Pool URL/worker/password edits
+and reboot are locked behind **Advanced miner controls** in Settings (off by default); the
+server rejects those writes unless the switch is on. Your data stays on your
 network, unless you turn on Remote access (see below).
 
 ## Controls
@@ -34,12 +36,17 @@ to confirm, then HashWatch reads the miner back and shows the result (or the min
 | Work speed Low / Medium / High | `ascset\|0,workmode,set,0` / `…,1` / `…,2` |
 | Light | `ascset\|0,ledset,EFFECT-BRIGHTNESS-TEMPERATURE-R-G-B` with effect 0 Off, 1 Steady, 2 Flash, 3 Pulse (breath), 4 Loop; brightness 0–100; colour as 0–255 RGB |
 | Backup pool failover (Settings, off by default) | `switchpool\|N` — switch to already-configured pool N (0–15). Never adds, removes or rewrites pool URLs or passwords. |
+| Pool URL, worker and password (Advanced miner controls, off by default) | `setpool\|webuser,webpass,N,url,worker,workerpass` — N is 0–2. webuser/webpass are the miner's web login (default `admin`,`admin`). Canaan says this takes effect only after a reboot. |
+| Reboot miner (Advanced miner controls, off by default) | `ascset\|0,reboot,0` |
 
 The commands are sent as cgminer JSON, e.g. `{"command":"ascset","parameter":"0,workmode,set,1"}`.
 Work speed and light follow Canaan's published API for the Avalon Nano 3S and Avalon Q.
 `switchpool` is a standard cgminer command; it is **not documented** in that Canaan reference and
 has not been verified on a real Nano 3, so some firmware may ignore it (the Nano already fails over
-its own pool list). HashWatch never sends `addpool`, `removepool`, reboot, fan or standby commands.
+its own pool list). `setpool` and `ascset|0,reboot,0` are documented by Canaan for the Nano 3S,
+Mini 3 and Avalon Q, but they have **not been tested on a real Nano 3**. HashWatch never sends
+`addpool`, `removepool`, fan or standby commands. Advanced miner controls also require a confirm
+dialog and the HashWatch admin password for each action; the view-only password is refused.
 
 - Work speed takes effect within about a minute. Hashrate, power and temperatures move gradually.
 - Some firmware (for example the original Nano 3) reports only the light mode, not its colour and
@@ -255,7 +262,7 @@ Layout:
 cmd/hashwatch/      entry point (flags, browser launch, native macOS shell)
 packaging/macos/    Info.plist, icon (.icns + generator), Read me first.txt, lipo/verify helpers, DMG builder + background
 internal/install/   "Move to Applications?" (macOS app run from Downloads or a disk image)
-internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset, switchpool)
+internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset, switchpool, setpool, reboot)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
 internal/app/       config, polling + history, discovery, HTTP API, password, alerts, single-instance

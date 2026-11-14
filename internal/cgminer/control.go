@@ -20,6 +20,12 @@ import (
 //	                                     credential changes). Standard cgminer API; not
 //	                                     documented in Canaan's Nano 3S / Avalon Q reference
 //	                                     and unverified on a real Nano 3.
+//	setpool|user,pass,N,url,worker,pass  N: 0-2. Canaan's Nano 3S / Mini 3 / Avalon Q
+//	                                     docs (https://www.canaan.io/resource/api/avalon-nano-3s).
+//	                                     user/pass are the miner's web login (default admin,admin).
+//	                                     Takes effect only after a reboot. Untested on a real Nano 3.
+//	ascset|0,reboot,0                    Canaan's documented reboot for Nano 3S / Mini 3 / Avalon Q.
+//	                                     Untested on a real Nano 3.
 //
 // They are sent in cgminer's JSON form, e.g. {"command":"switchpool","parameter":"1"}.
 
@@ -81,13 +87,20 @@ func AllowedWrite(param string) bool {
 // allowedSwitch is a pool index already on the miner: 0-15, no leading zeros or extras.
 var allowedSwitch = regexp.MustCompile(`^(1[0-5]|[0-9])$`)
 
-// AllowedCommand is the write-command allow-list: workmode, ledset and switchpool only.
+// RebootParam is the documented Canaan reboot (Nano 3S / Mini 3 / Avalon Q).
+const RebootParam = "0,reboot,0"
+
+// AllowedCommand is the write-command allow-list: workmode, ledset, switchpool,
+// setpool and reboot (the last two are still rejected by the server unless
+// Advanced miner controls is on).
 func AllowedCommand(cmd, param string) bool {
 	switch strings.ToLower(cmd) {
 	case "ascset":
-		return AllowedWrite(param)
+		return AllowedWrite(param) || param == RebootParam
 	case "switchpool":
 		return allowedSwitch.MatchString(param)
+	case "setpool":
+		return AllowedSetPool(param)
 	default:
 		return false
 	}
@@ -107,7 +120,7 @@ func writeCmd(addr, cmd, param string, timeout time.Duration) (Result, error) {
 		res.Sent += "|" + param
 	}
 	if !AllowedCommand(cmd, param) {
-		return res, fmt.Errorf("refusing to send %q: only work modes 0/1/2, ledset and switchpool are allowed", res.Sent)
+		return res, fmt.Errorf("refusing to send %q: command is not on the allow-list", res.Sent)
 	}
 	defer lockAddr(addr)()
 	conn, err := net.DialTimeout("tcp", addr, timeout)
@@ -170,4 +183,80 @@ func SwitchPool(addr string, n int) (Result, error) {
 		return Result{}, err
 	}
 	return writeCmd(addr, "switchpool", p, 5*time.Second)
+}
+
+// SetPoolParam builds Canaan's setpool parameter:
+//
+//	webuser,webpass,N,url,worker,workerpass
+//
+// Empty web login fields default to admin, as the Nano 3S / Mini 3 / Avalon Q
+// docs specify. Pool index is 0-2. Commas, pipes and spaces in any field are refused.
+func SetPoolParam(webUser, webPass string, pool int, url, worker, workerPass string) (string, error) {
+	if strings.TrimSpace(webUser) == "" {
+		webUser = "admin"
+	}
+	if strings.TrimSpace(webPass) == "" {
+		webPass = "admin"
+	}
+	p := strings.Join([]string{webUser, webPass, fmt.Sprintf("%d", pool), url, worker, workerPass}, ",")
+	if err := checkSetPool(p); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+var (
+	poolWebRe  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	poolURLRe  = regexp.MustCompile(`^stratum\+(tcp|ssl|tls)://[A-Za-z0-9][A-Za-z0-9.-]{0,253}:\d{1,5}$`)
+	poolUserRe = regexp.MustCompile(`^[A-Za-z0-9._~:@/+%=-]{1,128}$`)
+	poolPassRe = regexp.MustCompile(`^[A-Za-z0-9._~:@/+%=-]*$`)
+)
+
+// AllowedSetPool reports whether a setpool parameter is on the allow-list.
+func AllowedSetPool(param string) bool { return checkSetPool(param) == nil }
+
+func checkSetPool(param string) error {
+	parts := strings.Split(param, ",")
+	if len(parts) != 6 {
+		return errors.New("pool settings must be url, worker and password for one pool (0-2)")
+	}
+	webUser, webPass, idx, url, worker, wpass := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+	if !poolWebRe.MatchString(webUser) || !poolWebRe.MatchString(webPass) {
+		return errors.New("miner web login must be 1-64 letters, numbers, dots, underscores or dashes")
+	}
+	if idx != "0" && idx != "1" && idx != "2" {
+		return errors.New("pool number must be 0, 1 or 2")
+	}
+	if !poolURLRe.MatchString(url) {
+		return errors.New("pool URL must look like stratum+tcp://host:port")
+	}
+	var port int
+	if i := strings.LastIndex(url, ":"); i >= 0 {
+		fmt.Sscanf(url[i+1:], "%d", &port)
+	}
+	if port < 1 || port > 65535 {
+		return errors.New("pool URL port must be 1-65535")
+	}
+	if !poolUserRe.MatchString(worker) {
+		return errors.New("worker name has a character that isn't allowed")
+	}
+	if len(wpass) > 128 || !poolPassRe.MatchString(wpass) {
+		return errors.New("worker password has a character that isn't allowed")
+	}
+	return nil
+}
+
+// SetPool changes pool N's URL, worker and password (Canaan setpool). The miner
+// will not use the new settings until it is rebooted. Untested on a real Nano 3.
+func SetPool(addr, webUser, webPass string, pool int, url, worker, workerPass string) (Result, error) {
+	p, err := SetPoolParam(webUser, webPass, pool, url, worker, workerPass)
+	if err != nil {
+		return Result{}, err
+	}
+	return writeCmd(addr, "setpool", p, 5*time.Second)
+}
+
+// Reboot asks the miner to restart (Canaan ascset|0,reboot,0). Untested on a real Nano 3.
+func Reboot(addr string) (Result, error) {
+	return writeCmd(addr, "ascset", RebootParam, 8*time.Second)
 }

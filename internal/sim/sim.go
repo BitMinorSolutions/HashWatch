@@ -1,6 +1,7 @@
 // Package sim is a small simulated Avalon Nano 3 CGMiner API (port 4028) for
 // development and tests. It answers read commands with data captured from a real
-// Nano 3 and applies workmode, ledset and switchpool changes to its in-memory state.
+// Nano 3 and applies workmode, ledset, switchpool, setpool and reboot changes
+// to its in-memory state.
 package sim
 
 import (
@@ -43,10 +44,23 @@ type Miner struct {
 	spikeC   int
 	conc     int // open API connections right now
 	MaxConc  int // most connections ever open at once
+	Pools    [3]poolInfo
+	pending  [3]*poolInfo
+	Reboots  int
+}
+
+type poolInfo struct{ URL, User, Pass string }
+
+func defaultPools() [3]poolInfo {
+	return [3]poolInfo{
+		{"stratum+tcp://solo.ckpool.org:3333", "bc1qsimulatedminer000000000000000000000.Nano3", "x"},
+		{"stratum+tcp://public-pool.io:21496", "bc1qsimulatedminer000000000000000000000", "x"},
+		{"stratum+tcp://solo.ckpool.org:3333", "bc1qsimulatedminer000000000000000000000.backup", "x"},
+	}
 }
 
 func New() *Miner {
-	m := &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second)}
+	m := &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second), Pools: defaultPools()}
 	m.Best = m.bestOf(549866)
 	m.lastBest = time.Now()
 	return m
@@ -160,8 +174,8 @@ func (m *Miner) reply(cmd, param string) string {
 		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
 			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, 134043+el/4, m.Best)
 	case "pools":
-		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"%s","Priority":0,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.Nano3","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"solo.ckpool.org","Best Share":%.0f,"Pool Rejected%%":%.4f,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"stratum+tcp://public-pool.io:21496","Status":"Alive","Priority":1,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"Alive","Priority":2,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.backup","Stratum Active":%s,"Accepted":0}],"id":1}`,
-			alive0, 134043+el/4, time.Now().Unix()-3, act(0), m.Best, rej0, act(1), act(2))
+		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"%s","Status":"%s","Priority":0,"Quota":1,"User":"%s","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"%s","Best Share":%.0f,"Pool Rejected%%":%.4f,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"%s","Status":"Alive","Priority":1,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"%s","Status":"Alive","Priority":2,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0}],"id":1}`,
+			m.Pools[0].URL, alive0, m.Pools[0].User, 134043+el/4, time.Now().Unix()-3, act(0), poolHost(m.Pools[0].URL), m.Best, rej0, m.Pools[1].URL, m.Pools[1].User, act(1), m.Pools[2].URL, m.Pools[2].User, act(2))
 	case "devs":
 		return status("S", 9, "1 ASC(s)") + `,"DEVS":[{"ASC":0,"Name":"AVANANO","ID":0,"Enabled":"Y","Status":"Alive"}],"id":1}`
 	case "estats", "stats":
@@ -191,7 +205,29 @@ func (m *Miner) reply(cmd, param string) string {
 				return status("I", 118, "ASC 0 set info: led set ok") + `,"id":1}`
 			}
 		}
+		if len(p) == 3 && p[0] == "0" && p[1] == "reboot" && p[2] == "0" {
+			for i, pend := range m.pending {
+				if pend != nil {
+					m.Pools[i] = *pend
+					m.pending[i] = nil
+				}
+			}
+			m.Reboots++
+			return status("S", 119, "ASC 0 set OK") + `,"id":1}`
+		}
 		return status("E", 120, "ASC 0 set failed: invalid option") + `,"id":1}`
+	case "setpool":
+		parts := strings.Split(param, ",")
+		if len(parts) != 6 {
+			return status("E", 14, "Invalid setpool") + `,"id":1}`
+		}
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n < 0 || n > 2 {
+			return status("E", 14, "Invalid pool number") + `,"id":1}`
+		}
+		m.pending[n] = &poolInfo{URL: parts[3], User: parts[4], Pass: parts[5]}
+		msg := fmt.Sprintf("Pool set info:\npool %d success set to %s\nworker is  %s\nworkerpassword is %s\nPlease reboot miner to make config work.", n, parts[3], parts[4], parts[5])
+		return status("S", 133, msg) + `,"id":1}`
 	case "switchpool":
 		n, err := strconv.Atoi(param)
 		if err != nil || n < 0 || n > 2 {
@@ -304,4 +340,14 @@ func (m *Miner) Admin(addr string) error {
 	}
 	go http.Serve(ln, mux)
 	return nil
+}
+
+func poolHost(u string) string {
+	u = strings.TrimPrefix(u, "stratum+tcp://")
+	u = strings.TrimPrefix(u, "stratum+ssl://")
+	u = strings.TrimPrefix(u, "stratum+tls://")
+	if i := strings.LastIndex(u, ":"); i > 0 {
+		return u[:i]
+	}
+	return u
 }
