@@ -16,7 +16,20 @@ import (
 	"github.com/hashwatch/hashwatch/internal/source"
 )
 
-const historyMax = 24 * 3600 / 15 // 24h at 15 s
+// DefaultPoll is the one poll interval for every source (direct port 4028 and remote preview).
+const DefaultPoll = 5 * time.Second
+
+// Backoff after failed fetches: first failure waits 15 s, then 30 s, until one succeeds.
+var backoff = []time.Duration{15 * time.Second, 30 * time.Second}
+
+// History keeps every sample for the last hour, then thins older ones to one per
+// thinEvery, for 24 h in total (~720 + 5,520 samples at 5 s polling).
+const (
+	historyKeep = 24 * 3600
+	fullRes     = 3600
+	thinEvery   = 15
+	historyMax  = fullRes/2 + (historyKeep-fullRes)/thinEvery + 64 // hard cap (2 s polling worst case)
+)
 
 type minerState struct {
 	Latest  *model.Snapshot `json:"latest"`
@@ -28,7 +41,10 @@ type minerState struct {
 	stop    chan struct{}
 	ctlMu   sync.Mutex // one control command at a time per miner
 	lastCtl time.Time
-	ledMemo *model.Control // last light settings we applied (for firmwares that don't report them)
+	ledMemo *model.Control
+	fails   int           // consecutive failed fetches (drives backoff)
+	next    time.Duration // current wait before the next fetch
+	nextAt  time.Time     // when the next fetch starts // last light settings we applied (for firmwares that don't report them)
 }
 
 type Poller struct {
@@ -75,15 +91,16 @@ func (p *Poller) Start(m Miner) {
 	p.m[m.ID] = st
 	p.mu.Unlock()
 	go func() {
-		p.pollOnce(m.ID, st)
-		t := time.NewTicker(p.Every)
-		defer t.Stop()
 		for {
+			start := time.Now()
+			wait := p.pollOnce(m.ID, st)
+			// Fixed cadence (start to start), with a short minimum gap between reads.
+			t := time.NewTimer(max(time.Until(start.Add(wait)), min(time.Second, p.Every)))
 			select {
 			case <-st.stop:
+				t.Stop()
 				return
 			case <-t.C:
-				p.pollOnce(m.ID, st)
 			}
 		}
 	}()
@@ -99,9 +116,29 @@ func (p *Poller) Stop(id string) {
 	}
 }
 
-func (p *Poller) pollOnce(id string, st *minerState) {
+// interval is the wait after a fetch: Every on success, then 15 s, 30 s, 30 s… while failing.
+func (p *Poller) interval(fails int) time.Duration {
+	if fails == 0 {
+		return p.Every
+	}
+	b := backoff[min(fails, len(backoff))-1]
+	return max(b, p.Every)
+}
+
+func (p *Poller) pollOnce(id string, st *minerState) time.Duration {
+	snapStart := time.Now()
 	snap := st.src.Fetch()
 	p.record(id, st, snap)
+	p.mu.Lock()
+	if snap.OK {
+		st.fails = 0
+	} else {
+		st.fails++
+	}
+	st.next = p.interval(st.fails)
+	wait := st.next
+	st.nextAt = time.Now().Add(max(wait-time.Since(snapStart), min(time.Second, p.Every)))
+	p.mu.Unlock()
 	if p.OnPoll != nil {
 		p.mu.RLock()
 		var hr []model.Sample
@@ -114,6 +151,7 @@ func (p *Poller) pollOnce(id string, st *minerState) {
 		p.mu.RUnlock()
 		p.OnPoll(id, st.name, snap, hr)
 	}
+	return wait
 }
 
 func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
@@ -129,6 +167,9 @@ func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
 		if n := len(st.History); n == 0 || st.History[n-1].T != s.T {
 			st.History = append(st.History, s)
 		}
+		if n := len(st.History); n%60 == 0 || n > historyMax {
+			st.History = thin(st.History, s.T)
+		}
 		if len(st.History) > historyMax {
 			st.History = st.History[len(st.History)-historyMax:]
 		}
@@ -138,11 +179,32 @@ func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
 	}
 }
 
+// thin drops samples older than 24 h and keeps one per thinEvery seconds beyond the last hour.
+func thin(h []model.Sample, now int64) []model.Sample {
+	out := h[:0]
+	var last int64 = -1 << 62
+	for _, x := range h {
+		if x.T < now-historyKeep {
+			continue
+		}
+		if x.T < now-fullRes {
+			if x.T-last < thinEvery {
+				continue
+			}
+		}
+		out = append(out, x)
+		last = x.T
+	}
+	return out
+}
+
 type LiveView struct {
 	Latest  *model.Snapshot `json:"data"`
 	LastOK  int64           `json:"last_ok"`
 	LastErr string          `json:"last_err"`
 	History []model.Sample  `json:"history"`
+	Poll    int             `json:"poll_seconds"` // current interval, including any backoff
+	NextAt  float64         `json:"next_poll_unix,omitempty"`
 }
 
 func (p *Poller) Live(id string, since int64) (LiveView, bool) {
@@ -152,7 +214,10 @@ func (p *Poller) Live(id string, since int64) (LiveView, bool) {
 	if st == nil {
 		return LiveView{}, false
 	}
-	v := LiveView{Latest: st.Latest, LastOK: st.LastOK, LastErr: st.LastErr}
+	v := LiveView{Latest: st.Latest, LastOK: st.LastOK, LastErr: st.LastErr, Poll: int(p.interval(st.fails) / time.Second)}
+	if !st.nextAt.IsZero() {
+		v.NextAt = float64(st.nextAt.UnixMilli()) / 1000
+	}
 	for _, h := range st.History {
 		if h.T > since {
 			v.History = append(v.History, h)

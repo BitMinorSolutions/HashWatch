@@ -45,7 +45,7 @@ reboot, pool, fan or standby commands.
 
 ## Alerts
 
-Hashwatch watches every miner on each poll (every 15 seconds) and raises an alert when:
+Hashwatch watches every miner on each poll (every 5 seconds; after a failed read it backs off to 15 s, then 30 s, until the miner answers again) and raises an alert when:
 
 | Alert | When |
 | --- | --- |
@@ -172,6 +172,7 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 | `--port` | `8787` | Web port (the next free port is used if busy) |
 | `--host` | `0.0.0.0` | Listen address. Use `127.0.0.1` to allow this computer only |
 | `--miner 192.168.1.50` | | Add a miner without the setup screen |
+| `--poll` | `5s` | How often to read each miner. Failed reads back off to 15s, then 30s, until it recovers |
 | `--no-browser` | | Don't open a browser on start |
 | `--serve` | | Run the server in this process (used inside Hashwatch.app and by auto-start) |
 | `--config DIR` | OS config dir | Where settings and chart history are stored |

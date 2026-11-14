@@ -290,7 +290,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
-		"last_err": v.LastErr, "history": v.History, "can_control": s.canControl(id),
+		"last_err": v.LastErr, "history": v.History, "poll_seconds": v.Poll, "next_poll_unix": v.NextAt, "can_control": s.canControl(id),
 		"remote": s.remoteBrief(), "local_viewer": IsLocal(r)}
 	if s.Alerts != nil {
 		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)

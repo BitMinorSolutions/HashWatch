@@ -91,6 +91,7 @@ func main() {
 			i--
 		}
 	}
+	every := flag.Duration("poll", app.DefaultPoll, "how often to read each miner (failed reads back off to 15s, then 30s)")
 	serve := flag.Bool("serve", false, "run the server in this process (used by the macOS app and auto-start)")
 	flag.Parse()
 	private := bakedRemote != "" && *remote == bakedRemote // baked private preview: full app lifecycle
@@ -139,7 +140,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	poll := app.NewPoller(*dir, 15*time.Second)
+	if *every < 2*time.Second {
+		*every = 2 * time.Second
+	}
+	poll := app.NewPoller(*dir, *every)
 	srv := &app.Server{Cfg: cfg, Poll: poll, Static: web.FS, Version: version, LANOK: *host == "0.0.0.0" || *host == "", InstanceID: app.NewID()}
 	alerts := app.NewAlerts(*dir)
 	alerts.Enabled = cfg.AlertOn

@@ -41,7 +41,7 @@ var AlertKinds = []AlertKind{
 
 // Alert thresholds (vars so tests can shorten them).
 var (
-	offlineAfter  = 2 // failed polls (~30 s at 15 s polling)
+	offlineAfter  = 2 // consecutive failed polls (~15-20 s: a failure, then a retry 15 s later)
 	hashDropFor   = 10 * time.Minute
 	hashDropRatio = 0.70
 	hashClear     = 0.80

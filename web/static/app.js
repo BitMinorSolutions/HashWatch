@@ -193,14 +193,14 @@ function liveUI() {
   const d = S.data, age = d && d.fetched_at_unix ? Date.now() / 1000 - d.fetched_at_unix : null;
   let k = "good", t;
   if (S.err) { k = "bad"; t = "Can't refresh"; } else if (!d) { k = "warn"; t = "Connecting…"; }
-  else if (!d.ok) { k = "bad"; t = "Miner offline"; } else { if (age > 60) k = "warn"; t = "Live · " + rel(d.fetched_at_unix); }
+  else if (!d.ok) { k = "bad"; t = "Miner offline"; } else { const p = S.pollS || 5; if (age > Math.max(60, p * 3)) k = "warn"; t = "Live · " + (age < 60 ? Math.max(0, Math.floor(age)) + "s ago" : rel(d.fetched_at_unix)); }
   const dot = `<span class="dot ${k === "good" ? "" : k}"></span>`;
   $("#sideStatus").innerHTML = dot + `<span>${esc(t)}</span>`;
   $("#liveTop").innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px">${dot}${esc(t)}</span>`;
   $("#ltSub").innerHTML = dot + `<span>${esc(S.miner.name)}</span><span class="t3">· ${esc(t.replace("Live · ", ""))}</span>`;
 }
 async function refresh(full) {
-  nextIn = (S.state && S.state.poll_seconds) || 15;
+  nextIn = S.pollS || (S.state && S.state.poll_seconds) || 5;
   const since = full || !S.hist.length ? 0 : S.hist[S.hist.length - 1].t;
   try {
     const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}&a=${S.alertSeen || 0}`);
@@ -208,8 +208,13 @@ async function refresh(full) {
     newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
+    if (r.poll_seconds) S.pollS = r.poll_seconds;
     if (r.data) { const first = !S.data; S.data = r.data; update(first); } else if (full) setTimeout(() => refresh(true), 1500);
-  } catch (e) { S.err = e.message; }
+    // Ask again just after the server's next read (its interval includes any backoff), so data is never a full cycle stale.
+    // r.next_poll_unix is when the server starts its next read; ask ~1.5 s after it (reads take ~1 s).
+    const p = S.pollS || 5, nx = r.next_poll_unix, serverNow = r.server_time || Date.now() / 1000;
+    nextIn = nx ? Math.min(p + 2, Math.max(1, Math.ceil(nx + 1.5 - serverNow))) : p;
+  } catch (e) { S.err = e.message; nextIn = Math.max(nextIn, 15); }
   liveUI();
 }
 function update(first) { const v = VIEWS[S.route]; if (v.update) v.update(first); drawCharts(); }
@@ -255,13 +260,13 @@ const HASH_SERIES = () => [
   { k: "h5m", label: "5m avg", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.h5m } ];
 const hashRange = (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.2, (hi - lo) * .3); return [Math.max(0, lo - p), hi + p]; };
 function drawCharts() {
-  const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = ((S.state && S.state.poll_seconds) || 15) * 8, h = [];
+  const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = Math.max(90, (S.pollS || (S.state && S.state.poll_seconds) || 5) * 8), h = [];
   S.hist.filter(x => x.t >= c).forEach((x, i, a) => { if (i && x.t - a[i - 1].t > gap) h.push({ t: a[i - 1].t + 1 }); h.push(x); });
   S.charts.forEach(u => {
     const ts = h.map(x => x.t);
     u.setData([ts, ...u._keys.map(k => k === "target" ? h.map(() => tg) : k === "eff" ? h.map(x => isNum(x.w) && x.h5m ? x.w / x.h5m : null) : h.map(x => isNum(x[k]) ? +x[k] : null))]);
     const e = u.root.parentElement.querySelector(".chart-empty");
-    if (e) e.textContent = h.length < 2 ? `Collecting history… a new point every ${(S.state && S.state.poll_seconds) || 15}s.` : "";
+    if (e) e.textContent = h.length < 2 ? `Collecting history… a new point every ${S.pollS || (S.state && S.state.poll_seconds) || 5}s.` : "";
   });
 }
 function rangeSeg() { return `<div class="seg" id="range">${[[3600, "1H"], [21600, "6H"], [86400, "24H"]].map(([r, l]) => `<button data-r="${r}" class="${S.range === r ? "on" : ""}">${l}</button>`).join("")}</div>`; }
