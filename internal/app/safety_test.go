@@ -22,6 +22,10 @@ func TestAutomationInputValidation(t *testing.T) {
 		`{"miner":"m1","schedule":{"on":true,"default":"3"}}`,
 		`{"miner":"m1","schedule":{"on":true,"rules":[{"days":[9],"start":"09:00","end":"10:00","mode":"low"}]}}`,
 		`{"miner":"m1","schedule":{"on":true,"rules":[{"days":[1],"start":"25:00","end":"10:00","mode":"low"}]}}`,
+		`{"miner":"m1","failover":{"on":true,"dead_min":-1}}`,
+		`{"miner":"m1","failover":{"on":true,"dead_min":200}}`,
+		`{"miner":"m1","failover":{"on":true,"cool_min":-1}}`,
+		`{"miner":"m1","failover":{"on":true,"return_min":2000}}`,
 	}
 	for _, b := range bad {
 		if r, out := c.do("POST", "/api/features", b); r.StatusCode != 400 {
@@ -38,8 +42,15 @@ func TestAutomationInputValidation(t *testing.T) {
 	if m, _ := s.Cfg.minerByID("m1"); m.Opts.Schedule.Default != "medium" {
 		t.Fatal("default speed normalised")
 	}
-	// settings of removed features (throttle, failover, auto-restart) are ignored
-	if r, _ := c.do("POST", "/api/features", `{"miner":"m1","throttle":{"on":true},"failover":{"on":true},"restart":{"on":true}}`); r.StatusCode != 200 {
+	r, out = c.do("POST", "/api/features", `{"miner":"m1","failover":{"on":true,"dead_min":5,"cool_min":5,"return_min":15}}`)
+	if r.StatusCode != 200 {
+		t.Fatalf("valid failover refused: %d %v", r.StatusCode, out)
+	}
+	if m, _ := s.Cfg.minerByID("m1"); !m.Opts.Failover.On || m.Opts.Failover.DeadMin != 5 {
+		t.Fatal("failover not saved")
+	}
+	// settings of removed features (throttle, auto-restart) are ignored
+	if r, _ := c.do("POST", "/api/features", `{"miner":"m1","throttle":{"on":true},"restart":{"on":true}}`); r.StatusCode != 200 {
 		t.Fatalf("unknown field: %d", r.StatusCode)
 	}
 }

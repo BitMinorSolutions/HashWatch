@@ -31,7 +31,7 @@ Things deliberately left out of the v0.6 feature pack, and what v0.6 already doe
 - Hashrate-health extras (rolling-normal drop alert, uptime score, per-chip hints): not added.
 - Auto-throttle: removed. The Nano has its own overheat protection. "Running hot" stays as an alert, based on the miner's own target (90 °C fallback).
 - Auto-restart on stall: removed. HashWatch never restarts the miner.
-- Backup pool failover: removed. HashWatch never switches pools (the Nano's own pool list already fails over).
+- Backup pool failover: brought back in v0.6, **off by default**. Owner-only; never in view-only or the locked Preview. Switches among already-configured pools with `switchpool|N` after a pool has been dead or rejecting for a set time (default 5 minutes), with a cooldown, and switches back when the primary recovers. Unverified on a real Nano 3.
 - Two-step sign-in (TOTP) and the signed-in device list with per-device kick: removed. Kept: password with lockout, view-only password and link, "Sign out everywhere else", "New remote link".
 
 ## Undecided (built, easy to remove)

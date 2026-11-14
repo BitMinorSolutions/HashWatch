@@ -29,6 +29,7 @@ type Source interface {
 type Controller interface {
 	SetWorkMode(level int) (cgminer.Result, error)
 	SetLED(effect, bright, temper int, hex string) (cgminer.Result, error)
+	SwitchPool(n int) (cgminer.Result, error)
 }
 
 // CGMiner reads a miner directly over the LAN.
@@ -42,6 +43,10 @@ func (c CGMiner) SetWorkMode(level int) (cgminer.Result, error) {
 
 func (c CGMiner) SetLED(effect, bright, temper int, hex string) (cgminer.Result, error) {
 	return cgminer.SetLED(c.Addr, effect, bright, temper, hex)
+}
+
+func (c CGMiner) SwitchPool(n int) (cgminer.Result, error) {
+	return cgminer.SwitchPool(c.Addr, n)
 }
 
 // Remote reads an existing Avalon Nano 3 dashboard (GET /api, GET /control/state).

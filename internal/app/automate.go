@@ -13,7 +13,7 @@ import (
 )
 
 // Automations runs each miner's opt-in automations after every poll: the work
-// speed schedule and the
+// speed schedule, backup-pool failover, and the
 // light effects (status lamp, block celebration, best-share flash). Every action
 // it takes is recorded and raised as an "Automations" alert, so nothing happens
 // silently. Nothing runs in the read-only preview or for non-CGMiner sources.
@@ -34,7 +34,7 @@ type Automations struct {
 
 type Action struct {
 	T    int64  `json:"t"`
-	Kind string `json:"kind"` // schedule light
+	Kind string `json:"kind"` // schedule failover light
 	Text string `json:"text"`
 	OK   bool   `json:"ok"`
 	Err  string `json:"err,omitempty"`
@@ -42,6 +42,7 @@ type Action struct {
 
 type autoState struct {
 	sched     auto.Scheduler
+	fo        auto.Failover
 	busy      bool
 	actions   []Action
 	lightSent *LightState // what we last set (nil = the user's own light is showing)
@@ -187,8 +188,20 @@ func (a *Automations) Observe(id, name string, snap *model.Snapshot) {
 				}
 			}
 		}
+		// 2. backup pool failover: switchpool among already-configured pools only
+		if o.Failover.On && len(jobs) == 0 && len(snap.Pools) > 1 {
+			var pv []auto.PoolView
+			for _, p := range snap.Pools {
+				pv = append(pv, poolView(p))
+			}
+			if to, act, why := s.fo.Step(o.Failover.Cfg(), now, pv); act {
+				n := to.ID
+				jobs = append(jobs, job{kind: "failover", alert: true, text: fmt.Sprintf("Switched to pool %d %s (%s)", n, shortURL(to.URL), why),
+					do: func(c source.Controller) (cgminer.Result, error) { return c.SwitchPool(n) }})
+			}
+		}
 	}
-	// 2. light effects
+	// 3. light effects
 	s.problem = problemOf(snap)
 	if lj, ok := a.lightJob(id, m, s, now); ok && len(jobs) == 0 {
 		jobs = append(jobs, lj)
@@ -235,6 +248,30 @@ func shortURL(u string) string {
 		return ""
 	}
 	return "(" + u + ")"
+}
+
+// rejectHeavy is a conservative floor: a pool reporting this reject rate, with
+// enough shares to mean it, is treated as rejecting even if Status is still Alive.
+const rejectHeavy = 50.0
+const rejectSample = 10.0
+
+func poolView(p model.Pool) auto.PoolView {
+	st := strings.TrimSpace(p.Status)
+	rejecting := strings.EqualFold(st, "Rejecting") || strings.EqualFold(st, "Sick")
+	if p.RejectPct != nil && *p.RejectPct >= rejectHeavy {
+		var n float64
+		if p.Accepted != nil {
+			n += *p.Accepted
+		}
+		if p.Rejected != nil {
+			n += *p.Rejected
+		}
+		if n >= rejectSample {
+			rejecting = true
+		}
+	}
+	return auto.PoolView{ID: p.ID, Priority: p.Priority, URL: p.URL, Active: p.StratumActive,
+		Alive: strings.EqualFold(st, "Alive") && !rejecting, Rejecting: rejecting}
 }
 
 // problemOf is the status lamp's reason for red ("" = healthy). An offline miner

@@ -10,15 +10,18 @@ import (
 	"time"
 )
 
-// Control commands. These are the ONLY write commands Hashwatch can send, and only
-// through these two typed functions (never from free-form input). Syntax per Canaan's
-// public Avalon Nano 3S / Avalon Q API reference:
+// Control commands. These are the ONLY write commands HashWatch can send, and only
+// through the typed functions below (never from free-form input):
 //
 //	ascset|0,workmode,set,N              N: 0=Low 1=Mid 2=High
 //	ascset|0,ledset,E-B-T-R-G-B          E effect 0=off 1=on 2=flash 3=breath 4=loop,
 //	                                     B brightness 0-100, T colour temperature 0-100, RGB 0-255
+//	switchpool|N                         N: 0-15, an already-configured pool (no URL or
+//	                                     credential changes). Standard cgminer API; not
+//	                                     documented in Canaan's Nano 3S / Avalon Q reference
+//	                                     and unverified on a real Nano 3.
 //
-// They are sent in cgminer's JSON form: {"command":"ascset","parameter":"0,workmode,set,2"}.
+// They are sent in cgminer's JSON form, e.g. {"command":"switchpool","parameter":"1"}.
 
 type Result struct {
 	OK      bool   `json:"ok"`
@@ -75,11 +78,36 @@ func AllowedWrite(param string) bool {
 	return true
 }
 
-// ascset sends one validated ascset parameter and interprets the STATUS reply.
-func ascset(addr, param string, timeout time.Duration) (Result, error) {
-	res := Result{Sent: "ascset|" + param}
-	if !AllowedWrite(param) {
-		return res, fmt.Errorf("refusing to send %q: only work modes 0/1/2 and ledset are allowed", param)
+// allowedSwitch is a pool index already on the miner: 0-15, no leading zeros or extras.
+var allowedSwitch = regexp.MustCompile(`^(1[0-5]|[0-9])$`)
+
+// AllowedCommand is the write-command allow-list: workmode, ledset and switchpool only.
+func AllowedCommand(cmd, param string) bool {
+	switch strings.ToLower(cmd) {
+	case "ascset":
+		return AllowedWrite(param)
+	case "switchpool":
+		return allowedSwitch.MatchString(param)
+	default:
+		return false
+	}
+}
+
+func poolParam(n int) (string, error) {
+	if n < 0 || n > 15 {
+		return "", errors.New("pool number must be 0-15")
+	}
+	return fmt.Sprintf("%d", n), nil
+}
+
+// writeCmd sends one allow-listed write command and interprets the STATUS reply.
+func writeCmd(addr, cmd, param string, timeout time.Duration) (Result, error) {
+	res := Result{Sent: cmd}
+	if param != "" {
+		res.Sent += "|" + param
+	}
+	if !AllowedCommand(cmd, param) {
+		return res, fmt.Errorf("refusing to send %q: only work modes 0/1/2, ledset and switchpool are allowed", res.Sent)
 	}
 	defer lockAddr(addr)()
 	conn, err := net.DialTimeout("tcp", addr, timeout)
@@ -88,7 +116,11 @@ func ascset(addr, param string, timeout time.Duration) (Result, error) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout + 6*time.Second))
-	req, _ := json.Marshal(map[string]string{"command": "ascset", "parameter": param})
+	m := map[string]string{"command": cmd}
+	if param != "" {
+		m["parameter"] = param
+	}
+	req, _ := json.Marshal(m)
 	if _, err := conn.Write(req); err != nil {
 		return res, err
 	}
@@ -119,7 +151,7 @@ func SetWorkMode(addr string, level int) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return ascset(addr, p, 5*time.Second)
+	return writeCmd(addr, "ascset", p, 5*time.Second)
 }
 
 func SetLED(addr string, effect, bright, temper int, hex string) (Result, error) {
@@ -127,5 +159,15 @@ func SetLED(addr string, effect, bright, temper int, hex string) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	return ascset(addr, p, 5*time.Second)
+	return writeCmd(addr, "ascset", p, 5*time.Second)
+}
+
+// SwitchPool makes already-configured pool n the active pool (cgminer switchpool|N).
+// It never adds, removes or rewrites pool URLs or credentials.
+func SwitchPool(addr string, n int) (Result, error) {
+	p, err := poolParam(n)
+	if err != nil {
+		return Result{}, err
+	}
+	return writeCmd(addr, "switchpool", p, 5*time.Second)
 }

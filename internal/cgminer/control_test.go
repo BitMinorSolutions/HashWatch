@@ -64,3 +64,30 @@ func TestControlAgainstSimulator(t *testing.T) {
 		ln.Close()
 	}
 }
+
+func TestSwitchPoolAgainstSimulator(t *testing.T) {
+	m := sim.New()
+	ln, err := m.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	res, err := SwitchPool(addr, 1)
+	if err != nil || !res.OK || res.Sent != "switchpool|1" {
+		t.Fatalf("switchpool: %+v %v", res, err)
+	}
+	s := Fetch(addr, 2*time.Second)
+	var active int
+	for _, p := range s.Pools {
+		if p.StratumActive {
+			active = p.ID
+		}
+	}
+	if active != 1 || m.Active != 1 {
+		t.Fatalf("active=%d sim=%d pools=%+v", active, m.Active, s.Pools)
+	}
+	if _, err := SwitchPool(addr, 16); err == nil {
+		t.Fatal("pool 16 accepted")
+	}
+}

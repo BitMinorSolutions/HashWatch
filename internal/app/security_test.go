@@ -145,6 +145,7 @@ func TestViewOnlyRole(t *testing.T) {
 		{"POST", "/api/control/workmode", `{"miner":"m","mode":"low"}`},
 		{"POST", "/api/control/led", `{"miner":"m","mode":"fixed","color":"#ff0000","brightness":50}`},
 		{"POST", "/api/features", `{"miner":"m","fun":{"summary":"off"}}`},
+		{"POST", "/api/features", `{"miner":"m","failover":{"on":true,"dead_min":5}}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/sessions/revoke", `{}`},
 		{"GET", "/api/remote", ""},
@@ -228,7 +229,7 @@ func TestConfigMigration(t *testing.T) {
 	}
 	// new features are all off by default, live data on
 	o := c.Miners[0].Opts
-	if o.Schedule.On || o.Light.Lamp || o.Light.Celebrate || o.Light.BestFlash {
+	if o.Schedule.On || o.Failover.On || o.Light.Lamp || o.Light.Celebrate || o.Light.BestFlash {
 		t.Fatal("automations must default to off")
 	}
 	if c.Privacy.NetworkOff || c.Security.ViewLink != "" {

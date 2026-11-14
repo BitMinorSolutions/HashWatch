@@ -114,8 +114,10 @@ func (s *Server) featuresGet(w http.ResponseWriter, r *http.Request) {
 		target, _ = fnum(snap.Temps.Target)
 	}
 	hot, fromMiner := auto.HotPoint(target)
+	fc := o.Failover.Cfg()
 	out := map[string]any{"opts": o, "fun": fun, "privacy": priv, "can_control": s.canControl(id) && s.role(r) == RoleAdmin,
-		"heat": map[string]any{"hot_c": hot, "from_miner": fromMiner, "fallback_c": auto.FallbackHotC},
+		"heat":         map[string]any{"hot_c": hot, "from_miner": fromMiner, "fallback_c": auto.FallbackHotC},
+		"failover_eff": map[string]any{"dead_min": fc.DeadFor.Minutes(), "cool_min": fc.Cooldown.Minutes(), "return_min": fc.ReturnAfter.Minutes()},
 	}
 	now := s.Now()
 	if mode, rule := auto.Desired(o.Schedule.Rules, o.Schedule.Default, now); o.Schedule.On {
@@ -131,6 +133,7 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Miner    string
 		Schedule *ScheduleOpts
+		Failover *FailoverOpts
 		Light    *struct{ Lamp, Celebrate, BestFlash *bool }
 		Fun      *FunSettings
 	}
@@ -138,7 +141,7 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
 	}
-	minerOpts := b.Schedule != nil || b.Light != nil
+	minerOpts := b.Schedule != nil || b.Failover != nil || b.Light != nil
 	if minerOpts && !s.canControl(b.Miner) {
 		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
 		return
@@ -162,6 +165,16 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if f := b.Failover; f != nil {
+		if f.DeadMin < 0 || f.DeadMin > 120 || f.CoolMin < 0 || f.CoolMin > 120 || f.ReturnMin < 0 || f.ReturnMin > 1440 {
+			bad("Failover times are out of range.")
+			return
+		}
+		if err := f.Cfg().Validate(); err != nil {
+			bad(err.Error())
+			return
+		}
+	}
 	if f := b.Fun; f != nil {
 		if f.Summary != "" && f.Summary != "daily" && f.Summary != "weekly" && f.Summary != "off" {
 			bad("Summary must be daily, weekly or off.")
@@ -177,6 +190,9 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 		s.Cfg.updateMiner(b.Miner, func(m *Miner) {
 			if b.Schedule != nil {
 				m.Opts.Schedule = *b.Schedule
+			}
+			if b.Failover != nil {
+				m.Opts.Failover = *b.Failover
 			}
 			if l := b.Light; l != nil {
 				if l.Lamp != nil {

@@ -843,6 +843,7 @@ body.sheet-open { overflow: hidden; }
 .rule .rm { margin-left: auto; width: 32px; height: 32px; }
 .au-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .input.sm { height: 34px; padding: 0 10px; font-size: 13px; width: auto; }
+.au-body input[type=number] { width: 72px; text-align: right; }
 @media (max-width: 1023px) { .lot-grid { grid-template-columns: 1fr 1fr; row-gap: 20px; } .lot-t:nth-child(3) { padding-left: 0; border-left: 0; } .stack.two-up { grid-template-columns: 1fr; } }
 @media (max-width: 699px) {
   .lot-v { font-size: 22px; } .lot-t { padding: 2px 14px; } .lot-t:nth-child(odd) { padding-left: 0; border-left: 0; }

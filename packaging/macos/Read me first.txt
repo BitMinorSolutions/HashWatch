@@ -44,15 +44,18 @@ HashWatch is fully independent of any other dashboard on the same Mac or network
 - Its own folder: ~/Library/Application Support/Hashwatch. Nothing else is read or written.
 - Remote access uses HashWatch's own copy of cloudflared in that folder and its own
   tunnel. It never touches, reuses or stops any other cloudflared or other program.
-- Installing HashWatch never changes your miner. The work speed schedule and the
-  light effects (block-found gold flash, status lamp, best-share flash) are all OFF
-  until you turn each one on in Settings.
+- Installing HashWatch never changes your miner. The work speed schedule, backup
+  pool failover and the light effects (block-found gold flash, status lamp,
+  best-share flash) are all OFF until you turn each one on in Settings.
 - HashWatch never changes the work speed because of heat (the Nano has its own
   overheat protection). "Running hot" is an alert only, measured against the
   miner's own target temperature (90 °C if it reports none). HashWatch never
-  restarts the miner or switches its pool.
-- The only settings HashWatch can ever send are work speed Low/Medium/High and the
-  light colour. Anything else is refused before it leaves your computer.
+  restarts the miner.
+- The only settings HashWatch can ever send are work speed Low/Medium/High, the
+  light colour, and — only if you turn on backup pool failover — switchpool among
+  pools already set on the miner (never changing addresses or passwords). Anything
+  else is refused before it leaves your computer. switchpool has not been tried
+  on a real Nano 3 yet.
 - Gentle on the miner: one connection at a time, short timeouts, a read every 5 s
   and slower (15 s, then 30 s) if the miner stops answering, so another dashboard
   can poll the same miner at the same time.

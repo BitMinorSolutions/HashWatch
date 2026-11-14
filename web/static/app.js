@@ -1045,7 +1045,7 @@ const LOTTO = {
 };
 
 /* ---------------- automations card (dashboard) ---------------- */
-const AUTO_ROWS = [["schedule", "calendar-clock", "Work speed schedule"], ["light", "lightbulb", "Light effects"]];
+const AUTO_ROWS = [["schedule", "calendar-clock", "Work speed schedule"], ["failover", "network", "Backup pool failover"], ["light", "lightbulb", "Light effects"]];
 function autoOn(o, k) { if (!o) return false; if (k === "light") return !!(o.light && ((opt("status_lamp") && o.light.lamp) || o.light.celebrate || (opt("best_flash") && o.light.best_flash))); return !!(o[k] && o[k].on); }
 function autoCard() {
   const el = $("#autoCard"); if (!el) return;
@@ -1054,6 +1054,7 @@ function autoCard() {
   const desc = (k) => {
     if (!autoOn(o, k)) return "Off";
     if (k === "schedule") return F.schedule_now ? (F.schedule_now.mode ? `Now ${cap(F.schedule_now.mode)}` : "No rule right now") : "On";
+    if (k === "failover") return "On";
     return [opt("status_lamp") && o.light.lamp && "status lamp", o.light.celebrate && "block flash", opt("best_flash") && o.light.best_flash && "best-share flash"].filter(Boolean).join(" · ");
   };
   const acts = (a.actions || []).slice(0, 3);
@@ -1142,7 +1143,7 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function autoSetUI() {
   const el = $("#autoFeat"); if (!el) return; const F = S.feat; if (!F) { el.innerHTML = skList(200); return; }
   const o = F.opts || {}, can = F.can_control && !S.state.locked, dis = can ? "" : " disabled";
-  const sc = o.schedule || {}, li = o.light || {};
+  const sc = o.schedule || {}, fo = o.failover || {}, li = o.light || {};
   const rule = (r, i) => `<div class="rule" data-i="${i}"><div class="days">${DAYS.map((d, k) => `<button type="button" class="${(r.days || []).includes(k) ? "on" : ""}" data-d="${k}"${dis}>${d[0]}</button>`).join("")}</div>
       <input class="input mono" type="time" value="${esc(r.start)}" data-k="start"${dis}><span class="t3">to</span><input class="input mono" type="time" value="${esc(r.end)}" data-k="end"${dis}>
       <div class="seg sm" data-k="mode">${["low", "medium", "high"].map(m => `<button type="button" class="${r.mode === m ? "on" : ""}" data-m="${m}"${dis}>${cap(m)}</button>`).join("")}</div>
@@ -1156,6 +1157,13 @@ function autoSetUI() {
       <div class="au-row"><button type="button" class="btn ghost sm" id="addRule"${dis}>${ic("plus", "sm")}Add rule</button><span class="grow"></span><span class="t3">Outside rules</span>
         <select class="input sm" id="schedDef"${dis}><option value="">Leave as is</option>${["low", "medium", "high"].map(m => `<option value="${m}"${sc.default === m ? " selected" : ""}>${cap(m)}</option>`).join("")}</select></div>
       <div class="au-row"><span class="fine" style="margin:0">Times are this computer's local time. An end before the start runs past midnight.</span><span class="grow"></span><button type="button" class="btn accent sm" id="saveSched"${dis}>Save schedule</button></div></div>
+    <div class="tg-row tg-sep"><div class="tg-ic">${ic("network", "sm")}</div><div class="tg-t"><b>Backup pool failover</b><span>${fo.on ? `On · switch after ${fo.dead_min || 5} min down, back after ${fo.return_min || 15} min, ${fo.cool_min || 5} min cooldown` : "If the pool you're on stays dead or rejecting, switch to the next pool already set on the miner. It never changes addresses or passwords, and switches back when the main pool recovers."}</span></div>${sw("auFail", fo.on, !can, "Backup pool failover")}</div>
+    <div class="au-body${fo.on ? " open" : ""}" id="failBody">
+      <div class="au-row"><span class="t3">Wait before switching</span><input class="input sm mono" type="number" min="1" max="120" id="foDead" value="${fo.dead_min || 5}"${dis}><span class="t3">min</span></div>
+      <div class="au-row"><span class="t3">Wait before switching back</span><input class="input sm mono" type="number" min="1" max="1440" id="foReturn" value="${fo.return_min || 15}"${dis}><span class="t3">min</span></div>
+      <div class="au-row"><span class="t3">Cooldown between switches</span><input class="input sm mono" type="number" min="1" max="120" id="foCool" value="${fo.cool_min || 5}"${dis}><span class="t3">min</span></div>
+      <p class="fine" style="margin:10px 0 0">Only among pools already configured on the miner. This sends cgminer's <span class="mono">switchpool</span> command, which hasn't been tried on a real Nano 3 yet — some firmware may ignore it. Every switch is logged and shown as an alert.</p>
+      <div class="au-row"><span class="grow"></span><button type="button" class="btn accent sm" id="saveFail"${dis}>Save failover</button></div></div>
     <div class="tg-row tg-sep"><div class="tg-ic">${ic("party-popper", "sm")}</div><div class="tg-t"><b>Flash gold on a block</b><span>The light flashes gold for an hour when you find a block, then your own colour comes back.</span></div>${sw("liCel", li.celebrate, !can, "Block flash")}</div>
     ${opt("status_lamp") ? /* OPTIONAL:lamp */ `<div class="tg-row"><div class="tg-ic">${ic("lightbulb", "sm")}</div><div class="tg-t"><b>Light as a status lamp</b><span>Steady green while hashing, red when something's wrong (not hashing, no pool, too hot).</span></div>${sw("liLamp", li.lamp, !can, "Status lamp")}</div>` : ""}
     ${opt("best_flash") ? /* OPTIONAL:bestflash */ `<div class="tg-row"><div class="tg-ic">${ic("sparkles", "sm")}</div><div class="tg-t"><b>Flash on a new best share</b><span>A short purple flash when the miner beats its own best share. Your own light comes back after.</span></div>${sw("liBest", li.best_flash, !can, "Best-share flash")}</div>` : ""}
@@ -1166,6 +1174,9 @@ function autoSetUI() {
   const sched = (on) => ({ on, default: $("#schedDef").value, rules: S.rules });
   const tog = (id, f) => { const b = $("#" + id); if (b) b.onclick = f; };
   tog("auSched", async () => { if (!sc.on && !S.rules.length) { S.rules.push({ days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "07:00", mode: "low" }); } if (!sc.on && !await confirmOn("the work speed schedule", "It sets the work speed at the times you choose.")) return; put({ schedule: sched(!sc.on) }, sc.on ? "Schedule off" : "Schedule on"); });
+  const fail = (on) => ({ on, dead_min: +$("#foDead").value || 5, cool_min: +$("#foCool").value || 5, return_min: +$("#foReturn").value || 15 });
+  tog("auFail", async () => { if (!fo.on && !await confirmOn("backup pool failover", "If a pool stays dead or rejecting, it switches to the next pool already set on the miner, then back when the main pool recovers. It never changes pool addresses or passwords.")) return; put({ failover: fail(!fo.on) }, fo.on ? "Failover off" : "Failover on"); });
+  tog("saveFail", () => put({ failover: fail(true) }, "Failover saved"));
   [["liLamp", "lamp"], ["liCel", "celebrate"], ["liBest", "best_flash"]].forEach(([id, k]) => tog(id, async () => { const want = !li[k];
     if (want && !await confirmDialog("Let " + APP + " control the light?", "It changes the miner's light for this effect, then puts your own colour back.", "Turn on")) return;
     put({ light: { [k === "best_flash" ? "BestFlash" : cap(k)]: want } }, want ? "Light effect on" : "Light effect off"); }));

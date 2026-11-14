@@ -1,6 +1,6 @@
 // Package sim is a small simulated Avalon Nano 3 CGMiner API (port 4028) for
 // development and tests. It answers read commands with data captured from a real
-// Nano 3 and applies "ascset" workmode / ledset changes to its in-memory state.
+// Nano 3 and applies workmode, ledset and switchpool changes to its in-memory state.
 package sim
 
 import (
@@ -29,6 +29,7 @@ type Miner struct {
 	Blocks     int
 	Offline    bool
 	PoolDown   bool // the main pool (0) stops answering
+	Rejecting  bool // the active pool reports Status=Rejecting and a high reject rate
 	HashFactor float64
 	ExtraHeat  int
 	Target     int // TarT the miner reports (0 = 90)
@@ -139,9 +140,11 @@ func (m *Miner) reply(cmd, param string) string {
 	if time.Now().Before(m.spikeEnd) {
 		heat += m.spikeC
 	}
-	alive0 := "Alive"
+	alive0, rej0 := "Alive", 0.1638
 	if m.PoolDown {
 		alive0 = "Dead"
+	} else if m.Rejecting && m.Active == 0 {
+		alive0, rej0 = "Rejecting", 62.5
 	}
 	act := func(n int) string {
 		if n == m.Active && !(n == 0 && m.PoolDown) {
@@ -157,8 +160,8 @@ func (m *Miner) reply(cmd, param string) string {
 		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
 			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, 134043+el/4, m.Best)
 	case "pools":
-		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"%s","Priority":0,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.Nano3","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"solo.ckpool.org","Best Share":%.0f,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"stratum+tcp://public-pool.io:21496","Status":"Alive","Priority":1,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"Alive","Priority":2,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.backup","Stratum Active":%s,"Accepted":0}],"id":1}`,
-			alive0, 134043+el/4, time.Now().Unix()-3, act(0), m.Best, act(1), act(2))
+		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"%s","Priority":0,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.Nano3","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"solo.ckpool.org","Best Share":%.0f,"Pool Rejected%%":%.4f,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"stratum+tcp://public-pool.io:21496","Status":"Alive","Priority":1,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"Alive","Priority":2,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.backup","Stratum Active":%s,"Accepted":0}],"id":1}`,
+			alive0, 134043+el/4, time.Now().Unix()-3, act(0), m.Best, rej0, act(1), act(2))
 	case "devs":
 		return status("S", 9, "1 ASC(s)") + `,"DEVS":[{"ASC":0,"Name":"AVANANO","ID":0,"Enabled":"Y","Status":"Alive"}],"id":1}`
 	case "estats", "stats":
@@ -189,6 +192,13 @@ func (m *Miner) reply(cmd, param string) string {
 			}
 		}
 		return status("E", 120, "ASC 0 set failed: invalid option") + `,"id":1}`
+	case "switchpool":
+		n, err := strconv.Atoi(param)
+		if err != nil || n < 0 || n > 2 {
+			return status("E", 14, "Invalid pool number") + `,"id":1}`
+		}
+		m.Active = n
+		return status("S", 7, fmt.Sprintf("Switching to pool %d", n)) + `,"id":1}`
 	}
 	return status("E", 14, "Invalid command") + `,"id":1}`
 }
@@ -214,6 +224,7 @@ func (m *Miner) Log() []string {
 //	GET /block        found blocks +1
 //	GET /offline?on=1 stop answering the API (on=0 to resume)
 //	GET /pool?down=1  report no active pool
+//	GET /pool?reject=1  the active pool is rejecting shares
 //	GET /hash?f=0.5   multiply the hashrate
 //	GET /heat?c=6     add degrees to the chip temperatures
 //	GET /spike?c=9&s=300  add degrees for s seconds (a temperature spike)
@@ -235,7 +246,12 @@ func (m *Miner) Admin(addr string) error {
 	})
 	mux.HandleFunc("/pool", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
-		m.PoolDown = on(r, "down")
+		if r.URL.Query().Has("down") {
+			m.PoolDown = on(r, "down")
+		}
+		if r.URL.Query().Has("reject") {
+			m.Rejecting = on(r, "reject")
+		}
 		m.mu.Unlock()
 		fmt.Fprintln(w, "ok")
 	})
@@ -279,7 +295,7 @@ func (m *Miner) Admin(addr string) error {
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		json.NewEncoder(w).Encode(map[string]any{"work_level": m.WorkLevel, "led": m.LED, "active_pool": m.Active, "pool_down": m.PoolDown,
+		json.NewEncoder(w).Encode(map[string]any{"work_level": m.WorkLevel, "led": m.LED, "active_pool": m.Active, "pool_down": m.PoolDown, "rejecting": m.Rejecting,
 			"best": m.Best, "blocks": m.Blocks, "received": len(m.Received)})
 	})
 	ln, err := net.Listen("tcp", addr)

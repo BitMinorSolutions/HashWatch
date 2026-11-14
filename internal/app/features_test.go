@@ -301,11 +301,84 @@ func TestAutomationsOffByDefaultAndLocked(t *testing.T) {
 			t.Fatalf("fresh install sent %q", l)
 		}
 	}
-	r.opts(func(o *MinerOpts) { o.Schedule.On = true; o.Schedule.Default = "low"; o.Light.Lamp = true })
+	r.opts(func(o *MinerOpts) {
+		o.Schedule.On, o.Schedule.Default = true, "low"
+		o.Light.Lamp = true
+		o.Failover.On, o.Failover.DeadMin = true, 1
+	})
 	r.a.Locked = true
 	r.step(10 * time.Minute)
 	r.step(10 * time.Minute)
-	if r.sent("ascset") != 0 {
+	if r.sent("ascset") != 0 || r.sent("switchpool") != 0 {
 		t.Fatal("preview never automates")
+	}
+}
+
+func TestFailoverE2E(t *testing.T) {
+	r := newAutoRig(t)
+	r.opts(func(o *MinerOpts) { o.Failover = FailoverOpts{On: true, DeadMin: 5, CoolMin: 5, ReturnMin: 15} })
+	r.step(time.Second)
+	if r.sent("switchpool") != 0 {
+		t.Fatal("healthy: no switch")
+	}
+	r.m.PoolDown = true
+	r.step(time.Second)
+	if r.sent("switchpool") != 0 {
+		t.Fatal("must wait DeadFor")
+	}
+	r.step(4 * time.Minute)
+	if r.sent("switchpool") != 0 {
+		t.Fatal("still within DeadFor")
+	}
+	r.step(time.Minute)
+	if r.sent("switchpool") != 1 || r.m.Active != 1 {
+		t.Fatalf("should switch to backup: log=%v active=%d", r.m.Log(), r.m.Active)
+	}
+	items, _ := r.a.Alerts.Since(0, 20)
+	found := false
+	for _, a := range items {
+		if a.Kind == "auto" && strings.Contains(a.Body, "Switched to pool 1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no failover alert: %+v", items)
+	}
+	// main recovers; ReturnAfter 15 min from the first healthy sighting after the switch
+	r.m.PoolDown = false
+	r.step(8 * time.Minute)
+	if r.sent("switchpool") != 1 {
+		t.Fatal("too soon to return")
+	}
+	r.step(15 * time.Minute)
+	if r.sent("switchpool") != 2 || r.m.Active != 0 {
+		t.Fatalf("should return to main: log=%v active=%d", r.m.Log(), r.m.Active)
+	}
+}
+
+func TestFailoverViewOnlyAndPreviewAPI(t *testing.T) {
+	ts, s, _ := secServer(t)
+	s.Cfg.Miners = []Miner{{ID: "m1", Name: "x", Host: "127.0.0.1", Port: 1, Kind: "cgminer"}}
+	admin := &tclient{t: t, ts: ts}
+	if r, _ := admin.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
+		t.Fatal("login")
+	}
+	if r, _ := admin.do("POST", "/api/security/view", `{"password":"lookonly"}`); r.StatusCode != 200 {
+		t.Fatal("view password")
+	}
+	viewer := &tclient{t: t, ts: ts, ip: "203.0.113.80"}
+	if r, _ := viewer.do("POST", "/api/login", `{"password":"lookonly"}`); r.StatusCode != 200 {
+		t.Fatal("view login")
+	}
+	if r, _ := viewer.do("POST", "/api/features", `{"miner":"m1","failover":{"on":true,"dead_min":5}}`); r.StatusCode != 403 {
+		t.Fatal("view-only must not enable failover")
+	}
+	if m, _ := s.Cfg.minerByID("m1"); m.Opts.Failover.On {
+		t.Fatal("failover saved for a viewer")
+	}
+	// locked preview refuses the same setting even as admin
+	s.Locked = true
+	if r, out := admin.do("POST", "/api/features", `{"miner":"m1","failover":{"on":true,"dead_min":5}}`); r.StatusCode != 403 {
+		t.Fatalf("preview must lock failover: %d %v", r.StatusCode, out)
 	}
 }

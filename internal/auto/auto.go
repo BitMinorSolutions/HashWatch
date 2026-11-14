@@ -1,6 +1,7 @@
 // Package auto holds the decision logic for HashWatch's opt-in automations:
-// the work-speed schedule. Everything here is pure (time is passed
-// in) so it can be unit-tested; the app sends the actual miner commands.
+// the work-speed schedule and backup-pool failover. Everything here is pure
+// (time is passed in) so it can be unit-tested; the app sends the actual miner
+// commands.
 package auto
 
 import (
@@ -129,6 +130,109 @@ func (s *Scheduler) Step(rules []Rule, def string, t time.Time) (mode string, ac
 
 // Reset forgets the last applied mode (e.g. after the schedule is edited).
 func (s *Scheduler) Reset() { s.last = "" }
+
+// ---------------- backup pool failover ----------------
+
+// PoolView is the miner's already-configured pools. Failover never adds, removes
+// or rewrites URLs or credentials; it only picks among these with switchpool|N.
+type PoolView struct {
+	ID        int
+	Priority  int
+	Alive     bool
+	Rejecting bool // CGMiner "Rejecting"/"Sick", or a high reject rate
+	Active    bool // the pool the miner is currently hashing on
+	URL       string
+}
+
+func (p PoolView) healthy() bool { return p.Alive && !p.Rejecting }
+
+// FailoverCfg: switch away from the active pool after it has been dead or
+// rejecting for DeadFor; wait at least Cooldown between switches; switch back
+// to the top-priority (primary) pool once it has been healthy for ReturnAfter.
+// Unverified on a real Nano 3: switchpool is a standard cgminer command, but
+// Canaan's published Nano 3S / Avalon Q API only documents workmode and ledset.
+type FailoverCfg struct {
+	DeadFor     time.Duration
+	Cooldown    time.Duration
+	ReturnAfter time.Duration
+}
+
+func (c FailoverCfg) Validate() error {
+	if c.DeadFor < time.Minute || c.DeadFor > 120*time.Minute {
+		return errors.New("wait before switching must be 1–120 minutes")
+	}
+	if c.Cooldown < time.Minute || c.Cooldown > 120*time.Minute {
+		return errors.New("cooldown must be 1–120 minutes")
+	}
+	if c.ReturnAfter < time.Minute || c.ReturnAfter > 24*time.Hour {
+		return errors.New("wait before switching back must be 1–1440 minutes")
+	}
+	return nil
+}
+
+type Failover struct {
+	failSince  time.Time
+	mainOK     time.Time
+	lastSwitch time.Time
+}
+
+// Step returns the already-configured pool to switch to, if any.
+func (f *Failover) Step(c FailoverCfg, now time.Time, pools []PoolView) (to PoolView, act bool, reason string) {
+	if len(pools) < 2 {
+		return PoolView{}, false, ""
+	}
+	var active *PoolView
+	main := pools[0]
+	for i := range pools {
+		p := &pools[i]
+		if p.Active && active == nil {
+			active = p
+		}
+		if p.Priority < main.Priority {
+			main = *p
+		}
+	}
+	unhealthy := active == nil || !active.healthy()
+	if !unhealthy {
+		f.failSince = time.Time{}
+	} else if f.failSince.IsZero() {
+		f.failSince = now
+	}
+	cooling := !f.lastSwitch.IsZero() && now.Sub(f.lastSwitch) < c.Cooldown
+	if unhealthy && !f.failSince.IsZero() && now.Sub(f.failSince) >= c.DeadFor && !cooling {
+		best := PoolView{Priority: 1 << 30}
+		found := false
+		for _, p := range pools {
+			if p.healthy() && (active == nil || p.ID != active.ID) && p.Priority < best.Priority {
+				best, found = p, true
+			}
+		}
+		if found {
+			f.lastSwitch, f.failSince, f.mainOK = now, time.Time{}, time.Time{}
+			why := "active pool unreachable"
+			if active != nil && active.Rejecting {
+				why = "active pool rejecting shares"
+			}
+			return best, true, fmt.Sprintf("%s for %s", why, short(c.DeadFor))
+		}
+	}
+	if !unhealthy && active.ID != main.ID {
+		if main.healthy() {
+			if f.mainOK.IsZero() {
+				f.mainOK = now
+			}
+			if now.Sub(f.mainOK) >= c.ReturnAfter && !cooling {
+				f.lastSwitch, f.mainOK = now, time.Time{}
+				return main, true, fmt.Sprintf("main pool healthy again for %s", short(c.ReturnAfter))
+			}
+		} else {
+			f.mainOK = time.Time{}
+		}
+	} else {
+		f.mainOK = time.Time{}
+	}
+	return PoolView{}, false, ""
+}
 
 // ---------------- heat ----------------
 

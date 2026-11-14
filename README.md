@@ -20,7 +20,8 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 
 HashWatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
 For stats it only sends read commands (`summary`, `estats`/`stats`, `pools`, `devs`, `version`).
-It changes something only when you use the Controls panel and confirm. Your data stays on your
+It changes something only when you use the Controls panel and confirm, or when you turn on an
+automation (the work-speed schedule or backup-pool failover). Your data stays on your
 network, unless you turn on Remote access (see below).
 
 ## Controls
@@ -32,10 +33,13 @@ to confirm, then HashWatch reads the miner back and shows the result (or the min
 | --- | --- |
 | Work speed Low / Medium / High | `ascset\|0,workmode,set,0` / `…,1` / `…,2` |
 | Light | `ascset\|0,ledset,EFFECT-BRIGHTNESS-TEMPERATURE-R-G-B` with effect 0 Off, 1 Steady, 2 Flash, 3 Pulse (breath), 4 Loop; brightness 0–100; colour as 0–255 RGB |
+| Backup pool failover (Settings, off by default) | `switchpool\|N` — switch to already-configured pool N (0–15). Never adds, removes or rewrites pool URLs or passwords. |
 
 The commands are sent as cgminer JSON, e.g. `{"command":"ascset","parameter":"0,workmode,set,1"}`.
-They follow Canaan's published API for the Avalon Nano 3S and Avalon Q. HashWatch never sends
-reboot, pool, fan or standby commands.
+Work speed and light follow Canaan's published API for the Avalon Nano 3S and Avalon Q.
+`switchpool` is a standard cgminer command; it is **not documented** in that Canaan reference and
+has not been verified on a real Nano 3, so some firmware may ignore it (the Nano already fails over
+its own pool list). HashWatch never sends `addpool`, `removepool`, reboot, fan or standby commands.
 
 - Work speed takes effect within about a minute. Hashrate, power and temperatures move gradually.
 - Some firmware (for example the original Nano 3) reports only the light mode, not its colour and
@@ -249,7 +253,7 @@ Layout:
 cmd/hashwatch/      entry point (flags, browser launch, native macOS shell)
 packaging/macos/    Info.plist, icon (.icns + generator), Read me first.txt, lipo/verify helpers, DMG builder + background
 internal/install/   "Move to Applications?" (macOS app run from Downloads or a disk image)
-internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
+internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset, switchpool)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
 internal/app/       config, polling + history, discovery, HTTP API, password, alerts, single-instance

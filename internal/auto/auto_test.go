@@ -1,6 +1,7 @@
 package auto
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,5 +60,82 @@ func TestSchedulerOnlyActsOnChange(t *testing.T) {
 	var s2 Scheduler
 	if _, ok := s2.Step(rules, "", at(time.Monday, 12, 0)); ok {
 		t.Fatal("no default and no rule: leave the miner alone")
+	}
+}
+
+func TestFailover(t *testing.T) {
+	c := FailoverCfg{DeadFor: 5 * time.Minute, Cooldown: 5 * time.Minute, ReturnAfter: 15 * time.Minute}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	var f Failover
+	t0 := time.Unix(1794642000, 0)
+	main := PoolView{ID: 0, Priority: 0, Alive: true, Active: true}
+	backup := PoolView{ID: 1, Priority: 1, Alive: true}
+	if _, act, _ := f.Step(c, t0, []PoolView{main, backup}); act {
+		t.Fatal("healthy: nothing")
+	}
+	main.Alive = false
+	if _, act, _ := f.Step(c, t0.Add(time.Minute), []PoolView{main, backup}); act {
+		t.Fatal("must be dead for DeadFor (default 5 min)")
+	}
+	if _, act, _ := f.Step(c, t0.Add(5*time.Minute), []PoolView{main, backup}); act {
+		t.Fatal("still within DeadFor")
+	}
+	to, act, why := f.Step(c, t0.Add(6*time.Minute), []PoolView{main, backup})
+	if !act || to.ID != 1 || !strings.Contains(why, "unreachable") {
+		t.Fatalf("switch to backup: %+v %v %q", to, act, why)
+	}
+	// now on the backup; main comes back. Cooldown, then ReturnAfter from when main looked healthy.
+	main.Active, backup.Active, main.Alive = false, true, true
+	if _, act, _ := f.Step(c, t0.Add(8*time.Minute), []PoolView{main, backup}); act {
+		t.Fatal("cooldown blocks return")
+	}
+	if _, act, _ := f.Step(c, t0.Add(16*time.Minute), []PoolView{main, backup}); act {
+		t.Fatal("too soon to return (ReturnAfter is 15 min of a healthy main)")
+	}
+	to, act, why = f.Step(c, t0.Add(23*time.Minute), []PoolView{main, backup})
+	if !act || to.ID != 0 || !strings.Contains(why, "healthy again") {
+		t.Fatalf("return to main: %+v %v %q", to, act, why)
+	}
+	// rejecting counts like dead
+	var r Failover
+	rej, ok := main, backup
+	rej.Active, rej.Alive, rej.Rejecting, ok.Active = true, true, true, false
+	r.Step(c, t0, []PoolView{rej, ok})
+	to, act, why = r.Step(c, t0.Add(5*time.Minute), []PoolView{rej, ok})
+	if !act || to.ID != 1 || !strings.Contains(why, "rejecting") {
+		t.Fatalf("rejecting should switch: %+v %v %q", to, act, why)
+	}
+	// every pool dead: nowhere to go
+	var g Failover
+	dead := []PoolView{{ID: 0, Active: true}, {ID: 1, Priority: 1}}
+	g.Step(c, t0, dead)
+	if _, act, _ := g.Step(c, t0.Add(10*time.Minute), dead); act {
+		t.Fatal("no alive pool, no switch")
+	}
+	// a single pool: never switch (can't, and must not invent one)
+	var one Failover
+	if _, act, _ := one.Step(c, t0.Add(10*time.Minute), []PoolView{{ID: 0, Active: true}}); act {
+		t.Fatal("one pool, no switch")
+	}
+	if (FailoverCfg{DeadFor: time.Second, Cooldown: time.Minute, ReturnAfter: time.Minute}).Validate() == nil {
+		t.Fatal("sub-minute DeadFor must fail")
+	}
+}
+
+func TestFailoverPicksLowestPriorityBackup(t *testing.T) {
+	c := FailoverCfg{DeadFor: 5 * time.Minute, Cooldown: 5 * time.Minute, ReturnAfter: 15 * time.Minute}
+	var f Failover
+	t0 := time.Unix(1794642000, 0)
+	pools := []PoolView{
+		{ID: 0, Priority: 0, Active: true},
+		{ID: 2, Priority: 2, Alive: true},
+		{ID: 1, Priority: 1, Alive: true},
+	}
+	f.Step(c, t0, pools)
+	to, act, _ := f.Step(c, t0.Add(5*time.Minute), pools)
+	if !act || to.ID != 1 {
+		t.Fatalf("wanted pool 1 (priority 1), got %+v %v", to, act)
 	}
 }

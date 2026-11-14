@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/hashwatch/hashwatch/internal/auto"
 )
 
@@ -8,6 +10,7 @@ import (
 // off until the user switches it on; zero values mean "use the default".
 type MinerOpts struct {
 	Schedule ScheduleOpts `json:"schedule,omitempty"`
+	Failover FailoverOpts `json:"failover,omitempty"`
 	Light    LightOpts    `json:"light,omitempty"`
 }
 
@@ -18,6 +21,31 @@ type ScheduleOpts struct {
 }
 
 // LightOpts: the miner's light as a status lamp and for celebrations.
+type FailoverOpts struct {
+	On        bool `json:"on"`
+	DeadMin   int  `json:"dead_min,omitempty"`   // wait before switching; 0 = 5
+	CoolMin   int  `json:"cool_min,omitempty"`   // cooldown between switches; 0 = 5
+	ReturnMin int  `json:"return_min,omitempty"` // wait before switching back; 0 = 15
+}
+
+func (f FailoverOpts) Cfg() auto.FailoverCfg {
+	c := auto.FailoverCfg{
+		DeadFor:     time.Duration(f.DeadMin) * time.Minute,
+		Cooldown:    time.Duration(f.CoolMin) * time.Minute,
+		ReturnAfter: time.Duration(f.ReturnMin) * time.Minute,
+	}
+	if c.DeadFor == 0 {
+		c.DeadFor = 5 * time.Minute
+	}
+	if c.Cooldown == 0 {
+		c.Cooldown = 5 * time.Minute
+	}
+	if c.ReturnAfter == 0 {
+		c.ReturnAfter = 15 * time.Minute
+	}
+	return c
+}
+
 type LightOpts struct {
 	Lamp      bool        `json:"lamp"`           // green healthy, red problem
 	Celebrate bool        `json:"celebrate"`      // flash gold when a block is found
