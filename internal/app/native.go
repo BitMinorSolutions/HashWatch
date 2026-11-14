@@ -144,7 +144,7 @@ func (s *Server) debug(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&b, "alert %s %s: %s\n", unix(a.T), a.Kind, a.Title)
 		}
 	}
-	fmt.Fprintf(&b, "autostart: %+v\n", autostart.Get(s.Auto))
+	fmt.Fprintf(&b, "autostart: %+v\n", autostart.Get(s.AutoStart))
 	// Raw miner API replies (port 4028), so a problem can be diagnosed without the miner in hand.
 	for _, m := range s.Cfg.Miners {
 		if m.Kind == "remote" {

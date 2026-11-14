@@ -1,8 +1,6 @@
 package app
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -17,6 +15,7 @@ import (
 	"github.com/hashwatch/hashwatch/internal/cgminer"
 	"github.com/hashwatch/hashwatch/internal/install"
 	"github.com/hashwatch/hashwatch/internal/model"
+	"github.com/hashwatch/hashwatch/internal/netdata"
 	"github.com/hashwatch/hashwatch/internal/source"
 	"github.com/hashwatch/hashwatch/internal/tunnel"
 )
@@ -32,7 +31,7 @@ type Server struct {
 
 	Tunnel     *tunnel.Manager // nil when remote access isn't possible (preview)
 	Alerts     *Alerts
-	Auto       autostart.Spec
+	AutoStart  autostart.Spec
 	InstanceID string
 	Quit       func()           // stops the server and cloudflared cleanly; nil in preview
 	Install    install.Info     // "Move to Applications?" offer (macOS app only)
@@ -40,15 +39,23 @@ type Server struct {
 	Shell      string           // "browser", "macos-native", "windows-native"
 	ShowWindow func()           // native shells: bring the window forward (second launch)
 
-	mu       sync.Mutex
-	sessions map[string]time.Time
-	attempts map[string][]time.Time
+	Net   *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
+	Stats *Stats           // lottery stats, badges, summaries
+	Auto  *Automations     // schedule, throttle, failover, restart, light effects
+
+	mu          sync.Mutex
+	sessions    map[string]*session
+	lim         limiter
+	pendingTOTP string
+	Now         func() time.Time
 }
 
-const sessTTL = 30 * 24 * time.Hour
-
 func (s *Server) Handler() http.Handler {
-	s.sessions, s.attempts = map[string]time.Time{}, map[string][]time.Time{}
+	s.sessions = map[string]*session{}
+	s.lim = limiter{fails: map[string]*failRec{}}
+	if s.Now == nil {
+		s.Now = time.Now
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
@@ -60,14 +67,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ping", s.ping)
 	mux.HandleFunc("POST /api/quit", s.auth(s.quitGuard(s.quit)))
 	mux.HandleFunc("POST /api/install", s.auth(s.quitGuard(s.installSet)))
-	mux.HandleFunc("GET /api/debug", s.auth(s.debug))
+	mux.HandleFunc("GET /api/debug", s.auth(s.adminOnly(s.debug)))
 	mux.HandleFunc("POST /api/show", s.quitGuard(s.show)) // second launch asks the running copy to show its window
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
 	mux.HandleFunc("POST /api/password", s.auth(s.admin(s.password)))
-	mux.HandleFunc("GET /api/remote", s.auth(s.remoteGet))
-	mux.HandleFunc("GET /api/remote/qr.svg", s.auth(s.remoteQR))
+	mux.HandleFunc("GET /api/remote", s.auth(s.adminOnly(s.remoteGet)))
+	mux.HandleFunc("GET /api/remote/qr.svg", s.auth(s.adminOnly(s.remoteQR)))
+	mux.HandleFunc("POST /api/remote/rotate", s.auth(s.admin(s.remoteRotate)))
+	mux.HandleFunc("GET /v/{token}", s.viewLink)
+	mux.HandleFunc("GET /api/security", s.auth(s.adminOnly(s.securityGet)))
+	mux.HandleFunc("POST /api/security", s.auth(s.admin(s.securitySet)))
+	mux.HandleFunc("POST /api/security/view", s.auth(s.admin(s.viewPassword)))
+	mux.HandleFunc("POST /api/security/viewlink", s.auth(s.admin(s.viewLinkSet)))
+	mux.HandleFunc("POST /api/2fa/setup", s.auth(s.admin(s.totpSetup)))
+	mux.HandleFunc("POST /api/2fa/enable", s.auth(s.admin(s.totpEnable)))
+	mux.HandleFunc("POST /api/2fa/disable", s.auth(s.admin(s.totpDisable)))
+	mux.HandleFunc("POST /api/2fa/recovery", s.auth(s.admin(s.totpRecovery)))
+	mux.HandleFunc("GET /api/sessions", s.auth(s.adminOnly(s.sessionsGet)))
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.auth(s.mutating(s.sessionKick)))
+	mux.HandleFunc("POST /api/sessions/revoke", s.auth(s.mutating(s.sessionsRevoke)))
+	mux.HandleFunc("GET /api/lottery", s.auth(s.lotteryGet))
+	mux.HandleFunc("GET /api/features", s.auth(s.featuresGet))
+	mux.HandleFunc("POST /api/features", s.auth(s.mutating(s.featuresSet)))
+	mux.HandleFunc("POST /api/privacy", s.auth(s.admin(s.privacySet)))
 	mux.HandleFunc("POST /api/remote", s.admin(s.remoteSet)) // checks auth itself (may create the password)
 	mux.HandleFunc("POST /api/autostart", s.auth(s.admin(s.autostartSet)))
 	mux.HandleFunc("GET /api/alerts", s.auth(s.alertsGet))
@@ -125,35 +149,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func (s *Server) authed(r *http.Request) bool {
-	if s.Cfg.PasswordHash == "" {
-		return true
-	}
-	c, err := r.Cookie("hw_session")
-	if err != nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exp, ok := s.sessions[c.Value]
-	return ok && time.Now().Before(exp)
-}
-
-func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.authed(r) {
-			writeJSON(w, 401, map[string]string{"error": "auth"})
-			return
-		}
-		h(w, r)
-	}
-}
-
 // mutating guards settings changes: same-origin JSON only, and never in demo mode.
 func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Locked {
 			writeJSON(w, 403, map[string]string{"error": "Settings are locked in this preview."})
+			return
+		}
+		if s.role(r) == RoleView {
+			writeJSON(w, 403, map[string]string{"error": ErrViewOnly})
 			return
 		}
 		if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" && sfs != "same-origin" {
@@ -216,8 +220,9 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	ok := s.authed(r)
-	out := map[string]any{"app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
+	role := s.role(r)
+	ok := role != ""
+	out := map[string]any{"role": role, "view_only": role == RoleView, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install
@@ -237,60 +242,13 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		}
 		out["lan_urls"] = lan
 		out["local_viewer"] = IsLocal(r)
-		out["remote"] = s.remoteBrief()
-	}
-	writeJSON(w, 200, out)
-}
-
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
-	now := time.Now()
-	s.mu.Lock()
-	var recent []time.Time
-	for _, t := range s.attempts[ip] {
-		if now.Sub(t) < 15*time.Minute {
-			recent = append(recent, t)
+		if role == RoleAdmin {
+			out["remote"] = s.remoteBrief()
+		} else {
+			out["lan_urls"] = nil
 		}
 	}
-	s.attempts[ip] = recent
-	s.mu.Unlock()
-	if len(recent) >= 10 {
-		writeJSON(w, 429, map[string]string{"error": "Too many attempts. Try again in a few minutes."})
-		return
-	}
-	var body struct{ Password string }
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-	if s.Cfg.PasswordHash == "" || !s.Cfg.CheckPassword(body.Password) {
-		s.mu.Lock()
-		s.attempts[ip] = append(s.attempts[ip], now)
-		s.mu.Unlock()
-		writeJSON(w, 401, map[string]string{"error": "Incorrect password."})
-		return
-	}
-	s.issue(w, r)
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
-func (s *Server) issue(w http.ResponseWriter, r *http.Request) {
-	b := make([]byte, 32)
-	rand.Read(b)
-	tok := base64.RawURLEncoding.EncodeToString(b)
-	s.mu.Lock()
-	s.sessions[tok] = time.Now().Add(sessTTL)
-	s.mu.Unlock()
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-	http.SetCookie(w, &http.Cookie{Name: "hw_session", Value: tok, Path: "/", HttpOnly: true, Secure: secure,
-		SameSite: http.SameSiteLaxMode, MaxAge: int(sessTTL / time.Second)})
-}
-
-func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie("hw_session"); err == nil {
-		s.mu.Lock()
-		delete(s.sessions, c.Value)
-		s.mu.Unlock()
-	}
-	http.SetCookie(w, &http.Cookie{Name: "hw_session", Path: "/", MaxAge: -1})
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
@@ -302,8 +260,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
-		"last_err": v.LastErr, "history": v.History, "poll_seconds": v.Poll, "next_poll_unix": v.NextAt, "can_control": s.canControl(id),
-		"remote": s.remoteBrief(), "local_viewer": IsLocal(r)}
+		"last_err": v.LastErr, "history": v.History, "poll_seconds": v.Poll, "next_poll_unix": v.NextAt, "can_control": s.canControl(id) && s.role(r) == RoleAdmin,
+		"local_viewer": IsLocal(r), "view_only": s.role(r) == RoleView}
+	if s.role(r) == RoleAdmin {
+		out["remote"] = s.remoteBrief()
+	}
 	if s.Alerts != nil {
 		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
 		items, latest := s.Alerts.Since(a, 20)
@@ -363,6 +324,9 @@ func (s *Server) delMiner(w http.ResponseWriter, r *http.Request) {
 	s.Cfg.mu.Unlock()
 	s.Cfg.Save()
 	s.Poll.Stop(id)
+	if s.Stats != nil {
+		s.Stats.Remove(id)
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -385,13 +349,17 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "Use at least 6 characters."})
 		return
 	}
+	if b.New == "" && s.Cfg.Security.ViewHash != "" {
+		writeJSON(w, 409, map[string]string{"error": "Remove the view-only password first."})
+		return
+	}
 	s.Cfg.SetPassword(b.New)
 	s.Cfg.Save()
 	s.mu.Lock()
-	s.sessions = map[string]time.Time{}
+	s.sessions = map[string]*session{}
 	s.mu.Unlock()
 	if b.New != "" {
-		s.issue(w, r)
+		s.issue(w, r, RoleAdmin)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -479,6 +447,15 @@ func (s *Server) ctlLED(w http.ResponseWriter, r *http.Request) {
 	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) {
 		return c.SetLED(eff, b.Brightness, temper, b.Color)
 	}, memo)
+	if err == nil && res.OK { // the user's own light: light effects restore to this
+		s.Cfg.updateMiner(b.Miner, func(m *Miner) {
+			m.Opts.Light.Base = &LightState{Mode: cgminer.LEDModes[eff], Color: memo.LEDHex, Bright: br}
+		})
+		s.Cfg.Save()
+		if s.Auto != nil {
+			s.Auto.LightChanged(b.Miner)
+		}
+	}
 	s.ctlReply(w, res, snap, err)
 }
 

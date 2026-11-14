@@ -6,6 +6,7 @@ package sim
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -26,13 +27,49 @@ type Miner struct {
 	// a hashrate multiplier and extra chip heat.
 	Blocks     int
 	Offline    bool
-	PoolDown   bool
+	PoolDown   bool // the main pool (0) stops answering
 	HashFactor float64
 	ExtraHeat  int
+	// Best share: simulated like a real miner. A miner at H hashes/s submits
+	// H/2^32 difficulty-1 shares per second, and the best of n such shares is
+	// -n/ln(U) (U uniform), so the best share grows roughly with uptime.
+	Best     float64
+	lastBest time.Time
+	Active   int       // active pool
+	spikeEnd time.Time // temporary heat spike
+	spikeC   int
+	Restarts int
+	downTill time.Time // not answering while "restarting"
 }
 
 func New() *Miner {
-	return &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second)}
+	m := &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second)}
+	m.Best = m.bestOf(549866)
+	m.lastBest = time.Now()
+	return m
+}
+
+// bestOf samples the best share of secs seconds of hashing.
+func (m *Miner) bestOf(secs float64) float64 {
+	n := m.hs() / 4294967296 * secs
+	if n <= 0 {
+		return 0
+	}
+	u := rand.Float64()
+	for u == 0 {
+		u = rand.Float64()
+	}
+	return math.Round(-n / math.Log(u))
+}
+
+func (m *Miner) hs() float64 { return []float64{3.4, 3.7, 3.95}[m.WorkLevel] * m.HashFactor * 1e12 }
+
+func (m *Miner) advance() {
+	now := time.Now()
+	if b := m.bestOf(now.Sub(m.lastBest).Seconds()); b > m.Best {
+		m.Best = b
+	}
+	m.lastBest = now
 }
 
 // Listen serves the API until the listener is closed.
@@ -56,7 +93,7 @@ func (m *Miner) Listen(addr string) (net.Listener, error) {
 func (m *Miner) handle(c net.Conn) {
 	defer c.Close()
 	m.mu.Lock()
-	off := m.Offline
+	off := m.Offline || time.Now().Before(m.downTill)
 	m.mu.Unlock()
 	if off {
 		return
@@ -89,20 +126,31 @@ func (m *Miner) reply(cmd, param string) string {
 	j := rand.Float64()*0.4 - 0.2
 	el := int(time.Since(m.start).Seconds())
 	base := []float64{3.4, 3.7, 3.95}[m.WorkLevel] * m.HashFactor
-	alive, active := "Alive", "true"
+	m.advance()
+	heat := m.ExtraHeat
+	if time.Now().Before(m.spikeEnd) {
+		heat += m.spikeC
+	}
+	alive0 := "Alive"
 	if m.PoolDown {
-		alive, active = "Dead", "false"
+		alive0 = "Dead"
+	}
+	act := func(n int) string {
+		if n == m.Active && !(n == 0 && m.PoolDown) {
+			return "true"
+		}
+		return "false"
 	}
 	watts := []int{85, 105, 126}[m.WorkLevel]
 	switch cmd {
 	case "version":
 		return status("S", 22, "CGMiner versions") + `,"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalonnano","MODEL":"nano3","HWTYPE":"PMMv1_X1","SWTYPE":"MM318_X2","LVERSION":"25103101_0736b2e","MAC":"e0e1a9000000"}],"id":1}`
 	case "summary":
-		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":423759812,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
-			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, 134043+el/4)
+		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
+			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, 134043+el/4, m.Best)
 	case "pools":
-		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"%s","Priority":0,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.Nano3","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"solo.ckpool.org","Best Share":423759812,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"stratum+tcp://backup.example:3333","Status":"Alive","Priority":1,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000","Stratum Active":false,"Accepted":0}],"id":1}`,
-			alive, 134043+el/4, time.Now().Unix()-3, active)
+		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"%s","Priority":0,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.Nano3","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"solo.ckpool.org","Best Share":%.0f,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"stratum+tcp://public-pool.io:21496","Status":"Alive","Priority":1,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"stratum+tcp://solo.ckpool.org:3333","Status":"Alive","Priority":2,"Quota":1,"User":"bc1qsimulatedminer000000000000000000000.backup","Stratum Active":%s,"Accepted":0}],"id":1}`,
+			alive0, 134043+el/4, time.Now().Unix()-3, act(0), m.Best, act(1), act(2))
 	case "devs":
 		return status("S", 9, "1 ASC(s)") + `,"DEVS":[{"ASC":0,"Name":"AVANANO","ID":0,"Enabled":"Y","Status":"Alive"}],"id":1}`
 	case "estats", "stats":
@@ -111,7 +159,7 @@ func (m *Miner) reply(cmd, param string) string {
 			led = fmt.Sprintf(" LEDUser[%d-%d-%d-%d-%d-%d]", m.LED[0], m.LED[1], m.LED[2], m.LED[3], m.LED[4], m.LED[5])
 		}
 		mm := fmt.Sprintf(`Ver[nano3-25103101_0736b2e] HVer[25103101_b906c52_1733f44] HashStatus[1] NETFAIL[%d] Elapsed[%d] HW[385] DH[1.827%%] Temp[41] OTemp[36] TMax[%d] TAvg[%d] TarT[90] Fan1[%d] FanR[%d%%] PS[0 0 0 4 2756 %d 328] GHSspd[%.2f] GHSmm[4241.60] GHSavg[3227.08] WU[45081.76] Led[%d]%s TA[10] Core[A3198S] PING[138] SoftOFF[0] ECHU[0] ECMM[0] PVT_T0[88  91  91  89  88  88  92  91  91  87] PVT_V0[318 309 313 316 316 316 315 309 314 314] MW0[13874 13534 14249 13947 14149 13732 13750 13753 13782 13715] CRC[0] WORKLEVEL[%d] MPO[125]`,
-			time.Now().Unix()-86400*4, el, 86+3*m.WorkLevel+m.ExtraHeat, 84+3*m.WorkLevel+m.ExtraHeat, 2100+525*m.WorkLevel, 29+7*m.WorkLevel, watts, base*1000+j*100, m.LED[0], led, m.WorkLevel)
+			time.Now().Unix()-86400*4, el, 86+3*m.WorkLevel+heat, 84+3*m.WorkLevel+heat, 2100+525*m.WorkLevel, 29+7*m.WorkLevel, watts, base*1000+j*100, m.LED[0], led, m.WorkLevel)
 		return status("S", 70, "CGMiner stats") + `,"STATS":[{"STATS":0,"ID":"AVANANO0","Elapsed":` + strconv.Itoa(el) + `,"MM ID0":"` + mm + `"}],"id":1}`
 	case "ascset":
 		p := strings.Split(param, ",")
@@ -133,6 +181,21 @@ func (m *Miner) reply(cmd, param string) string {
 			}
 		}
 		return status("E", 120, "ASC 0 set failed: invalid option") + `,"id":1}`
+	case "switchpool", "enablepool":
+		n, err := strconv.Atoi(param)
+		if err != nil || n < 0 || n > 2 {
+			return status("E", 26, "Invalid pool id") + `,"id":1}`
+		}
+		if cmd == "switchpool" {
+			m.Active = n
+			return status("S", 27, fmt.Sprintf("Switching to pool %d", n)) + `,"id":1}`
+		}
+		return status("I", 49, fmt.Sprintf("Pool %d already enabled", n)) + `,"id":1}`
+	case "restart":
+		m.Restarts++
+		m.start, m.Best, m.lastBest = time.Now(), 0, time.Now()
+		m.downTill = time.Now().Add(4 * time.Second)
+		return `{"STATUS":"RESTART"}`
 	}
 	return status("E", 14, "Invalid command") + `,"id":1}`
 }
@@ -151,6 +214,9 @@ func (m *Miner) Log() []string {
 //	GET /pool?down=1  report no active pool
 //	GET /hash?f=0.5   multiply the hashrate
 //	GET /heat?c=6     add degrees to the chip temperatures
+//	GET /spike?c=9&s=300  add degrees for s seconds (a temperature spike)
+//	GET /best?d=2.1e9 the miner reports a new best share of difficulty d
+//	GET /stall?on=1   hashrate drops to almost nothing (on=0 restores it)
 func (m *Miner) Admin(addr string) error {
 	mux := http.NewServeMux()
 	on := func(r *http.Request, k string) bool { return r.URL.Query().Get(k) != "0" }
@@ -188,6 +254,42 @@ func (m *Miner) Admin(addr string) error {
 		m.ExtraHeat = c
 		m.mu.Unlock()
 		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/spike", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := strconv.Atoi(r.URL.Query().Get("c"))
+		sec, _ := strconv.Atoi(r.URL.Query().Get("s"))
+		if sec <= 0 {
+			sec = 300
+		}
+		m.mu.Lock()
+		m.spikeC, m.spikeEnd = c, time.Now().Add(time.Duration(sec)*time.Second)
+		m.mu.Unlock()
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/best", func(w http.ResponseWriter, r *http.Request) {
+		d, err := strconv.ParseFloat(r.URL.Query().Get("d"), 64)
+		m.mu.Lock()
+		if err == nil && d > m.Best {
+			m.Best = d
+		}
+		m.mu.Unlock()
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/stall", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		if on(r, "on") {
+			m.HashFactor = 0.02
+		} else {
+			m.HashFactor = 1
+		}
+		m.mu.Unlock()
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"work_level": m.WorkLevel, "led": m.LED, "active_pool": m.Active, "pool_down": m.PoolDown,
+			"best": m.Best, "blocks": m.Blocks, "restarts": m.Restarts, "received": len(m.Received)})
 	})
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

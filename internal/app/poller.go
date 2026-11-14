@@ -274,3 +274,45 @@ func (p *Poller) Control(id string, do func(source.Controller) (cgminer.Result, 
 	p.mu.RUnlock()
 	return res, snap, err
 }
+
+// cmdGap is the minimum time between two commands to the same miner.
+var cmdGap = 3 * time.Second
+
+// Command runs one automation command against a direct miner without the
+// read-back delay of Control (the next regular poll reads the result).
+func (p *Poller) Command(id string, do func(source.Controller) (cgminer.Result, error)) (cgminer.Result, error) {
+	p.mu.RLock()
+	st := p.m[id]
+	p.mu.RUnlock()
+	if st == nil {
+		return cgminer.Result{}, fmt.Errorf("unknown miner")
+	}
+	ctl, ok := st.src.(source.Controller)
+	if !ok {
+		return cgminer.Result{}, ErrNoControl
+	}
+	if !st.ctlMu.TryLock() {
+		return cgminer.Result{}, fmt.Errorf("another change is still being applied")
+	}
+	defer st.ctlMu.Unlock()
+	if wait := cmdGap - time.Since(st.lastCtl); wait > 0 {
+		time.Sleep(wait)
+	}
+	st.lastCtl = time.Now()
+	res, err := do(ctl)
+	log.Printf("automation %s: sent %q -> ok=%v status=%s msg=%q err=%v", id, res.Sent, res.OK, res.Status, res.Message, err)
+	if err == nil && !res.OK {
+		err = fmt.Errorf("the miner refused it: %s", res.Message)
+	}
+	return res, err
+}
+
+// Latest returns a miner's most recent snapshot (nil if none yet).
+func (p *Poller) Latest(id string) *model.Snapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if st := p.m[id]; st != nil {
+		return st.Latest
+	}
+	return nil
+}

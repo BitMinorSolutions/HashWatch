@@ -29,6 +29,10 @@ type Miner struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
 	Kind string `json:"kind"` // "cgminer" or "remote"
+	// Location groups miners by site (V2: several homes / sites in one dashboard). Empty = "Home".
+	Location string `json:"location,omitempty"`
+	// Opts holds this miner's automations and light effects (all opt-in).
+	Opts MinerOpts `json:"opts,omitempty"`
 	// remote-only (never saved to disk; set from flags)
 	RemoteURL  string `json:"-"`
 	RemoteUser string `json:"-"`
@@ -43,7 +47,11 @@ type RemoteSettings struct {
 	LastURL  string `json:"last_url,omitempty"`
 }
 
-type Config struct {
+// ConfigData is everything saved in config.json. New settings groups are
+// separate structs so V2 (locations, push, a Pro tier) can add fields without
+// touching existing ones; unknown fields from newer versions are ignored.
+type ConfigData struct {
+	Version      int             `json:"config_version,omitempty"`
 	Miners       []Miner         `json:"miners"`
 	PasswordHash string          `json:"password_hash,omitempty"`
 	PasswordSalt string          `json:"password_salt,omitempty"`
@@ -52,11 +60,24 @@ type Config struct {
 	NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
 	MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
 	// Port is the local port this copy last served on (kept so phone bookmarks keep working).
-	Port int `json:"port,omitempty"`
+	Port     int              `json:"port,omitempty"`
+	Security SecuritySettings `json:"security,omitempty"`
+	Privacy  PrivacySettings  `json:"privacy,omitempty"`
+	Fun      FunSettings      `json:"fun,omitempty"`
+	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
+	Locations   []Location   `json:"locations,omitempty"`
+	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"
+	PushTargets []PushTarget `json:"push_targets,omitempty"`
+}
 
+type Config struct {
+	ConfigData
 	path string
 	mu   sync.Mutex
 }
+
+// ConfigVersion is bumped when the file format changes meaningfully.
+const ConfigVersion = 2
 
 func DefaultDir() string {
 	d, err := os.UserConfigDir()
@@ -72,30 +93,22 @@ func LoadConfig(dir string) (*Config, error) {
 	}
 	c := &Config{path: filepath.Join(dir, "config.json")}
 	if b, err := os.ReadFile(c.path); err == nil {
-		_ = json.Unmarshal(b, c)
+		_ = json.Unmarshal(b, &c.ConfigData)
 	}
+	c.Version = ConfigVersion
 	return c, nil
 }
 
 func (c *Config) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var saved []Miner
+	out := c.ConfigData
+	out.Miners = nil
 	for _, m := range c.Miners {
 		if m.Kind != "remote" {
-			saved = append(saved, m)
+			out.Miners = append(out.Miners, m)
 		}
 	}
-	out := struct {
-		Miners       []Miner         `json:"miners"`
-		PasswordHash string          `json:"password_hash,omitempty"`
-		PasswordSalt string          `json:"password_salt,omitempty"`
-		Remote       RemoteSettings  `json:"remote"`
-		AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
-		NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
-		MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
-		Port         int             `json:"port,omitempty"`
-	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff, c.MoveDeclined, c.Port}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
@@ -140,3 +153,5 @@ func NewID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+func writeFile(p, s string) error { return os.WriteFile(p, []byte(s), 0o600) }

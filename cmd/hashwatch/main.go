@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ import (
 	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/install"
 	"github.com/hashwatch/hashwatch/internal/model"
+	"github.com/hashwatch/hashwatch/internal/netdata"
 	"github.com/hashwatch/hashwatch/internal/notify"
 	"github.com/hashwatch/hashwatch/internal/tunnel"
 	"github.com/hashwatch/hashwatch/web"
@@ -179,7 +181,28 @@ func main() {
 	alerts := app.NewAlerts(*dir)
 	alerts.Enabled = cfg.AlertOn
 	srv.Alerts = alerts
-	poll.OnPoll = func(id, name string, snap *model.Snapshot, hist []model.Sample) { alerts.Observe(id, name, snap, hist) }
+	// Lottery stats, public network data (optional, cached) and automations.
+	stats := app.NewStats(*dir)
+	stats.Alerts = alerts
+	stats.Fun = func() app.FunSettings { return cfg.Fun }
+	netf := netdata.New(*dir)
+	netf.Enabled = func() (bool, bool) { return !cfg.Privacy.NetworkOff, !cfg.Privacy.PriceOff }
+	srv.Net, srv.Stats, srv.Now = netf, stats, time.Now
+	stats.Net = srv.NetForStats
+	autos := app.NewAutomations(cfg, poll, alerts, *remote != "")
+	srv.Auto = autos
+	stats.OnEvent = autos.Event
+	go netf.Run(context.Background())
+	go func() {
+		for range time.Tick(time.Minute) {
+			stats.Save()
+		}
+	}()
+	poll.OnPoll = func(id, name string, snap *model.Snapshot, hist []model.Sample) {
+		alerts.Observe(id, name, snap, hist)
+		stats.Observe(id, name, snap)
+		autos.Observe(id, name, snap)
+	}
 
 	if *remote != "" {
 		srv.Locked = true
@@ -251,7 +274,7 @@ func main() {
 		if *port != 0 {
 			args = append(args, "-port", strconv.Itoa(*port))
 		}
-		srv.Auto = autostart.Spec{Exe: autostart.Exe(), Args: args, Dir: absPath(*dir), AppName: app.AppName}
+		srv.AutoStart = autostart.Spec{Exe: autostart.Exe(), Args: args, Dir: absPath(*dir), AppName: app.AppName}
 		if cfg.Remote.Enabled && cfg.PasswordHash != "" {
 			srv.Tunnel.Start()
 			fmt.Println("  Remote access: starting…")
@@ -268,6 +291,7 @@ func main() {
 				srv.Tunnel.Stop()
 			}
 			poll.SaveNow()
+			stats.Save()
 			if *remote == "" || private {
 				app.RemoveInstance(*dir, srv.InstanceID)
 			}

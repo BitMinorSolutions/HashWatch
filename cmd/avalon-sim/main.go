@@ -11,7 +11,7 @@ import (
 func main() {
 	addr := flag.String("listen", "127.0.0.1:4028", "address to listen on")
 	led := flag.Bool("report-led", false, "report LEDUser[] like the Nano 3S")
-	admin := flag.String("admin", "", "optional test-control address, e.g. 127.0.0.1:14029 (GET /block, /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6)")
+	admin := flag.String("admin", "", "optional test-control address, e.g. 127.0.0.1:14029 (GET /block, /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6, /spike?c=9&s=300, /best?d=2.1e9, /stall?on=1, /state)")
 	flag.Parse()
 	m := sim.New()
 	m.ReportLED = *led

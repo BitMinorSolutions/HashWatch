@@ -104,3 +104,85 @@ func SetLED(addr string, effect, bright, temper int, hex string) (Result, error)
 	}
 	return ascset(addr, p, 5*time.Second)
 }
+
+// Pool and restart commands (documented in cgminer's API-README; privileged, so the
+// miner's API must allow writes, which the Nano 3's does for ascset). Used only by
+// opt-in automations, with typed arguments:
+//
+//	switchpool|N   make pool N the active pool
+//	enablepool|N   enable pool N
+//	restart        restart cgminer (on Avalon firmware this restarts mining; not yet verified on a Nano 3)
+func command(addr, cmd, param string, timeout time.Duration) (Result, error) {
+	res := Result{Sent: cmd}
+	if param != "" {
+		res.Sent += "|" + param
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return res, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout + 4*time.Second))
+	m := map[string]string{"command": cmd}
+	if param != "" {
+		m["parameter"] = param
+	}
+	req, _ := json.Marshal(m)
+	if _, err := conn.Write(req); err != nil {
+		return res, err
+	}
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 2048)
+	for {
+		n, err := conn.Read(tmp)
+		buf = append(buf, tmp[:n]...)
+		if err != nil || len(buf) > 64<<10 {
+			break
+		}
+	}
+	if cmd == "restart" && len(strings.TrimRight(string(buf), "\x00 \r\n")) == 0 {
+		// cgminer may close the socket while restarting; the command was delivered.
+		res.OK, res.Status, res.Message = true, "RESTART", "connection closed while restarting"
+		return res, nil
+	}
+	r, err := decode(buf)
+	if err != nil {
+		return res, err
+	}
+	st := first(r, "STATUS")
+	if st == nil {
+		if s, ok := r["STATUS"].(string); ok { // cgminer replies {"STATUS":"RESTART"}
+			res.Status, res.OK, res.Message = s, strings.EqualFold(s, "RESTART"), s
+			return res, nil
+		}
+		return res, errors.New("miner sent no STATUS")
+	}
+	res.Status, res.Message = str(st["STATUS"]), strings.TrimSpace(str(st["Msg"]))
+	res.OK = res.Status == "S" || res.Status == "I"
+	return res, nil
+}
+
+func poolParam(n int) (string, error) {
+	if n < 0 || n > 15 {
+		return "", errors.New("pool number must be 0-15")
+	}
+	return fmt.Sprintf("%d", n), nil
+}
+
+func SwitchPool(addr string, n int) (Result, error) {
+	p, err := poolParam(n)
+	if err != nil {
+		return Result{}, err
+	}
+	return command(addr, "switchpool", p, 5*time.Second)
+}
+
+func EnablePool(addr string, n int) (Result, error) {
+	p, err := poolParam(n)
+	if err != nil {
+		return Result{}, err
+	}
+	return command(addr, "enablepool", p, 5*time.Second)
+}
+
+func Restart(addr string) (Result, error) { return command(addr, "restart", "", 5*time.Second) }

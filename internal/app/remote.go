@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/qr"
@@ -37,9 +36,9 @@ func (s *Server) remoteGet(w http.ResponseWriter, r *http.Request) {
 	if s.Tunnel != nil {
 		out["status"] = s.Tunnel.Status()
 	}
-	if s.Auto.Exe != "" {
-		st := autostart.Get(s.Auto)
-		if autostart.Transient(s.Auto.Exe) {
+	if s.AutoStart.Exe != "" {
+		st := autostart.Get(s.AutoStart)
+		if autostart.Transient(s.AutoStart.Exe) {
 			st.Note = "Move " + AppName + " out of your Downloads or temporary folder first, then turn this on."
 		}
 		out["autostart"] = st
@@ -107,9 +106,9 @@ func (s *Server) remoteSet(w http.ResponseWriter, r *http.Request) {
 			}
 			s.Cfg.SetPassword(b.Password)
 			s.mu.Lock()
-			s.sessions = map[string]time.Time{}
+			s.sessions = map[string]*session{}
 			s.mu.Unlock()
-			s.issue(w, r)
+			s.issue(w, r, RoleAdmin)
 		}
 		s.Cfg.Remote.Enabled = true
 		s.Tunnel.Start()
@@ -148,20 +147,20 @@ func (s *Server) TunnelURL(u string) {
 func (s *Server) autostartSet(w http.ResponseWriter, r *http.Request) {
 	var b struct{ Enabled bool }
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	if s.Auto.Exe == "" {
+	if s.AutoStart.Exe == "" {
 		writeJSON(w, 400, map[string]string{"error": "Auto-start isn't available here."})
 		return
 	}
 	var st autostart.Status
 	var err error
 	if b.Enabled {
-		if autostart.Transient(s.Auto.Exe) {
+		if autostart.Transient(s.AutoStart.Exe) {
 			writeJSON(w, 409, map[string]string{"error": "Move " + AppName + " out of your Downloads or temporary folder first (for example into Applications or your home folder), run it from there, then turn this on."})
 			return
 		}
-		st, err = autostart.Enable(s.Auto)
+		st, err = autostart.Enable(s.AutoStart)
 	} else {
-		st, err = autostart.Disable(s.Auto)
+		st, err = autostart.Disable(s.AutoStart)
 	}
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error(), "autostart": st})

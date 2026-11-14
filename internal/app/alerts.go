@@ -37,6 +37,10 @@ var AlertKinds = []AlertKind{
 	{"temp", "Running hot", "Max chip temperature above the miner's target for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
 	{"link", "Remote link changed", "When the remote-access link changes, so you can re-scan it."},
+	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
+	{"badge", "Badges", "When you earn a badge (streaks, big shares, ticket milestones)."},
+	{"summary", "Daily / weekly summary", "Average hashrate, time online, best share and tickets for the day or week."},
+	{"auto", "Automations", "Whenever the schedule, auto-throttle, pool failover or auto-restart changes something."},
 }
 
 // Alert thresholds (vars so tests can shorten them).
