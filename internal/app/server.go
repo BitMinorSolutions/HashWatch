@@ -27,7 +27,8 @@ type Server struct {
 	Locked  bool // demo/preview mode: miners and password cannot be changed
 	Version string
 	Port    int
-	LANOK   bool // listening on all interfaces, so phone URLs work
+	Host    string // bind address (127.0.0.1 or 0.0.0.0)
+	LANOK   bool   // listening on all interfaces, so phone URLs work
 
 	Tunnel     *tunnel.Manager // nil when remote access isn't possible (preview)
 	Alerts     *Alerts
@@ -47,9 +48,20 @@ type Server struct {
 	sessions map[string]*session
 	lim      limiter
 	Now      func() time.Time
+
+	handler       http.Handler
+	lnMu          sync.Mutex
+	ln            net.Listener
+	rebindPending bool
 }
 
 func (s *Server) Handler() http.Handler {
+	s.mu.Lock()
+	if s.handler != nil {
+		h := s.handler
+		s.mu.Unlock()
+		return h
+	}
 	s.sessions = map[string]*session{}
 	s.lim = limiter{fails: map[string]*failRec{}}
 	if s.Now == nil {
@@ -84,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/features", s.auth(s.featuresGet))
 	mux.HandleFunc("POST /api/features", s.auth(s.mutating(s.featuresSet)))
 	mux.HandleFunc("POST /api/privacy", s.auth(s.admin(s.privacySet)))
+	mux.HandleFunc("POST /api/prefs", s.auth(s.admin(s.prefsSet)))
 	mux.HandleFunc("POST /api/remote", s.admin(s.remoteSet)) // checks auth itself (may create the password)
 	mux.HandleFunc("POST /api/autostart", s.auth(s.admin(s.autostartSet)))
 	mux.HandleFunc("GET /api/alerts", s.auth(s.alertsGet))
@@ -92,7 +105,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/alerts/test", s.auth(s.mutating(s.alertsTest)))
 	mux.HandleFunc("POST /api/control/workmode", s.auth(s.mutating(s.ctlWorkmode)))
 	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
-	return secHeaders(mux)
+	s.handler = secHeaders(mux)
+	s.mu.Unlock()
+	return s.handler
 }
 
 func secHeaders(h http.Handler) http.Handler {
@@ -216,6 +231,8 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
+	wifi, gentle := s.Cfg.Prefs()
+	out["allow_wifi"], out["gentle"] = wifi, gentle
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install
 	}

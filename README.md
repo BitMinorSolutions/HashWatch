@@ -193,9 +193,9 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--port` | `48412` | Web port. The port used last time is reused; if a port is taken by another program, HashWatch never uses it (it checks that its own address really reaches itself) and picks another free port automatically. |
-| `--host` | `0.0.0.0` | Listen address. Use `127.0.0.1` to allow this computer only |
+| `--host` | `127.0.0.1` (or `0.0.0.0` if Allow phones on Wi-Fi is on) | Listen address. The Settings switch is the usual way to change this; `--host` overrides it for this run |
 | `--miner 192.168.1.50` | | Add a miner without the setup screen |
-| `--poll` | `5s` | How often to read each miner. Failed reads back off to 15s, then 30s, until it recovers |
+| `--poll` | `5s` | How often to read each miner. Failed reads back off to 15s, then 30s, until it recovers. Gentle mode in Settings slows this to 30s |
 | `--no-browser` | | Don't open a browser on start |
 | `--serve` | | Server only, no app window (browser-based) |
 | `--hidden` | | Start in the menu bar without opening the window (used by auto-start) |
@@ -204,9 +204,11 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 Settings live in your user config folder (`~/Library/Application Support/Hashwatch`,
 `%AppData%\Hashwatch`, or `~/.config/Hashwatch`). Delete it to start over.
 
-**Security note:** by default HashWatch is reachable by devices on your local network so your phone
-can use it. Set a password in Settings if you share your network. Don't port-forward it to the internet.
-Use Remote access instead, which is password-protected and served over https by Cloudflare.
+**Security note:** by default HashWatch listens only on this computer (`127.0.0.1`). Turn on
+**Allow phones on Wi-Fi** in Settings if you want devices on your local network to open it, and set a
+password if you share your network. Don't port-forward it to the internet. Use Remote access instead,
+which is password-protected and served over https by Cloudflare. Existing installs keep their previous
+"reachable on Wi-Fi" setting until you change it.
 
 ### The miner isn't found
 - Make sure the computer and the miner are on the same network.

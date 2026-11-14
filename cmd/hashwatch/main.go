@@ -84,17 +84,14 @@ func showRunning(u string) bool {
 }
 
 func main() {
-	defHost, defPort, defDir := "0.0.0.0", app.DefaultPort, app.DefaultDir()
-	if bakedRemote != "" {
-		defHost = "127.0.0.1"
-	}
+	defPort, defDir := app.DefaultPort, app.DefaultDir()
 	if n, err := strconv.Atoi(bakedPort); err == nil {
 		defPort = n
 	}
 	if bakedDirName != "" {
 		defDir = filepath.Join(filepath.Dir(app.DefaultDir()), bakedDirName)
 	}
-	host := flag.String("host", defHost, "address to listen on (0.0.0.0 = reachable from your phone on the same Wi-Fi)")
+	host := flag.String("host", "", "address to listen on (default: 127.0.0.1, or 0.0.0.0 when Allow phones on Wi-Fi is on)")
 	port := flag.Int("port", 0, fmt.Sprintf("port to listen on (default: the port used last time, else %d; another free port is picked automatically if one is taken)", defPort))
 	noOpen := flag.Bool("no-browser", false, "do not open the browser on start")
 	dir := flag.String("config", defDir, "folder for settings and history")
@@ -173,11 +170,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	hostExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "host" {
+			hostExplicit = true
+		}
+	})
+	explicitHost := ""
+	if hostExplicit {
+		explicitHost = *host
+	}
+	listenHost := app.ResolveListenHost(explicitHost, cfg.WifiOn(), bakedRemote != "")
 	if *every < 2*time.Second {
 		*every = 2 * time.Second
 	}
 	poll := app.NewPoller(*dir, *every)
-	srv := &app.Server{Cfg: cfg, Poll: poll, Static: web.FS, Version: version, LANOK: *host == "0.0.0.0" || *host == "", InstanceID: app.NewID()}
+	if cfg.Gentle {
+		poll.SetGentle(true)
+	}
+	srv := &app.Server{Cfg: cfg, Poll: poll, Static: web.FS, Version: version, Host: listenHost, LANOK: app.WildcardHost(listenHost), InstanceID: app.NewID()}
 	alerts := app.NewAlerts(*dir)
 	alerts.Enabled = cfg.AlertOn
 	srv.Alerts = alerts
@@ -242,11 +253,12 @@ func main() {
 	}
 
 	// Bind only a port that verifiably reaches this process (never one another program answers on).
-	ln, bound, err := app.Listen(*host, app.PortCandidates(*port, cfg.Port, defPort))
+	ln, bound, err := app.Listen(listenHost, app.PortCandidates(*port, cfg.Port, defPort))
 	if err != nil {
 		log.Fatal(err)
 	}
 	srv.Port = bound
+	srv.AttachListener(ln, listenHost)
 	if *remote == "" || private {
 		if cfg.Port != bound {
 			cfg.Port = bound
@@ -257,9 +269,11 @@ func main() {
 		}
 	}
 	local := app.LocalURL(srv.Port)
+	// The window and the Cloudflare tunnel always reach this copy at 127.0.0.1,
+	// even when phones on Wi-Fi are allowed (wildcard bind) or when they are not.
 	originHost := "127.0.0.1"
-	if *host != "0.0.0.0" && *host != "" && *host != "localhost" && *host != "::" {
-		originHost = *host
+	if listenHost != "127.0.0.1" && listenHost != "localhost" && listenHost != "::1" && !app.WildcardHost(listenHost) {
+		originHost = listenHost
 	}
 	if *remote == "" {
 		srv.Tunnel = &tunnel.Manager{Dir: filepath.Join(*dir, "cloudflared"), Origin: "http://" + net.JoinHostPort(originHost, strconv.Itoa(srv.Port)),
@@ -268,7 +282,7 @@ func main() {
 		if nativeSupported() {
 			args = []string{"-hidden", "-config", absPath(*dir)} // starts quietly in the menu bar / tray
 		}
-		if *host != "0.0.0.0" {
+		if hostExplicit {
 			args = append(args, "-host", *host)
 		}
 		if *port != 0 {
@@ -349,14 +363,18 @@ func main() {
 		shutdown()
 	}()
 	fmt.Printf("\n  %s %s is running.\n\n  On this computer:  %s\n", app.AppName, version, local)
-	if *host == "0.0.0.0" {
+	if app.WildcardHost(listenHost) {
 		for _, a := range app.LANAddrs() {
 			fmt.Printf("  On your phone:     http://%s:%d\n", a, srv.Port)
 		}
 	}
 	if native {
 		srv.Shell = "native"
-		go func() { log.Fatal(http.Serve(ln, srv.Handler())) }()
+		go func() {
+			if err := srv.ServeLoop(); err != nil {
+				log.Fatal(err)
+			}
+		}()
 		if runNative(shellOpts{URL: local + "/?shell=" + runtime.GOOS, Origin: local, Hidden: *hidden, Srv: srv, Quit: shutdown,
 			Name: app.AppName, Tagline: app.Tagline, Version: version, Dir: *dir}) {
 			return
@@ -375,5 +393,7 @@ func main() {
 	if !*noOpen && (*remote == "" || private) {
 		go func() { time.Sleep(400 * time.Millisecond); openBrowser(local) }()
 	}
-	log.Fatal(http.Serve(ln, srv.Handler()))
+	if err := srv.ServeLoop(); err != nil {
+		log.Fatal(err)
+	}
 }

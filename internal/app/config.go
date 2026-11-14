@@ -64,6 +64,13 @@ type ConfigData struct {
 	Security SecuritySettings `json:"security,omitempty"`
 	Privacy  PrivacySettings  `json:"privacy,omitempty"`
 	Fun      FunSettings      `json:"fun,omitempty"`
+	// AllowWifi: phones on the same Wi-Fi can open HashWatch (bind 0.0.0.0).
+	// nil in a brand-new file means off (listen on 127.0.0.1). An existing
+	// settings file that never had this field keeps it on, matching the old default.
+	AllowWifi *bool `json:"allow_wifi,omitempty"`
+	// Gentle slows miner polling to 30 s so another dashboard can share the API.
+	// Off by default. Failed-read backoff is unchanged (never faster than the interval).
+	Gentle bool `json:"gentle,omitempty"`
 	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
 	Locations   []Location   `json:"locations,omitempty"`
 	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"
@@ -92,11 +99,29 @@ func LoadConfig(dir string) (*Config, error) {
 		return nil, err
 	}
 	c := &Config{path: filepath.Join(dir, "config.json")}
+	existed, hadWifi := false, false
 	if b, err := os.ReadFile(c.path); err == nil {
+		existed = true
 		_ = json.Unmarshal(b, &c.ConfigData)
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(b, &raw) == nil {
+			_, hadWifi = raw["allow_wifi"]
+		}
+	}
+	if !hadWifi {
+		// Upgrade: keep the previous "reachable on Wi-Fi" default. New install: off.
+		v := existed
+		c.AllowWifi = &v
 	}
 	c.Version = ConfigVersion
 	return c, nil
+}
+
+// WifiOn reports whether phones on the same Wi-Fi may reach HashWatch.
+func (c *Config) WifiOn() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.AllowWifi != nil && *c.AllowWifi
 }
 
 func (c *Config) Save() error {

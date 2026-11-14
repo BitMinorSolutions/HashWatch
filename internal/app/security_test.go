@@ -146,6 +146,7 @@ func TestViewOnlyRole(t *testing.T) {
 		{"POST", "/api/control/led", `{"miner":"m","mode":"fixed","color":"#ff0000","brightness":50}`},
 		{"POST", "/api/features", `{"miner":"m","fun":{"summary":"off"}}`},
 		{"POST", "/api/features", `{"miner":"m","failover":{"on":true,"dead_min":5}}`},
+		{"POST", "/api/prefs", `{"allow_wifi":true,"gentle":true}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/sessions/revoke", `{}`},
 		{"GET", "/api/remote", ""},

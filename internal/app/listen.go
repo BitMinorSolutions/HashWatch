@@ -16,6 +16,32 @@ const AppID = "app.hashwatch.server"
 // Copies before 0.5.1 used 8787 (8813 for the private preview); those values are not reused.
 const DefaultPort = 48412
 
+// ListenHost is the bind address for the web server: loopback only, or every
+// interface when phones on Wi-Fi are allowed.
+func ListenHost(allowWifi bool) string {
+	if allowWifi {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
+// WildcardHost reports whether host is an "all interfaces" bind address.
+func WildcardHost(host string) bool {
+	return host == "" || host == "0.0.0.0" || host == "::"
+}
+
+// ResolveListenHost picks the bind address. An explicit --host wins; a private
+// preview is always loopback; otherwise the Allow phones on Wi-Fi setting is used.
+func ResolveListenHost(explicit string, allowWifi, preview bool) string {
+	if preview {
+		return "127.0.0.1"
+	}
+	if explicit != "" {
+		return explicit
+	}
+	return ListenHost(allowWifi)
+}
+
 // legacyPorts are defaults of older versions: a saved port in this range is ignored on upgrade.
 func legacyPort(p int) bool { return (p >= 8787 && p < 8807) || (p >= 8813 && p < 8833) }
 

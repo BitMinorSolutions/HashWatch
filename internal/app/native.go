@@ -108,7 +108,7 @@ func (s *Server) SetRemote(on bool) error {
 func (s *Server) debug(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s (%s/%s, %s)\nos: %s\n", AppName, s.Version, runtime.GOOS, runtime.GOARCH, runtime.Version(), osVersion())
-	fmt.Fprintf(&b, "time: %s\npreview: %v  port: %d  lan: %v  poll: %v\n", time.Now().Format(time.RFC3339), s.Locked, s.Port, s.LANOK, s.Poll.Every)
+	fmt.Fprintf(&b, "time: %s\npreview: %v  port: %d  lan: %v  wifi: %v  gentle: %v  poll: %v\n", time.Now().Format(time.RFC3339), s.Locked, s.Port, s.LANOK, s.Cfg.WifiOn(), s.Cfg.Gentle, s.Poll.Every)
 	fmt.Fprintf(&b, "password set: %v  shell: %s\n", s.Cfg.PasswordHash != "", s.Shell)
 	for _, m := range s.Cfg.Miners {
 		v, _ := s.Poll.Live(m.ID, 1<<62)

@@ -178,7 +178,8 @@ function viewSetup() {
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
     <form class="panel" id="s-form" autocomplete="off">${minerForm("s")}</form>
-    <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p></div></div>`;
+    <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p>
+    <p class="fine">If another dashboard is already reading this miner, turn on Gentle mode in Settings after you connect.</p></div></div>`;
   wireMinerForm("s", async () => boot());
 }
 
@@ -844,7 +845,7 @@ VIEWS.settings = {
             ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : ""}
             <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
             <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
-        ${(st.lan_urls || []).length ? `<section class="panel panel-pad">${setH("smartphone", "On your Wi-Fi", "Open this on a phone on the same network:")}${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></section>` : ""}
+        <section class="panel panel-pad" id="accessSet"><div class="sk" style="height:120px"></div></section>
         <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change in Controls on the dashboard. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
           ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
           <button class="btn ghost block" id="dbg" style="margin-top:16px">${ic("copy", "sm")}Copy debug info</button>
@@ -874,7 +875,7 @@ VIEWS.settings = {
       root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
         <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
     };
-    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); loadFeatures();
+    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); accessUI(); loadFeatures();
     const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $({ alerts: "#alertsSet", remote: "#remoteSet", auto: "#autoFeat", security: "#secSet" }[q] || null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
   },
 };
@@ -1276,6 +1277,41 @@ function autoSetUI() {
   rulesEl.oninput = (e) => { const r = e.target.closest(".rule"); if (r && e.target.dataset.k) S.rules[+r.dataset.i][e.target.dataset.k] = e.target.value; };
   tog("addRule", () => { S.rules.push({ days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00", mode: "high" }); autoSetUI(); });
   tog("saveSched", () => put({ schedule: sched(sc.on) }, "Schedule saved"));
+}
+
+/* ---------------- settings: Wi-Fi access + gentle polling ---------------- */
+function accessUI() {
+  const el = $("#accessSet"); if (!el) return;
+  const st = S.state, locked = st.locked || isView();
+  const wifi = !!st.allow_wifi, gentle = !!st.gentle, poll = st.poll_seconds || (gentle ? 30 : 5);
+  const urls = st.lan_urls || [];
+  el.innerHTML = setH("smartphone", "This computer", "How phones reach this dashboard, and how often the miner is read.") +
+    `<div class="toggles">
+      <div class="tg-row"><div class="tg-ic">${ic("smartphone", "sm")}</div><div class="tg-t"><b>Allow phones on Wi-Fi</b><span>Let phones on your Wi-Fi open ${esc(APP)}. Off, only this computer can. Remote access through your Cloudflare link still works.</span></div>${sw("wifiSw", wifi, locked, "Allow phones on Wi-Fi")}</div>
+    </div>
+    ${wifi && urls.length ? urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("") + `<p class="fine" style="margin-top:6px">Then Share → Add to Home Screen.</p>` : ""}
+    <div class="toggles" style="margin-top:8px">
+      <div class="tg-row"><div class="tg-ic">${ic("timer", "sm")}</div><div class="tg-t"><b>Gentle mode</b><span>Poll the miner every 30 seconds instead of 5, so it stays friendly if another dashboard (like a Pi) is also reading it.</span></div>${sw("gentleSw", gentle, locked, "Gentle mode")}</div>
+    </div>
+    <div class="set-meta">${ic("info", "sm")}<span>Currently reading the miner every ${poll}s${gentle ? " · gentle mode is on" : ""}.</span></div>`;
+  const tog = async (body, okMsg) => {
+    try {
+      const r = await api("/api/prefs", { method: "POST", body });
+      if (r.rebinding) {
+        await new Promise(ok => setTimeout(ok, 400));
+        try { S.state = await api("/api/state"); } catch (e) {
+          await new Promise(ok => setTimeout(ok, 800));
+          S.state = await api("/api/state");
+        }
+      } else {
+        S.state = Object.assign(S.state, { allow_wifi: r.allow_wifi, gentle: r.gentle, lan_urls: r.lan_urls, poll_seconds: r.poll_seconds });
+      }
+      toast(okMsg);
+    } catch (e) { toast(e.message, "bad"); }
+    accessUI();
+  };
+  const ws = $("#wifiSw"); if (ws) ws.onclick = () => tog({ allow_wifi: !wifi }, wifi ? "Phones on Wi-Fi can no longer connect" : "Phones on your Wi-Fi can open " + APP);
+  const gs = $("#gentleSw"); if (gs) gs.onclick = () => tog({ gentle: !gentle }, gentle ? "Polling every 5 seconds again" : "Gentle mode on · polling every 30 seconds");
 }
 
 /* ---------------- settings: lottery extras + privacy ---------------- */

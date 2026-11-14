@@ -19,6 +19,9 @@ import (
 // DefaultPoll is the one poll interval for every source (direct port 4028 and remote preview).
 const DefaultPoll = 5 * time.Second
 
+// GentlePoll is used when Gentle mode is on, so another dashboard can share the miner's API.
+const GentlePoll = 30 * time.Second
+
 // Backoff after failed fetches: first failure waits 15 s, then 30 s, until one succeeds.
 var backoff = []time.Duration{15 * time.Second, 30 * time.Second}
 
@@ -49,6 +52,8 @@ type minerState struct {
 
 type Poller struct {
 	Every time.Duration
+	// Base is the interval with Gentle mode off (the --poll value, default 5 s).
+	Base time.Duration
 	// OnPoll is called after every poll (outside the lock) with the last hour of history.
 	OnPoll func(id, name string, snap *model.Snapshot, lastHour []model.Sample)
 	dir    string
@@ -57,7 +62,7 @@ type Poller struct {
 }
 
 func NewPoller(dir string, every time.Duration) *Poller {
-	p := &Poller{Every: every, dir: dir, m: map[string]*minerState{}}
+	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}}
 	go func() {
 		for range time.Tick(time.Minute) {
 			p.saveHistory()
@@ -113,6 +118,18 @@ func (p *Poller) Stop(id string) {
 		close(st.stop)
 		delete(p.m, id)
 		os.Remove(p.histFile(id))
+	}
+}
+
+// SetGentle turns Gentle mode on or off. On means poll every GentlePoll (or Base
+// if that is already slower). Backoff stays "never faster than the current interval".
+func (p *Poller) SetGentle(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if on {
+		p.Every = max(GentlePoll, p.Base)
+	} else {
+		p.Every = p.Base
 	}
 }
 
