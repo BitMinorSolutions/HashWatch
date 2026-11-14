@@ -9,12 +9,17 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 - Pools, shares, rejects, stale, hardware-error rate, best share, network drops
 - Health warnings (over target temperature, high hardware-error rate, no active pool, PSU fault…)
 - Controls: work speed (Low / Medium / High) and the miner light (colour, brightness, Off / Steady / Flash / Pulse / Loop)
+- **Alerts** for block found, miner offline / back online, hashrate drops, overheating and pool
+  disconnects, as desktop notifications and inside the app (with a celebration when you find a block)
+- **Remote access** (optional, off by default): a private https link through Cloudflare, with a QR code for your phone
+- **Start automatically** when your computer starts, quietly in the background
 - Multiple miners, network auto-discovery, optional password
 - Works great on iPhone, Android, iPad and desktop. Add it to your home screen as an app.
 
 Hashwatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
 For stats it only sends read commands (`summary`, `estats`/`stats`, `pools`, `devs`, `version`).
-It changes something only when you use the Controls panel and confirm. Your data never leaves your network.
+It changes something only when you use the Controls panel and confirm. Your data stays on your
+network, unless you turn on Remote access (see below).
 
 ## Controls
 
@@ -38,6 +43,84 @@ reboot, pool, fan or standby commands.
 - Some community reports say older Nano 3 firmware ignores `workmode`. If the miner replies with
   an error, or the speed doesn't change, use the Avalon app instead.
 
+## Alerts
+
+Hashwatch watches every miner on each poll (every 15 seconds) and raises an alert when:
+
+| Alert | When |
+| --- | --- |
+| Block found | the miner's **Found Blocks** counter goes up |
+| Offline / back online | the miner doesn't answer for about 30 seconds, and when it answers again |
+| Hashrate drop | the 5-minute hashrate stays more than 30% below its 1-hour average for 10 minutes (needs 30 minutes of history first) |
+| Running hot | the max chip temperature stays above the miner's own target for 5 minutes |
+| Pool disconnected | no pool is connected for two polls in a row, and when it reconnects |
+| Remote link changed | the remote-access link changes |
+
+Each alert shows up three ways: a native notification on the computer running Hashwatch
+(macOS Notification Center, Windows notifications, or `notify-send` on Linux), a toast in any open
+Hashwatch window, and the **Alerts** page, which keeps the last 300. A block find also gets a banner
+on every page until you dismiss it. Turn each alert type, and desktop notifications, on or off under
+**Settings → Alerts**. There's also a **Send a test alert** button there.
+
+Notes:
+- Alerts are raised by the Hashwatch app, so it has to be running (turn on **Start automatically**).
+  Your phone gets them when you open Hashwatch. There's no push to a closed phone app.
+- On Linux, desktop notifications need `notify-send` (package `libnotify-bin`) or `gdbus`.
+- On macOS the first notification may ask for permission (it comes from "Script Editor"/osascript).
+- Alerts only read data. They never send anything to the miner.
+
+## Remote access (optional)
+
+**Settings → Remote access** gives you an `https://….trycloudflare.com` link to your dashboard that
+works anywhere, like on mobile data, without router changes or port forwarding.
+
+- It's **off by default** and needs a **password**. If you don't have one, Hashwatch asks you to
+  create one before switching it on. Anyone who opens the link must sign in.
+- Changing miners, the password, remote access or auto-start is only allowed **from your home network**,
+  never through the link. Controls (work speed, light) work through the link once you're signed in.
+- The first time, Hashwatch downloads Cloudflare's official `cloudflared` for your system from
+  [Cloudflare's GitHub releases](https://github.com/cloudflare/cloudflared/releases). It checks the
+  file against the SHA-256 Cloudflare publishes for that release (and GitHub's own digest), then keeps
+  it in the settings folder (`…/Hashwatch/cloudflared/`). It's 20–40 MB, so the Hashwatch zips stay small.
+- Hashwatch watches the tunnel and restarts it if it stops or loses its connection. Remote access
+  stays on across restarts.
+- Scan the QR code with your phone, sign in, then in Safari tap **Share → Add to Home Screen**.
+
+### The link can change
+
+The free "quick tunnel" link is **new every time cloudflared starts**: when Hashwatch or the computer
+restarts, or after a long connection drop. To make that easy to live with:
+
+1. Turn on **Start automatically** so Hashwatch (and its link) restarts as rarely as possible.
+2. When the link changes you get a **"New remote link" alert**, and the **Remote link** card on
+   the Overview (shown on your home network) says **New link · re-scan**. Scan it again and replace the
+   old Home Screen icon. Each browser remembers the last link it saw, so it knows when it's new.
+3. For a link that **never** changes, use your own (free) Cloudflare account: in Cloudflare Zero Trust
+   → Networks → Tunnels, create a tunnel, add a public hostname (e.g. `miner.example.com`) that points
+   to `http://localhost:8787`, then paste the **tunnel token** and hostname under
+   **Settings → Remote access → Permanent link**.
+
+Remote access needs outbound internet access to Cloudflare (UDP/TCP port 7844). Some work or
+school networks block it.
+
+## Start automatically
+
+**Settings → Start automatically** starts Hashwatch in the background when you log in, with
+no window and no browser tab:
+
+- **macOS**: a LaunchAgent (`~/Library/LaunchAgents/com.hashwatch.agent.plist`), effective from your next login.
+  Logs go to `~/Library/Application Support/Hashwatch/hashwatch.log`.
+- **Windows**: a Startup entry (`HKCU\…\CurrentVersion\Run`) that runs Hashwatch through a hidden launcher.
+- **Linux**: a systemd user service (`~/.config/systemd/user/hashwatch.service`), or a desktop autostart
+  entry if your system has no user systemd. On a headless Raspberry Pi also run
+  `loginctl enable-linger $USER` so it starts without logging in.
+
+Put Hashwatch somewhere permanent first (e.g. Applications or your home folder, not Downloads),
+because the entry points at the file's location. Turn the switch off to remove it.
+
+To open Hashwatch, just run it again. If a copy is already running (for the same settings folder),
+it opens your browser to that copy instead of starting a second one.
+
 ## Run it
 
 1. Download the zip for your computer from the Releases page and unzip it.
@@ -46,7 +129,7 @@ reboot, pool, fan or standby commands.
 3. Enter your miner's IP address (or tap **Scan my network**). That's it.
 
 Keep the window open while you use it; close it to stop Hashwatch.
-To watch from your phone, open the address shown under **Settings → Open on your phone**
+To watch from your phone, open the address shown under **Settings → On your Wi-Fi**
 (for example `http://192.168.1.20:8787`) while on the same Wi-Fi, then **Share → Add to Home Screen**.
 
 ### macOS: "cannot be opened because the developer cannot be verified"
@@ -80,6 +163,7 @@ Settings live in your user config folder (`~/Library/Application Support/Hashwat
 
 **Security note:** by default Hashwatch is reachable by devices on your local network so your phone
 can use it. Set a password in Settings if you share your network. Don't port-forward it to the internet.
+Use Remote access instead, which is password-protected and served over https by Cloudflare.
 
 ### The miner isn't found
 - Make sure the computer and the miner are on the same network.
@@ -95,7 +179,9 @@ go test ./...
 go run ./cmd/hashwatch
 go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4028
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
-./scripts/build.sh v0.1.0   # cross-compiles every platform into dist/
+go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
+                                                #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
+./scripts/build.sh v0.4.0   # cross-compiles every platform into dist/
 ```
 
 Layout:
@@ -105,7 +191,11 @@ cmd/hashwatch/      entry point (flags, browser launch)
 internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)
-internal/app/       config, polling + history, discovery, HTTP API, optional password
+internal/app/       config, polling + history, discovery, HTTP API, password, alerts, single-instance
+internal/tunnel/    remote access: cloudflared download + checksum check, run, watch, restart
+internal/qr/        small QR code encoder (SVG), so the link QR is made locally
+internal/notify/    native desktop notifications (macOS / Windows / Linux)
+internal/autostart/ start at login (LaunchAgent / Run key / systemd user service)
 internal/model/     the snapshot model shared by sources and UI
 web/static/         the dashboard (vanilla JS, uPlot, Geist fonts) embedded into the binary
 ```
@@ -114,5 +204,6 @@ To rename the app, change `AppName` in `internal/app/config.go`.
 
 ## License
 
-MIT. uPlot is MIT (© Leon Sorokin). Geist fonts are SIL OFL 1.1 (© Vercel).
+MIT. uPlot is MIT (© Leon Sorokin). Geist fonts are SIL OFL 1.1 (© Vercel). Lucide icons are ISC.
+cloudflared (downloaded only if you turn on Remote access) is Apache 2.0 (© Cloudflare) and isn't bundled.
 Not affiliated with Canaan / Avalon.

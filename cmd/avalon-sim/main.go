@@ -11,11 +11,18 @@ import (
 func main() {
 	addr := flag.String("listen", "127.0.0.1:4028", "address to listen on")
 	led := flag.Bool("report-led", false, "report LEDUser[] like the Nano 3S")
+	admin := flag.String("admin", "", "optional test-control address, e.g. 127.0.0.1:14029 (GET /block, /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6)")
 	flag.Parse()
 	m := sim.New()
 	m.ReportLED = *led
 	if _, err := m.Listen(*addr); err != nil {
 		log.Fatal(err)
+	}
+	if *admin != "" {
+		if err := m.Admin(*admin); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("test controls on http://%s", *admin)
 	}
 	log.Printf("simulated Avalon Nano 3 on %s", *addr)
 	select {}

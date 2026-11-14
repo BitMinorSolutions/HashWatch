@@ -12,9 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/cgminer"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/source"
+	"github.com/hashwatch/hashwatch/internal/tunnel"
 )
 
 type Server struct {
@@ -25,6 +27,11 @@ type Server struct {
 	Version string
 	Port    int
 	LANOK   bool // listening on all interfaces, so phone URLs work
+
+	Tunnel     *tunnel.Manager // nil when remote access isn't possible (preview)
+	Alerts     *Alerts
+	Auto       autostart.Spec
+	InstanceID string
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -43,10 +50,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/live", s.auth(s.live))
-	mux.HandleFunc("POST /api/miners", s.auth(s.mutating(s.addMiner)))
-	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.mutating(s.delMiner)))
-	mux.HandleFunc("POST /api/discover", s.auth(s.mutating(s.discover)))
-	mux.HandleFunc("POST /api/password", s.auth(s.mutating(s.password)))
+	mux.HandleFunc("GET /api/ping", s.ping)
+	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
+	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
+	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
+	mux.HandleFunc("POST /api/password", s.auth(s.admin(s.password)))
+	mux.HandleFunc("GET /api/remote", s.auth(s.remoteGet))
+	mux.HandleFunc("GET /api/remote/qr.svg", s.auth(s.remoteQR))
+	mux.HandleFunc("POST /api/remote", s.admin(s.remoteSet)) // checks auth itself (may create the password)
+	mux.HandleFunc("POST /api/autostart", s.auth(s.admin(s.autostartSet)))
+	mux.HandleFunc("GET /api/alerts", s.auth(s.alertsGet))
+	mux.HandleFunc("POST /api/alerts/settings", s.auth(s.mutating(s.alertsSet)))
+	mux.HandleFunc("POST /api/alerts/clear", s.auth(s.mutating(s.alertsClear)))
+	mux.HandleFunc("POST /api/alerts/test", s.auth(s.mutating(s.alertsTest)))
 	mux.HandleFunc("POST /api/control/workmode", s.auth(s.mutating(s.ctlWorkmode)))
 	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
 	return secHeaders(mux)
@@ -141,12 +157,51 @@ func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func clientIP(r *http.Request) string {
-	if ip := r.Header.Get("Cf-Connecting-Ip"); ip != "" {
-		return ip
-	}
+func peerIP(r *http.Request) net.IP {
 	h, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return h
+	return net.ParseIP(h)
+}
+
+// clientIP is the visitor's address; behind the tunnel that is Cloudflare's
+// Cf-Connecting-Ip, trusted only when the request arrived from loopback.
+func clientIP(r *http.Request) string {
+	ip := peerIP(r)
+	if ip != nil && ip.IsLoopback() {
+		if c := r.Header.Get("Cf-Connecting-Ip"); c != "" {
+			return c
+		}
+	}
+	if ip == nil {
+		return r.RemoteAddr
+	}
+	return ip.String()
+}
+
+// viaTunnel is true for requests that came through Cloudflare. Cloudflare
+// always adds these headers, so a remote visitor can't strip them.
+func viaTunnel(r *http.Request) bool {
+	return r.Header.Get("Cf-Ray") != "" || r.Header.Get("Cf-Connecting-Ip") != "" || r.Header.Get("Cf-Visitor") != ""
+}
+
+// IsLocal: the visitor is on this computer or the home network, not the tunnel.
+func IsLocal(r *http.Request) bool {
+	if viaTunnel(r) {
+		return false
+	}
+	ip := peerIP(r)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+}
+
+// admin guards settings that should only change from the home network
+// (miners, password, remote access, auto-start).
+func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
+	return s.mutating(func(w http.ResponseWriter, r *http.Request) {
+		if !IsLocal(r) {
+			writeJSON(w, 403, map[string]string{"error": "For safety, this can only be changed from your home network."})
+			return
+		}
+		h(w, r)
+	})
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +222,8 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out["lan_urls"] = lan
+		out["local_viewer"] = IsLocal(r)
+		out["remote"] = s.remoteBrief()
 	}
 	writeJSON(w, 200, out)
 }
@@ -230,8 +287,15 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "unknown miner"})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
-		"last_err": v.LastErr, "history": v.History, "can_control": s.canControl(id)})
+	out := map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
+		"last_err": v.LastErr, "history": v.History, "can_control": s.canControl(id),
+		"remote": s.remoteBrief(), "local_viewer": IsLocal(r)}
+	if s.Alerts != nil {
+		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
+		items, latest := s.Alerts.Since(a, 20)
+		out["alerts"], out["alerts_latest"] = items, latest
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) addMiner(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +361,10 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
 	if s.Cfg.PasswordHash != "" && !s.Cfg.CheckPassword(b.Current) {
 		writeJSON(w, 401, map[string]string{"error": "Current password is incorrect."})
+		return
+	}
+	if b.New == "" && s.Cfg.Remote.Enabled {
+		writeJSON(w, 409, map[string]string{"error": "Turn off remote access before removing the password."})
 		return
 	}
 	if b.New != "" && len(b.New) < 6 {

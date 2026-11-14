@@ -24,6 +24,7 @@ type minerState struct {
 	LastErr string          `json:"last_err"`
 	History []model.Sample  `json:"history"`
 	src     source.Source
+	name    string
 	stop    chan struct{}
 	ctlMu   sync.Mutex // one control command at a time per miner
 	lastCtl time.Time
@@ -32,9 +33,11 @@ type minerState struct {
 
 type Poller struct {
 	Every time.Duration
-	dir   string
-	mu    sync.RWMutex
-	m     map[string]*minerState
+	// OnPoll is called after every poll (outside the lock) with the last hour of history.
+	OnPoll func(id, name string, snap *model.Snapshot, lastHour []model.Sample)
+	dir    string
+	mu     sync.RWMutex
+	m      map[string]*minerState
 }
 
 func NewPoller(dir string, every time.Duration) *Poller {
@@ -61,7 +64,7 @@ func srcFor(m Miner) source.Source {
 func (p *Poller) histFile(id string) string { return filepath.Join(p.dir, "history-"+id+".json") }
 
 func (p *Poller) Start(m Miner) {
-	st := &minerState{src: srcFor(m), stop: make(chan struct{})}
+	st := &minerState{src: srcFor(m), name: m.Name, stop: make(chan struct{})}
 	if b, err := os.ReadFile(p.histFile(m.ID)); err == nil {
 		_ = json.Unmarshal(b, &st.History)
 	}
@@ -98,6 +101,22 @@ func (p *Poller) Stop(id string) {
 
 func (p *Poller) pollOnce(id string, st *minerState) {
 	snap := st.src.Fetch()
+	p.record(id, st, snap)
+	if p.OnPoll != nil {
+		p.mu.RLock()
+		var hr []model.Sample
+		cut := time.Now().Unix() - 3700
+		for _, h := range st.History {
+			if h.T >= cut {
+				hr = append(hr, h)
+			}
+		}
+		p.mu.RUnlock()
+		p.OnPoll(id, st.name, snap, hr)
+	}
+}
+
+func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c, m := snap.Control, st.ledMemo; c != nil && m != nil && c.LEDHex == "" {
@@ -141,6 +160,9 @@ func (p *Poller) Live(id string, since int64) (LiveView, bool) {
 	}
 	return v, true
 }
+
+// SaveNow writes history to disk (used on shutdown).
+func (p *Poller) SaveNow() { p.saveHistory() }
 
 func (p *Poller) saveHistory() {
 	p.mu.RLock()

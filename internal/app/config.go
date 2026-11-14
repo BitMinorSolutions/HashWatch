@@ -27,10 +27,21 @@ type Miner struct {
 	RemotePass string `json:"-"`
 }
 
+// RemoteSettings is the built-in remote access (Cloudflare tunnel) setup.
+type RemoteSettings struct {
+	Enabled  bool   `json:"enabled"`
+	Token    string `json:"token,omitempty"`    // optional named-tunnel token (permanent link)
+	Hostname string `json:"hostname,omitempty"` // hostname that token routes to
+	LastURL  string `json:"last_url,omitempty"`
+}
+
 type Config struct {
-	Miners       []Miner `json:"miners"`
-	PasswordHash string  `json:"password_hash,omitempty"`
-	PasswordSalt string  `json:"password_salt,omitempty"`
+	Miners       []Miner         `json:"miners"`
+	PasswordHash string          `json:"password_hash,omitempty"`
+	PasswordSalt string          `json:"password_salt,omitempty"`
+	Remote       RemoteSettings  `json:"remote"`
+	AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
+	NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
 
 	path string
 	mu   sync.Mutex
@@ -65,16 +76,26 @@ func (c *Config) Save() error {
 		}
 	}
 	out := struct {
-		Miners       []Miner `json:"miners"`
-		PasswordHash string  `json:"password_hash,omitempty"`
-		PasswordSalt string  `json:"password_salt,omitempty"`
-	}{saved, c.PasswordHash, c.PasswordSalt}
+		Miners       []Miner         `json:"miners"`
+		PasswordHash string          `json:"password_hash,omitempty"`
+		PasswordSalt string          `json:"password_salt,omitempty"`
+		Remote       RemoteSettings  `json:"remote"`
+		AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
+		NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
+	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, c.path)
+}
+
+// AlertOn reports whether an alert kind is enabled (all are on by default).
+func (c *Config) AlertOn(kind string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.AlertsOff[kind]
 }
 
 func hashPw(pw, saltHex string) string {

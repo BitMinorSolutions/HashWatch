@@ -1,4 +1,4 @@
-/* Hashwatch v0.3 frontend — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* Hashwatch v0.4 frontend — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "Hashwatch";
@@ -6,7 +6,9 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const root = $("#root");
 const S = { state: null, miner: null, data: null, hist: [], range: 3600, err: null, charts: [], can: false, route: "overview",
-  ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { h5s: false, h15m: true, h5m: true } };
+  ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { h5s: false, h15m: true, h5m: true },
+  alerts: [], alertSeen: 0, kinds: [], desktop: false, desktopOK: false, remote: {}, rem: null };
+const LS = { get: (k, d = "") => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
 
 /* ---------------- utils ---------------- */
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -20,7 +22,10 @@ function rel(unix) { if (!unix) return "—"; const s = Math.max(0, Math.round(D
   if (s < 5) return "just now"; if (s < 60) return s + "s ago"; if (s < 3600) return Math.floor(s / 60) + "m ago";
   if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago"; }
 const absTime = (u) => u ? new Date(u * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-function toast(msg) { const t = $("#toast"); t.innerHTML = ic("circle-check") + esc(msg); t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600); }
+const TONE = { celebrate: ["party-popper", "accent"], good: ["circle-check", "good"], warn: ["triangle-alert", "warn"], bad: ["circle-alert", "bad"], info: ["bell", "info"] };
+function toast(msg, level = "good", sub = "") { const t = $("#toast"), [i, c] = TONE[level] || TONE.good;
+  t.className = "t-" + c; t.innerHTML = ic(i) + `<span><b>${esc(msg)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>`;
+  requestAnimationFrame(() => t.classList.add("on")); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), sub ? 5200 : 2600); }
 async function api(path, opts = {}) {
   const o = { credentials: "same-origin", cache: "no-store", ...opts, headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } };
   if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
@@ -130,7 +135,8 @@ function viewSetup() {
 /* ---------------- shell ---------------- */
 const PAGES = [
   ["overview", "Overview", "layout-dashboard"], ["performance", "Performance", "activity"], ["hardware", "Hardware", "cpu"],
-  ["pools", "Pools", "network"], ["controls", "Controls", "sliders-horizontal"], ["raw", "Raw data", "table"] ];
+  ["pools", "Pools", "network"], ["controls", "Controls", "sliders-horizontal"], ["alerts", "Alerts", "bell"], ["raw", "Raw data", "table"], ["settings", "Settings", "settings"] ];
+const NAV = ["overview", "performance", "hardware", "pools", "controls", "alerts", "raw"];
 const TABS = ["overview", "performance", "hardware", "pools", "controls"];
 function shell() {
   const ms = S.state.miners || [];
@@ -139,10 +145,10 @@ function shell() {
       <div class="brand">${logo}<b>${esc(APP)}</b></div>
       <div class="miner-pick"><div class="btnish"><span class="m-ico">${ic("server", "sm")}</span><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
         ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
-      <nav class="nav">${PAGES.map(([id, n, i], k) => (k === 5 ? '<div class="sep"></div>' : "") + `<a href="#/${id}" data-r="${id}" title="${n}">${ic(i)}<span>${n}</span></a>`).join("")}</nav>
+      <nav class="nav">${NAV.map((id, k) => { const [, n, i] = PAGES.find(p => p[0] === id); return (k === 6 ? '<div class="sep"></div>' : "") + `<a href="#/${id}" data-r="${id}" title="${n}">${ic(i)}<span>${n}</span>${id === "alerts" ? '<em class="badge" data-badge></em>' : ""}</a>`; }).join("")}</nav>
       <div class="side-foot">
         <div class="side-status" id="sideStatus"><span class="dot warn"></span><span>Connecting…</span></div>
-        <div class="nav"><a href="#" id="openSet" title="Settings">${ic("settings")}<span>Settings</span></a></div>
+        <div class="nav"><a href="#/settings" data-r="settings" title="Settings">${ic("settings")}<span>Settings</span></a></div>
       </div>
     </aside>
     <div class="main">
@@ -151,7 +157,8 @@ function shell() {
         <h1 id="pageTitle">Overview</h1><span class="crumb-sub" id="crumbSub"></span>
         <span class="grow desk-only"></span>
         <span class="crumb-sub desk-only" id="liveTop"></span>
-        <button class="icon-btn" id="openSet2" aria-label="Settings">${ic("settings", "sm")}</button>
+        <div class="top-acts"><a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
+        <a class="icon-btn" href="#/settings" aria-label="Settings">${ic("settings", "sm")}</a></div>
       </header>
       <div class="large-title"><h1 id="ltTitle">Overview</h1><div class="lt-sub" id="ltSub"><span class="dot warn"></span>${esc(S.miner.name)}</div></div>
       <main class="content" id="view"></main>
@@ -159,23 +166,22 @@ function shell() {
     <nav class="tabbar">${TABS.map(id => { const p = PAGES.find(x => x[0] === id); return `<a href="#/${id}" data-r="${id}">${ic(p[2])}<span>${p[1]}</span></a>`; }).join("")}</nav>
   </div>`;
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
-  $("#openSet").onclick = (e) => { e.preventDefault(); openSettings(); };
-  $("#openSet2").onclick = openSettings;
-  S.data = null; S.hist = []; S.can = false; S.ctl.init = false;
+  S.data = null; S.hist = []; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {};
   window.onhashchange = route; route();
-  refresh(true);
+  refresh(true); loadAlerts();
   S.timer = setInterval(tick, 1000);
 }
 const onScroll = () => $("#topbar") && $("#topbar").classList.toggle("scrolled", window.scrollY > 24);
 window.addEventListener("scroll", onScroll, { passive: true });
 function route() {
-  const r = (location.hash.replace(/^#\/?/, "") || "overview");
+  const r = (location.hash.replace(/^#\/?/, "").split(/[?#]/)[0] || "overview");
   S.route = PAGES.some(p => p[0] === r) ? r : "overview";
   const p = PAGES.find(x => x[0] === S.route);
   $$(".nav a[data-r], .tabbar a").forEach(a => a.classList.toggle("on", a.dataset.r === S.route || (S.route === "raw" && a.dataset.r === "hardware" && a.closest(".tabbar"))));
   $("#pageTitle").textContent = p[1]; $("#ltTitle").textContent = p[1]; document.title = `${p[1]} · ${APP}`;
   S.charts.forEach(c => c.destroy()); S.charts = [];
-  const v = $("#view"); v.innerHTML = `<div class="view">${VIEWS[S.route].build()}</div>`;
+  const v = $("#view"); v.innerHTML = `<div class="view"><div id="celebrate"></div>${VIEWS[S.route].build()}</div>`;
+  clearTimeout(S.remT); renderCelebrate(); badge();
   window.scrollTo(0, 0); onScroll();
   $$(".seg", v).forEach(seg);
   if (VIEWS[S.route].wire) VIEWS[S.route].wire();
@@ -197,8 +203,9 @@ async function refresh(full) {
   nextIn = (S.state && S.state.poll_seconds) || 15;
   const since = full || !S.hist.length ? 0 : S.hist[S.hist.length - 1].t;
   try {
-    const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}`);
-    S.err = null; S.can = !!r.can_control;
+    const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}&a=${S.alertSeen || 0}`);
+    S.err = null; S.can = !!r.can_control; if (r.remote) { S.remote = r.remote; S.state.local_viewer = r.local_viewer; }
+    newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
     if (r.data) { const first = !S.data; S.data = r.data; update(first); } else if (full) setTimeout(() => refresh(true), 1500);
@@ -301,6 +308,7 @@ VIEWS.overview = {
       <div class="hero-chart reveal" id="chHero"><div class="chart-empty"></div></div>
       <div class="hero-range">${rangeSeg().replace('id="range"', 'id="range2"')}</div>
     </section>
+    <div id="linkCard"></div>
     <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
     <div class="cols">
       <section class="panel panel-pad span-7"><div class="sec-h"><h2>Status</h2><span class="t3" id="stUpd"></span></div><div id="notices"><div class="sk" style="height:48px"></div></div></section>
@@ -330,6 +338,7 @@ VIEWS.overview = {
     $("#stUpd").innerHTML = `Updated <span data-rel="${d.fetched_at_unix || 0}">${rel(d.fetched_at_unix)}</span>`;
     $("#notices").innerHTML = notices();
     const sb = sharesBlock();
+    linkCard();
     $("#mining").innerHTML = sb.html + `<div class="list" style="margin-top:6px">${kv([["Best share", si(sh.best_share)], ["Last share", ap && ap.last_share_unix ? `<span data-rel="${ap.last_share_unix}">${rel(ap.last_share_unix)}</span>` : "—"], ["Block height", ap && ap.block_height ? fmt(ap.block_height) : "—"]])}</div>`;
   },
 };
@@ -556,37 +565,232 @@ VIEWS.raw = {
   },
 };
 
+/* ---------------- alerts ---------------- */
+const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activity", temp: "thermometer", pool: "network", link: "link", test: "bell" };
+async function loadAlerts() {
+  try {
+    const r = await api("/api/alerts");
+    S.alerts = r.items || []; S.kinds = r.kinds || []; S.desktop = r.desktop; S.desktopOK = r.desktop_available;
+    const seen = +LS.get("hw_alert_seen", 0);
+    S.alertSeen = Math.max(seen, r.latest || 0); LS.set("hw_alert_seen", S.alertSeen);
+    if (!LS.get("hw_alert_read")) LS.set("hw_alert_read", r.latest || 0);
+    badge(); renderCelebrate(); if (S.route === "alerts") VIEWS.alerts.update();
+  } catch (e) {}
+}
+function newAlerts(items, latest) {
+  if (!S.alertSeen) return; // first load sets the baseline (loadAlerts)
+  const fresh = items.filter(a => a.id > S.alertSeen && !S.alerts.some(x => x.id === a.id));
+  if (!fresh.length) return;
+  fresh.forEach(a => S.alerts.unshift(a));
+  S.alertSeen = Math.max(S.alertSeen, latest || 0, ...fresh.map(a => a.id)); LS.set("hw_alert_seen", S.alertSeen);
+  const last = fresh[fresh.length - 1];
+  if (last.kind !== "block") toast(last.title, last.level, last.body);
+  badge(); renderCelebrate(); if (S.route === "alerts") VIEWS.alerts.update();
+}
+function badge() {
+  const read = +LS.get("hw_alert_read", 0), n = S.alerts.filter(a => a.id > read && a.kind !== "test").length;
+  $$("[data-badge]").forEach(b => { b.textContent = b.classList.contains("dot-badge") ? "" : (n > 9 ? "9+" : n || ""); b.classList.toggle("on", n > 0); });
+}
+function renderCelebrate() {
+  const el = $("#celebrate"); if (!el) return;
+  const ack = +LS.get("hw_block_ack", 0), b = S.route === "alerts" ? null : S.alerts.find(a => a.kind === "block" && a.id > ack);
+  if (!b) { el.innerHTML = ""; return; }
+  if (el.dataset.id === String(b.id) && el.innerHTML) return;
+  el.dataset.id = b.id;
+  const bits = Array.from({ length: 22 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 7) * .35}s;--r:${(i * 53) % 360}deg;--c:${["#f5a524", "#ffd60a", "#ffc266", "#3ccf8e", "#ffffff"][i % 5]}"></i>`).join("");
+  el.innerHTML = `<section class="celebrate" role="status"><div class="confetti" aria-hidden="true">${bits}</div>
+    <div class="cel-ic">${ic("party-popper")}</div>
+    <div class="cel-txt"><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div><h2>${esc(b.miner_name || "Your miner")} found a block!</h2><p>${esc(b.body)}</p></div>
+    <div class="cel-acts"><a class="btn ghost" href="#/alerts">Details</a><button class="btn accent" id="celOk">Dismiss</button></div></section>`;
+  $("#celOk").onclick = () => { LS.set("hw_block_ack", b.id); el.firstChild.classList.add("out"); setTimeout(renderCelebrate, 260); };
+}
+function dayLabel(t) {
+  const d = new Date(t * 1000), now = new Date(), y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return "Today"; if (d.toDateString() === y.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+VIEWS.alerts = {
+  build: () => `<section class="panel panel-pad"><div class="sec-h"><h2>Alert history <span class="t3" id="alCount"></span></h2>
+      <div style="display:flex;gap:8px"><a class="btn ghost sm" href="#/settings?alerts">${ic("settings", "sm")}Alert settings</a><button class="btn ghost sm" id="alClear">Clear</button></div></div>
+      <div id="alList"><div class="sk" style="height:64px"></div></div></section>`,
+  wire: () => {
+    $("#alClear").onclick = async () => { if (!await confirmDialog("Clear alert history?", "This removes every alert from the list. Alert settings stay the same.", "Clear")) return;
+      try { await api("/api/alerts/clear", { method: "POST", body: {} }); S.alerts = []; VIEWS.alerts.update(); badge(); } catch (e) { toast(e.message, "bad"); } };
+    if (S.state.locked) $("#alClear").disabled = true;
+  },
+  update: () => {
+    const el = $("#alList"); if (!el) return;
+    const top = S.alerts.length ? S.alerts[0].id : 0; LS.set("hw_alert_read", Math.max(+LS.get("hw_alert_read", 0), top)); badge();
+    $("#alCount").textContent = S.alerts.length ? S.alerts.length : "";
+    if (!S.alerts.length) { el.innerHTML = `<div class="empty">${ic("bell")}<b>No alerts yet</b><span>Block finds, offline miners, hashrate drops, heat and pool problems show up here, and as a notification on this computer.</span></div>`; return; }
+    let last = "";
+    el.innerHTML = S.alerts.map(a => { const [, c] = TONE[a.level] || TONE.info, dl = dayLabel(a.t), h = dl !== last ? `<div class="al-day">${esc(dl)}</div>` : ""; last = dl;
+      return h + `<div class="al-row ${a.kind === "block" ? "is-block" : ""}"><div class="al-ic t-${c}">${ic(KIND_ICON[a.kind] || "bell", "sm")}</div>
+        <div class="al-txt"><b>${esc(a.title)}</b><span>${esc(a.body)}</span>${a.url ? `<span class="mono al-url">${esc(a.url)}</span>` : ""}</div>
+        <div class="al-t"><span data-rel="${a.t}">${rel(a.t)}</span><small>${esc(new Date(a.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }))}</small></div></div>`; }).join("");
+  },
+};
+
+/* ---------------- remote link card (overview) ---------------- */
+const qrSrc = (u) => "/api/remote/qr.svg?u=" + encodeURIComponent(u);
+async function copyLink(u, btn) {
+  try { await navigator.clipboard.writeText(u); } catch (e) { const t = document.createElement("textarea"); t.value = u; document.body.append(t); t.select(); document.execCommand("copy"); t.remove(); }
+  toast("Link copied"); if (btn) { const h = btn.innerHTML; btn.innerHTML = ic("check", "sm") + "Copied"; setTimeout(() => btn.innerHTML = h, 1600); }
+}
+function linkCard() {
+  const el = $("#linkCard"); if (!el) return;
+  const r = S.remote || {};
+  if (!r.enabled || !r.url || r.state !== "online" || !S.state.local_viewer) { el.innerHTML = ""; el.dataset.u = ""; return; }
+  const seen = LS.get("hw_seen_link"), changed = !!seen && seen !== r.url;
+  if (!seen) LS.set("hw_seen_link", r.url);
+  const key = r.url + changed; if (el.dataset.u === key) return; el.dataset.u = key;
+  el.innerHTML = `<section class="panel link-card ${changed ? "is-new" : ""}">
+    <a class="lc-qr" href="#/settings?remote" aria-label="Show a larger QR code"><img src="${qrSrc(r.url)}" alt="QR code for your remote link" width="104" height="104"></a>
+    <div class="lc-txt"><div class="lc-k">${ic("globe", "sm")}Remote link ${changed ? '<span class="pill accent">New link · re-scan</span>' : '<span class="pill good"><span class="dot"></span>On</span>'}</div>
+      <div class="lc-url mono">${esc(r.url.replace(/^https:\/\//, ""))}</div>
+      <p>${changed ? "Your link changed since you last saw it. Scan this code again on your phone and replace the old Home Screen icon." : "Scan with your phone's camera, then in Safari tap Share → Add to Home Screen."}</p></div>
+    <div class="lc-acts"><button class="btn ghost" id="lcCopy">${ic("copy", "sm")}Copy</button>${changed ? '<button class="btn accent" id="lcOk">Got it</button>' : ""}</div></section>`;
+  $("#lcCopy").onclick = (e) => copyLink(r.url, e.currentTarget);
+  const ok = $("#lcOk"); if (ok) ok.onclick = () => { LS.set("hw_seen_link", r.url); el.dataset.u = ""; linkCard(); };
+}
+
 /* ---------------- settings ---------------- */
-function openSettings() {
-  const st = S.state, locked = st.locked;
-  const sc = document.createElement("div"); sc.className = "scrim";
-  const sh = document.createElement("aside"); sh.className = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-label", "Settings");
-  sh.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between"><h2>Settings</h2><button class="icon-btn" id="sx" aria-label="Close">${ic("x", "sm")}</button></div>
-    ${locked ? `<div class="banner" style="margin-top:20px">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings are locked.</div></div>` : ""}
-    <h3>Miners</h3><div class="panel">${(st.miners || []).map(m => `<div class="row-kv"><span style="flex-direction:column;align-items:flex-start;gap:0"><b style="color:var(--t1);font-weight:550">${esc(m.name)}</b><span class="mono t3">${m.kind === "remote" ? "preview source" : esc(m.host + ":" + (m.port || 4028))}</span></span>${locked ? "" : `<button class="btn danger" style="height:34px" data-del="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
-    ${locked ? "" : `<h3>Add a miner</h3><form class="panel" id="a-form" style="padding:16px" autocomplete="off">${minerForm("a")}</form>`}
-    <h3>Password</h3>
-    ${locked ? `<p class="t2" style="margin:0">Managed by the preview host.</p>` : `<form id="pwf" class="panel" style="padding:16px">
+const sw = (id, on, dis, label) => `<button class="switch" role="switch" id="${id}" aria-checked="${on ? "true" : "false"}"${dis ? " disabled" : ""} aria-label="${esc(label || "")}"><i></i></button>`;
+const setH = (icn, title, desc, right) => `<div class="set-h"><div class="set-ic">${ic(icn)}</div><div class="set-t"><h2>${title}</h2>${desc ? `<p>${desc}</p>` : ""}</div>${right || ""}</div>`;
+VIEWS.settings = {
+  build: () => {
+    const st = S.state, locked = st.locked;
+    return `${locked ? `<div class="banner">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings, remote access and alert switches are locked here. In your own copy of ${esc(APP)} they all work.</div></div>` : ""}
+    <div class="cols set-cols">
+      <div class="span-7 set-col">
+        <section class="panel panel-pad" id="remoteSet"><div class="sk" style="height:120px"></div></section>
+        <section class="panel panel-pad" id="autoSet"><div class="sk" style="height:56px"></div></section>
+        <section class="panel panel-pad" id="alertsSet"><div class="sk" style="height:220px"></div></section>
+      </div>
+      <div class="span-5 set-col">
+        <section class="panel panel-pad">${setH("server", "Miners", "")}
+          <div class="list">${(st.miners || []).map(m => `<div class="row-kv"><span style="flex-direction:column;align-items:flex-start;gap:0"><b style="color:var(--t1);font-weight:550">${esc(m.name)}</b><span class="mono t3">${m.kind === "remote" ? "preview source" : esc(m.host + ":" + (m.port || 4028))}</span></span>${locked ? "" : `<button class="btn danger sm" data-del="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
+          ${locked ? "" : `<details class="disclose"><summary>${ic("plus", "sm")}Add a miner</summary><form id="a-form" autocomplete="off" style="padding-top:12px">${minerForm("a")}</form></details>`}</section>
+        <section class="panel panel-pad">${setH("lock", "Password", locked ? "Managed by the preview host." : st.auth_required ? "Required to open " + esc(APP) + ", on your network and through remote access." : "Optional on your home network. Required for remote access.")}
+          ${locked ? "" : `<form id="pwf"><input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
+            ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : ""}
+            <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
+            <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
+        ${(st.lan_urls || []).length ? `<section class="panel panel-pad">${setH("smartphone", "On your Wi-Fi", "Open this on a phone on the same network:")}${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></section>` : ""}
+        <section class="panel panel-pad">${setH("info", "About", "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change under Controls. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
+          ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}</section>
+      </div></div>`;
+  },
+  wire: () => {
+    const st = S.state, locked = st.locked;
+    $$("[data-del]").forEach(b => b.onclick = async () => { if (!await confirmDialog("Remove this miner?", "Its chart history is deleted too.", "Remove")) return;
+      try { await api("/api/miners/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "Content-Type": "application/json" } }); boot(); } catch (e) { toast(e.message, "bad"); } });
+    if (!locked) {
+      wireMinerForm("a", async (r) => { LS.set("hw_miner", r.id); boot(); });
+      $("#pwf").onsubmit = async (e) => { e.preventDefault();
+        try { await api("/api/password", { method: "POST", body: { current: ($("#pwc") || {}).value || "", new: $("#pwn").value } }); toast($("#pwn").value ? "Password saved" : "Password removed"); boot(); }
+        catch (er) { $("#pwe").textContent = er.message; } };
+    }
+    const so = $("#so"); if (so) so.onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); boot(); };
+    S.remForm = false; remoteLoad(); alertsSetUI();
+    const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $(q === "alerts" ? "#alertsSet" : q === "remote" ? "#remoteSet" : null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
+  },
+};
+async function remoteLoad() {
+  clearTimeout(S.remT);
+  try { S.rem = await api("/api/remote"); } catch (e) { return; }
+  if (S.route !== "settings") return;
+  remoteUI(); autoUI();
+  const busy = S.rem.status && ["downloading", "starting", "restarting"].includes(S.rem.status.state);
+  S.remT = setTimeout(remoteLoad, busy ? 800 : 5000);
+}
+function remoteUI() {
+  const el = $("#remoteSet"); if (!el) return;
+  const R = S.rem, st = R.status || { state: "off" }, on = R.enabled, can = R.available && R.local_viewer;
+  const pill = !R.available ? '<span class="pill">Off in preview</span>' : !on ? "" : st.state === "online" ? '<span class="pill good"><span class="dot"></span>Online</span>'
+    : st.state === "error" ? '<span class="pill bad">Problem</span>' : '<span class="pill warn"><span class="spin"></span>Connecting</span>';
+  let body = "";
+  if (!R.available) body = `<div class="notice-s">${ic("info", "sm")}<span>${esc(R.note || "Remote access isn't available here.")}</span></div>`;
+  else if (!R.local_viewer) body = `<div class="notice-s">${ic("lock", "sm")}<span>For safety, remote access can only be switched from your home network.</span></div>`;
+  if (R.available && S.remForm && !on) body += `<form class="rp-form" id="rpf"><div class="rp-k">${ic("lock", "sm")}Create a password first</div><p>Anyone who opens your link will need it. Use at least 6 characters.</p>
       <input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
-      ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : `<p class="t2" style="margin:0 0 4px;font-size:13.5px">Optional. Without one, anyone on your Wi-Fi can open ${esc(APP)} and use the controls.</p>`}
-      <label class="f" for="pwn">${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
-      <div class="err" id="pwe"></div><button class="btn ghost block">${st.auth_required ? "Update password" : "Set password"}</button></form>`}
-    ${(st.lan_urls || []).length ? `<h3>Open on your phone</h3><div class="panel" style="padding:14px 16px"><p class="t2" style="margin:0 0 8px;font-size:13.5px">On the same Wi-Fi, open:</p>${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></div>` : ""}
-    <h3>About</h3><p class="t2" style="margin:0;font-size:13.5px">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes settings only when you confirm a change under Controls. Data stays on your network.</p>
-    ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:24px">${ic("log-out", "sm")}Sign out</button>` : ""}`;
-  document.body.append(sc, sh); requestAnimationFrame(() => { sc.classList.add("on"); sh.classList.add("on"); });
-  const close = () => { sc.classList.remove("on"); sh.classList.remove("on"); setTimeout(() => { sc.remove(); sh.remove(); }, 300); };
-  sc.onclick = close; $("#sx", sh).onclick = close;
-  document.addEventListener("keydown", function k(e) { if (e.key === "Escape") { close(); document.removeEventListener("keydown", k); } });
-  $$("[data-del]", sh).forEach(b => b.onclick = async () => { if (!await confirmDialog("Remove this miner?", "Its chart history is deleted too.", "Remove")) return;
-    try { await api("/api/miners/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "Content-Type": "application/json" } }); close(); boot(); } catch (e) { toast(e.message); } });
-  if (!locked) {
-    wireMinerForm("a", async (r) => { localStorage.setItem("hw_miner", r.id); close(); boot(); });
-    $("#pwf", sh).onsubmit = async (e) => { e.preventDefault();
-      try { await api("/api/password", { method: "POST", body: { current: ($("#pwc", sh) || {}).value || "", new: $("#pwn", sh).value } }); toast($("#pwn", sh).value ? "Password saved" : "Password removed"); close(); boot(); }
-      catch (er) { $("#pwe", sh).textContent = er.message; } };
+      <div class="rp-in"><input class="input" id="rp1" type="password" autocomplete="new-password" placeholder="New password" minlength="6" required><input class="input" id="rp2" type="password" autocomplete="new-password" placeholder="Repeat password" minlength="6" required></div>
+      <div class="err" id="rpe"></div><div class="rp-acts"><button type="button" class="btn ghost" id="rpx">Cancel</button><button class="btn accent" id="rpgo">Create password & turn on</button></div></form>`;
+  else if (on && st.state === "downloading") { const p = Math.round((st.progress || 0) * 100);
+    body += `<div class="dl"><div class="dl-k"><span>${esc(st.detail || "Downloading cloudflared…")}</span><b class="num">${p}%</b></div><div class="dl-bar"><i style="width:${p}%"></i></div><p class="fine">One-time download of Cloudflare's official cloudflared (about 20–40 MB), checked against Cloudflare's published SHA-256.</p></div>`; }
+  else if (on && st.state === "online" && st.url) body += `<div class="rl">
+      <div class="rl-qr"><img src="${qrSrc(st.url)}" alt="QR code for your remote link" width="168" height="168"></div>
+      <div class="rl-main"><div class="label">Your link</div><div class="rl-url"><span class="mono">${esc(st.url)}</span></div>
+        <div class="rl-acts"><button class="btn ghost" id="rlCopy">${ic("copy", "sm")}Copy link</button><a class="btn ghost" href="${esc(st.url)}" target="_blank" rel="noopener">${ic("external-link", "sm")}Open</a></div>
+        <ol class="steps"><li><span>Scan the code with your phone's camera.</span></li><li><span>Sign in with your ${esc(APP)} password.</span></li><li><span>In Safari tap Share → <b>Add to Home Screen</b>.</span></li></ol></div></div>
+      <div class="rl-foot">${ic("circle-check", "sm")}<span>Connected through Cloudflare${st.cloudflared ? " · cloudflared " + esc(st.cloudflared) : ""} · since <span data-rel="${st.since}">${rel(st.since)}</span>${st.restarts ? ` · reconnected ${st.restarts}×` : ""}</span></div>
+      ${R.named ? "" : `<div class="notice-s warn">${ic("triangle-alert", "sm")}<span><b>This free link changes</b> when ${esc(APP)} or the computer restarts. You'll get a “New link” alert and the card on Overview will ask you to re-scan. Turn on <b>Start automatically</b> below so restarts are rare, or set up a permanent link.</span></div>`}`;
+  else if (on && st.state === "error") body += `<div class="notice-s bad">${ic("circle-alert", "sm")}<span><b>Couldn't start remote access.</b> ${esc(st.error || "")}</span></div><button class="btn ghost" id="rlRetry" style="margin-top:12px">${ic("refresh-cw", "sm")}Try again</button>`;
+  else if (on) body += `<div class="conn"><span class="spin"></span><span>${esc(st.detail || "Connecting to Cloudflare…")}</span></div>${st.error && st.state === "restarting" ? `<p class="fine">${esc(st.error)}</p>` : ""}`;
+  else if (R.available) body += `<ul class="facts"><li>${ic("lock", "sm")}<span>Password-protected. Settings like this one can only be changed from home.</span></li>
+      <li>${ic("globe", "sm")}<span>Uses a free Cloudflare quick tunnel. No account, no router changes.</span></li>
+      <li>${ic("refresh-cw", "sm")}<span>The free link changes when ${esc(APP)} restarts. ${esc(APP)} shows the new one here and alerts you.</span></li></ul>`;
+  const adv = R.available ? `<details class="disclose" ${R.named ? "open" : ""}><summary>${ic("link", "sm")}Permanent link <span class="t3">· optional, needs a free Cloudflare account</span></summary>
+      <div style="padding-top:12px"><p class="t2" style="margin:0 0 4px;font-size:13px;line-height:1.55">In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel, add a public hostname that points to <span class="mono">http://localhost:${location.port || 80}</span>, then paste the tunnel token and that hostname here. The link then never changes.</p>
+      <label class="f" for="tkT">Tunnel token</label><input class="input mono" id="tkT" type="password" autocomplete="off" placeholder="${R.named ? "•••••••• (saved)" : "eyJhIjoi…"}"${can ? "" : " disabled"}>
+      <label class="f" for="tkH">Hostname</label><input class="input mono" id="tkH" placeholder="miner.example.com" value="${esc(R.hostname || "")}"${can ? "" : " disabled"} autocapitalize="off" spellcheck="false">
+      <div class="err" id="tkE"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn ghost" id="tkS"${can ? "" : " disabled"}>Save</button>${R.named ? `<button class="btn danger" id="tkC"${can ? "" : " disabled"}>Use free link instead</button>` : ""}</div></div></details>` : "";
+  el.innerHTML = setH("globe", `Remote access ${pill}`, `Open ${esc(APP)} from anywhere, like on mobile data, through a private https link. Off by default.`,
+    sw("remSw", on || S.remForm, !can, "Remote access")) + body + adv;
+  const s = $("#remSw"); if (s) s.onclick = remoteToggle;
+  const c = $("#rlCopy"); if (c) c.onclick = (e) => copyLink(st.url, e.currentTarget);
+  const rt = $("#rlRetry"); if (rt) rt.onclick = async () => { await remoteSet({ enabled: false }); await remoteSet({ enabled: true }); };
+  const f = $("#rpf"); if (f) { $("#rp1").focus(); $("#rpx").onclick = () => { S.remForm = false; remoteUI(); };
+    f.onsubmit = async (e) => { e.preventDefault(); const a = $("#rp1").value, b = $("#rp2").value;
+      if (a.length < 6) { $("#rpe").textContent = "Use at least 6 characters."; return; } if (a !== b) { $("#rpe").textContent = "The passwords don't match."; return; }
+      $("#rpgo").disabled = true; try { await remoteSet({ enabled: true, password: a }); S.remForm = false; toast("Password created · remote access starting"); S.state = await api("/api/state"); route(); } catch (er) { $("#rpe").textContent = er.message; $("#rpgo").disabled = false; } }; }
+  const ts = $("#tkS"); if (ts) ts.onclick = async () => { const t = $("#tkT").value.trim(), h = $("#tkH").value.trim();
+    if (!t && !R.named) { $("#tkE").textContent = "Paste the tunnel token."; return; }
+    try { await remoteSet({ enabled: R.enabled, token: t || undefined, hostname: h }); toast("Permanent link saved"); } catch (er) { $("#tkE").textContent = er.message; } };
+  const tc = $("#tkC"); if (tc) tc.onclick = async () => { try { await remoteSet({ enabled: R.enabled, token: "", hostname: "" }); toast("Using the free link"); } catch (er) { $("#tkE").textContent = er.message; } };
+}
+async function remoteSet(body) {
+  const r = await api("/api/remote", { method: "POST", body });
+  await remoteLoad(); return r;
+}
+async function remoteToggle() {
+  const R = S.rem;
+  if (R.enabled) {
+    if (!await confirmDialog("Turn off remote access?", "Your remote link stops working right away. Next time you turn it on you'll get a new link.", "Turn off")) return;
+    try { await remoteSet({ enabled: false }); toast("Remote access is off"); } catch (e) { toast(e.message, "bad"); }
+    return;
   }
-  const so = $("#so", sh); if (so) so.onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); close(); boot(); };
+  if (S.remForm) { S.remForm = false; remoteUI(); return; }
+  if (!R.password_set) { S.remForm = true; remoteUI(); return; }
+  if (!await confirmDialog("Turn on remote access?", `${esc(APP)} will open a private Cloudflare link to this computer. Anyone with the link still needs your password. The first time, ${esc(APP)} downloads Cloudflare's official cloudflared.`, "Turn on")) return;
+  try { await remoteSet({ enabled: true }); } catch (e) { toast(e.message, "bad"); }
+}
+function autoUI() {
+  const el = $("#autoSet"); if (!el) return;
+  const a = S.rem.autostart, locked = S.state.locked;
+  const can = a && a.supported && !locked && S.rem.local_viewer;
+  el.innerHTML = setH("power", "Start automatically", `Start ${esc(APP)} quietly in the background when this computer starts, with no browser window. Fewer restarts also means your remote link changes less often.`,
+    sw("autoSw", a && a.enabled, !can, "Start automatically")) +
+    `<div class="set-meta">${locked ? `${ic("lock", "sm")}<span>Not available in the preview.</span>` : !a ? `${ic("info", "sm")}<span>Not available here.</span>` :
+      `${ic(a.enabled ? "circle-check" : "info", "sm")}<span>${a.enabled ? `On · ${esc(a.method)}` : `Uses a ${esc(a.method)}`}${a.note ? ` · ${esc(a.note)}` : ""}</span>`}</div>
+     <div class="set-meta">${ic("external-link", "sm")}<span>To open it later, just run ${esc(APP)} again. It opens your browser to the copy that's already running.</span></div>`;
+  const s = $("#autoSw"); if (s) s.onclick = async () => { const want = !(a && a.enabled); s.disabled = true;
+    try { const r = await api("/api/autostart", { method: "POST", body: { enabled: want } }); S.rem.autostart = r.autostart; toast(want ? `${APP} will start automatically` : "Auto-start is off"); }
+    catch (e) { toast(e.message, "bad"); } autoUI(); };
+}
+function alertsSetUI() {
+  const el = $("#alertsSet"); if (!el) return;
+  const locked = S.state.locked;
+  el.innerHTML = setH("bell", "Alerts", `${esc(APP)} watches your miners and tells you here and with a notification on this computer. No extra app needed.`) +
+    `<div class="toggles">${S.kinds.map(k => `<div class="tg-row"><div class="tg-ic">${ic(KIND_ICON[k.kind] || "bell", "sm")}</div><div class="tg-t"><b>${esc(k.label)}</b><span>${esc(k.desc)}</span></div>${sw("ak-" + k.kind, k.on, locked, k.label)}</div>`).join("")}
+      <div class="tg-row tg-sep"><div class="tg-ic">${ic("monitor", "sm")}</div><div class="tg-t"><b>Desktop notifications</b><span>${S.desktopOK ? "Native notifications on the computer running " + esc(APP) + "." : "Off in the preview. The preview runs on a server with no screen."}</span></div>${sw("akDesk", S.desktop, locked || !S.desktopOK, "Desktop notifications")}</div></div>
+    <div class="set-foot"><button class="btn ghost" id="akTest"${locked ? " disabled" : ""}>${ic("bell-ring", "sm")}Send a test alert</button><a class="t2 link" href="#/alerts">View history${ic("chevron-right", "sm")}</a></div>`;
+  $$(".tg-row .switch", el).forEach(b => b.onclick = async () => {
+    const on = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", on); b.disabled = true;
+    const body = b.id === "akDesk" ? { desktop: on } : { kinds: { [b.id.slice(3)]: on } };
+    try { const r = await api("/api/alerts/settings", { method: "POST", body }); S.kinds = r.kinds; S.desktop = r.desktop; } catch (e) { toast(e.message, "bad"); }
+    alertsSetUI(); });
+  $("#akTest").onclick = async () => { try { await api("/api/alerts/test", { method: "POST", body: {} }); refresh(false); } catch (e) { toast(e.message, "bad"); } };
 }
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.miner && $("#view")) refresh(false); });
