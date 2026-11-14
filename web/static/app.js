@@ -914,6 +914,7 @@ VIEWS.settings = {
         <section class="panel panel-pad" id="sessSet"><div class="sk" style="height:120px"></div></section>
         <section class="panel panel-pad" id="autoFeat"><div class="sk" style="height:220px"></div></section>
         <section class="panel panel-pad" id="alertsSet"><div class="sk" style="height:220px"></div></section>
+        <section class="panel panel-pad" id="ntfySet"><div class="sk" style="height:220px"></div></section>
       </div>
       <div class="span-5 set-col">
         <section class="panel panel-pad">${setH("server", "Miners", "")}
@@ -957,8 +958,8 @@ VIEWS.settings = {
       root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
         <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
     };
-    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); accessUI(); updateSetUI(); loadFeatures();
-    const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $({ alerts: "#alertsSet", remote: "#remoteSet", auto: "#autoFeat", security: "#secSet" }[q] || null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
+    S.remForm = false; remoteLoad(); alertsSetUI(); ntfyLoad(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); accessUI(); updateSetUI(); loadFeatures();
+    const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $({ alerts: "#alertsSet", ntfy: "#ntfySet", remote: "#remoteSet", auto: "#autoFeat", security: "#secSet" }[q] || null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
   },
 };
 async function remoteLoad() {
@@ -1085,6 +1086,78 @@ function alertsSetUI() {
     try { const r = await api("/api/alerts/settings", { method: "POST", body }); S.kinds = r.kinds; S.desktop = r.desktop; } catch (e) { toast(e.message, "bad"); }
     alertsSetUI(); });
   $("#akTest").onclick = async () => { try { await api("/api/alerts/test", { method: "POST", body: {} }); refresh(false); } catch (e) { toast(e.message, "bad"); } };
+}
+
+async function ntfyLoad() {
+  if (!$("#ntfySet")) return;
+  try { S.ntfy = await api("/api/ntfy"); } catch (e) { return; }
+  ntfyUI();
+}
+function ntfyQR(u) { return "/api/ntfy/qr.svg?u=" + encodeURIComponent(u); }
+function ntfyUI() {
+  const el = $("#ntfySet"); if (!el) return;
+  const N = S.ntfy || {}, locked = S.state.locked, can = !locked;
+  const kinds = N.kinds || [];
+  const sub = N.subscribe_url || "", app = N.app_link || "";
+  const server = N.server || "https://ntfy.sh";
+  el.innerHTML = setH("smartphone", "iPhone & Apple Watch", `Get alerts on your iPhone or Apple Watch through the free ntfy app, even when ${esc(APP)} isn't open. Off by default. The topic is a long random name; an optional access token stays on this computer and is never put in a message.`,
+    sw("ntfySw", !!N.enabled, !can, "iPhone and Apple Watch alerts")) +
+    (sub && N.enabled ? `<div class="rl" style="margin:12px 0 0">
+      <div class="rl-qr"><img src="${ntfyQR(sub)}" alt="QR code to subscribe in the ntfy app" width="168" height="168"></div>
+      <div class="rl-main"><div class="label">Subscribe in the ntfy app</div>
+        <div class="rl-url"><span class="mono">${esc(sub)}</span></div>
+        <div class="rl-acts"><button class="btn ghost" id="ntfyCopy">${ic("copy", "sm")}Copy link</button>
+          <a class="btn ghost" href="${esc(app || sub)}" id="ntfyOpen">${ic("external-link", "sm")}Open in ntfy</a></div>
+        <ol class="steps"><li><span>Install <b>ntfy</b> from the App Store on your iPhone (Apple Watch uses the same app).</span></li>
+          <li><span>Scan this code, or paste the topic link, to subscribe.</span></li>
+          ${N.token_set ? `<li><span>This topic has an access token. Add the same token in ntfy under the subscription's authentication. The token is never shown in a notification.</span></li>` : ""}
+        </ol></div></div>` : `<p class="fine" style="margin:12px 0 0">Turn this on, then scan the QR code in the ntfy iOS app to subscribe. You can use the public server at ntfy.sh or your own.</p>`) +
+    `<label class="f" for="ntfyServer">ntfy server</label><input class="input mono" id="ntfyServer" value="${esc(server)}" ${can ? "" : "disabled"} autocapitalize="off" spellcheck="false">
+    <label class="f" for="ntfyTopic">Topic</label><input class="input mono" id="ntfyTopic" value="${esc(N.topic || "")}" ${can ? "" : "disabled"} autocapitalize="off" spellcheck="false">
+    <label class="f" for="ntfyToken">Access token ${N.token_set ? "(saved · leave blank to keep)" : "(optional)"}</label><input class="input mono" id="ntfyToken" type="password" autocomplete="off" placeholder="${N.token_set ? "•••••••• (saved)" : "optional"}" ${can ? "" : "disabled"}>
+    <div class="err" id="ntfyErr"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn ghost" id="ntfySave"${can ? "" : " disabled"}>Save</button>
+      <button class="btn ghost" id="ntfyNew"${can ? "" : " disabled"}>New topic</button>
+      ${N.token_set ? `<button class="btn ghost" id="ntfyClearTok"${can ? "" : " disabled"}>Remove token</button>` : ""}</div>
+    <div class="toggles" style="margin-top:16px">${kinds.map(k => `<div class="tg-row"><div class="tg-ic">${ic(KIND_ICON[k.kind] || "bell", "sm")}</div><div class="tg-t"><b>${esc(k.label)}</b><span>${esc(k.desc)}</span></div>${sw("nk-" + k.kind, k.on, !can || !N.enabled, k.label)}</div>`).join("")}</div>
+    <div class="set-foot"><button class="btn ghost" id="ntfyTest"${!can || !N.enabled ? " disabled" : ""}>${ic("bell-ring", "sm")}Send test</button></div>`;
+  const swOn = $("#ntfySw"); if (swOn) swOn.onclick = async () => {
+    swOn.disabled = true;
+    try { S.ntfy = await api("/api/ntfy", { method: "POST", body: { enabled: !N.enabled, server: ($("#ntfyServer") || {}).value } }); toast(!N.enabled ? "iPhone alerts are on. Subscribe with the QR code." : "iPhone alerts are off"); }
+    catch (e) { toast(e.message, "bad"); }
+    ntfyUI();
+  };
+  const save = $("#ntfySave"); if (save) save.onclick = async () => {
+    const token = ($("#ntfyToken") || {}).value || "";
+    const body = { server: ($("#ntfyServer") || {}).value, topic: ($("#ntfyTopic") || {}).value };
+    if (token) body.token = token;
+    save.disabled = true;
+    try { S.ntfy = await api("/api/ntfy", { method: "POST", body }); toast("Saved"); ntfyUI(); }
+    catch (e) { $("#ntfyErr").textContent = e.message; save.disabled = false; }
+  };
+  const neu = $("#ntfyNew"); if (neu) neu.onclick = async () => {
+    if (!await confirmDialog("Generate a new topic?", "The old topic stops getting alerts. You'll need to subscribe again in the ntfy app with the new QR code.", "New topic")) return;
+    try { S.ntfy = await api("/api/ntfy", { method: "POST", body: { new_topic: true } }); toast("New topic ready · re-subscribe in ntfy"); ntfyUI(); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  const ct = $("#ntfyClearTok"); if (ct) ct.onclick = async () => {
+    try { S.ntfy = await api("/api/ntfy", { method: "POST", body: { clear_token: true } }); toast("Access token removed"); ntfyUI(); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  const copy = $("#ntfyCopy"); if (copy) copy.onclick = (e) => copyLink(sub, e.currentTarget);
+  $$(".tg-row .switch", el).forEach(b => { if (!b.id.startsWith("nk-")) return;
+    b.onclick = async () => {
+      const on = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", on); b.disabled = true;
+      try { S.ntfy = await api("/api/ntfy", { method: "POST", body: { kinds: { [b.id.slice(3)]: on } } }); } catch (e) { toast(e.message, "bad"); }
+      ntfyUI();
+    };
+  });
+  const test = $("#ntfyTest"); if (test) test.onclick = async () => {
+    test.disabled = true;
+    try { await api("/api/ntfy/test", { method: "POST", body: {} }); toast("Test sent to ntfy"); }
+    catch (e) { toast(e.message, "bad"); }
+    test.disabled = false;
+  };
 }
 
 /* ---------------- lottery: odds, tickets, best shares, blocks feed, badges ---------------- */

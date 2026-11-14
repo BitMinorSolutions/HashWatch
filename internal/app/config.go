@@ -79,6 +79,8 @@ type ConfigData struct {
 	UpdateURL string `json:"update_url,omitempty"`
 	// UpdateChannel is "stable" (default) or "dev".
 	UpdateChannel string `json:"update_channel,omitempty"`
+	// Ntfy sends selected alerts to an ntfy topic (iPhone / Apple Watch).
+	Ntfy NtfySettings `json:"ntfy,omitempty"`
 	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
 	Locations   []Location   `json:"locations,omitempty"`
 	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"

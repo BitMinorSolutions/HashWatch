@@ -258,6 +258,7 @@ func main() {
 			}
 		}
 	}
+	alerts.Push = srv.NtfyPush
 	for _, m := range cfg.Miners {
 		poll.Start(m)
 	}

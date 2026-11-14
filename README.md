@@ -75,9 +75,19 @@ HashWatch window, and the **Alerts** page, which keeps the last 300. A block fin
 on every page until you dismiss it. Turn each alert type, and desktop notifications, on or off under
 **Settings → Alerts**. There's also a **Send a test alert** button there.
 
+### iPhone and Apple Watch (ntfy)
+
+**Settings → iPhone & Apple Watch** can forward selected alerts to a [ntfy](https://ntfy.sh)
+topic (default server `https://ntfy.sh`). Install the ntfy app on your iPhone, scan the QR code
+(or open the subscribe link) and, if you set an access token, add the same token in the app.
+HashWatch never puts that token, or any other credentials, in the notification. Block-found
+alerts are sent at ntfy urgent/max priority; miner offline and overheat are high. Delivery is
+deduped and rate-limited so a flapping miner can't spam you. Off by default.
+
 Notes:
 - Alerts are raised by the HashWatch app, so it has to be running (turn on **Start automatically**).
-  Your phone gets them when you open HashWatch. There's no push to a closed phone app.
+  Desktop notifications appear on this computer. Phone alerts use ntfy, above, and work when the
+  HashWatch window isn't open.
 - On Linux, desktop notifications need `notify-send` (package `libnotify-bin`) or `gdbus`.
 - On macOS the first notification may ask for permission (it comes from "Script Editor"/osascript).
 - Alerts only read data. They never send anything to the miner.

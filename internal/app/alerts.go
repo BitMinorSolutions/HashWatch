@@ -71,6 +71,7 @@ type alertState struct {
 type Alerts struct {
 	Enabled func(kind string) bool
 	Notify  func(Alert)
+	Push    func(Alert) // optional (ntfy); never include credentials in the payload
 	Now     func() time.Time
 
 	mu    sync.Mutex
@@ -144,6 +145,9 @@ func (a *Alerts) Fire(al Alert) (Alert, bool) {
 	a.save()
 	if a.Notify != nil {
 		go a.Notify(al)
+	}
+	if a.Push != nil {
+		go a.Push(al)
 	}
 	return al, true
 }
