@@ -42,6 +42,7 @@ type Config struct {
 	Remote       RemoteSettings  `json:"remote"`
 	AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
 	NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
+	MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
 
 	path string
 	mu   sync.Mutex
@@ -82,7 +83,8 @@ func (c *Config) Save() error {
 		Remote       RemoteSettings  `json:"remote"`
 		AlertsOff    map[string]bool `json:"alerts_off,omitempty"`
 		NotifyOff    bool            `json:"desktop_notifications_off,omitempty"`
-	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff}
+		MoveDeclined bool            `json:"move_to_applications_declined,omitempty"`
+	}{saved, c.PasswordHash, c.PasswordSalt, c.Remote, c.AlertsOff, c.NotifyOff, c.MoveDeclined}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {

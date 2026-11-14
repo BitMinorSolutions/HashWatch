@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/cgminer"
+	"github.com/hashwatch/hashwatch/internal/install"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/source"
 	"github.com/hashwatch/hashwatch/internal/tunnel"
@@ -32,7 +34,9 @@ type Server struct {
 	Alerts     *Alerts
 	Auto       autostart.Spec
 	InstanceID string
-	Quit       func() // stops the server and cloudflared cleanly; nil in preview
+	Quit       func()           // stops the server and cloudflared cleanly; nil in preview
+	Install    install.Info     // "Move to Applications?" offer (macOS app only)
+	Relaunch   func(app string) // stops this copy and starts the one at app
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -53,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/live", s.auth(s.live))
 	mux.HandleFunc("GET /api/ping", s.ping)
 	mux.HandleFunc("POST /api/quit", s.auth(s.quitGuard(s.quit)))
+	mux.HandleFunc("POST /api/install", s.auth(s.quitGuard(s.installSet)))
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
@@ -210,6 +215,9 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := s.authed(r)
 	out := map[string]any{"app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil}
+	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
+		out["install"] = s.Install
+	}
 	if ok {
 		var ms []map[string]any
 		for _, m := range s.Cfg.Miners {
@@ -500,5 +508,38 @@ func (s *Server) quitGuard(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		h(w, r)
+	}
+}
+
+// installSet handles the "Move to Applications?" prompt: {"action":"move"|"dismiss"}.
+func (s *Server) installSet(w http.ResponseWriter, r *http.Request) {
+	var b struct{ Action string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b); err != nil || !s.Install.Offer {
+		writeJSON(w, 400, map[string]string{"error": "bad request"})
+		return
+	}
+	if b.Action == "dismiss" {
+		s.Cfg.mu.Lock()
+		s.Cfg.MoveDeclined = true
+		s.Cfg.mu.Unlock()
+		s.Cfg.Save()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	dst, err := install.Move(s.Install.From, install.AppsDir())
+	if err != nil {
+		msg := "Couldn't copy " + s.Install.Name + " to Applications: " + err.Error() + "."
+		if errors.Is(err, install.ErrNoPermission) {
+			msg = "Your Mac account can't write to the Applications folder. Drag " + s.Install.Name + " into Applications in Finder instead (it may ask for an administrator password)."
+		}
+		writeJSON(w, 409, map[string]any{"error": msg, "permission": errors.Is(err, install.ErrNoPermission)})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "path": dst, "id": s.InstanceID})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	if s.Relaunch != nil {
+		go func() { time.Sleep(300 * time.Millisecond); s.Relaunch(dst) }()
 	}
 }

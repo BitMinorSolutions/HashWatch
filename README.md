@@ -125,12 +125,21 @@ it opens your browser to that copy instead of starting a second one.
 ## Run it
 
 ### Mac
-1. Download **Hashwatch-macOS.zip** from the Releases page (one app for both Apple Silicon and Intel Macs,
-   macOS 11 Big Sur or newer) and double-click it to unzip.
-2. Drag **Hashwatch.app** into **Applications**.
-3. Double-click **Hashwatch**. It runs quietly in the background (no Terminal window, no Dock icon)
-   and your browser opens the dashboard at `http://localhost:8787`.
+1. Download **Hashwatch.dmg** from the Releases page (one app for both Apple Silicon and Intel Macs,
+   macOS 11 Big Sur or newer) and double-click it.
+2. In the window that opens, drag **Hashwatch** onto the **Applications** folder. Then eject the
+   "Hashwatch" disk (in the Finder sidebar or on the desktop).
+3. Open **Hashwatch** from Applications (or Launchpad). It runs quietly in the background (no
+   Terminal window, no Dock icon) and your browser opens the dashboard at `http://localhost:8787`.
 4. Enter your miner's IP address (or tap **Scan my network**). That's it.
+
+If you open Hashwatch straight from the disk image or from Downloads, the dashboard asks
+**"Move Hashwatch to Applications?"**. **Move to Applications** copies it there (with `ditto`, so
+permissions and the signature stay intact), restarts it from Applications and reconnects the page.
+**Not now** is remembered. If your account can't write to Applications, it says so; drag it in
+Finder instead.
+
+Prefer a zip? **Hashwatch-macOS.zip** has the same app: unzip it, drag **Hashwatch.app** to Applications.
 
 To open the dashboard again later, double-click Hashwatch again: it reopens your browser to the copy
 that's already running. To stop it, use **Settings → Quit Hashwatch**.
@@ -200,7 +209,7 @@ go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
-./scripts/build.sh v0.4.1   # cross-compiles every platform into dist/ (+ SHA256SUMS.txt)
+./scripts/build.sh v0.4.2   # cross-compiles every platform into dist/ (+ Hashwatch.dmg, SHA256SUMS.txt)
 ```
 
 The Mac build is a universal `Hashwatch.app` (arm64 + x86_64 joined like `lipo -create`),
@@ -209,6 +218,15 @@ signature. On a Mac the script uses `lipo`, `codesign --force --deep -s -` and `
 uses `packaging/macos/lipo.py`, [rcodesign](https://github.com/indygreg/apple-platform-rs)
 (`RCODESIGN=/path/to/rcodesign`) and a zip writer that keeps exec bits. Check a built bundle with
 `python3 packaging/macos/verify_sig.py Hashwatch.app` (or `codesign --verify --deep --strict` on a Mac).
+
+`Hashwatch.dmg` is built without mounting anything: `mkfs.hfsplus` (hfsprogs) makes an HFS+ image,
+[libdmg-hfsplus](https://github.com/mozilla/libdmg-hfsplus)'s `hfsplus` adds the app, the
+`Applications` symlink, `.VolumeIcon.icns` and the background, `packaging/macos/make_dmg.py` writes the
+`.DS_Store` (window size, icon positions, background alias) with the `ds_store`/`mac_alias` Python
+packages, and `dmg build` compresses it to UDZO. Point the build at the tools with `MKFS_HFSPLUS`,
+`HFSPLUS`, `DMG` and `DMG_PYTHON`; the DMG step is skipped if they're missing. Check the result with
+`python3 packaging/macos/verify_dmg.py dist/Hashwatch.dmg` (or `hdiutil verify` on a Mac). The window
+background comes from `make_dmg_background.py` (1x + 2x in one HiDPI TIFF).
 Inside the app, the visible executable is a launcher: it starts the server (`-serve`) in the background
 and exits, so the app never holds a Terminal and opening it again just reopens the browser.
 
@@ -216,7 +234,8 @@ Layout:
 
 ```
 cmd/hashwatch/      entry point (flags, browser launch, macOS app launcher)
-packaging/macos/    Info.plist, icon (.icns + generator), How to open.txt, lipo/verify helpers
+packaging/macos/    Info.plist, icon (.icns + generator), How to open.txt, lipo/verify helpers, DMG builder + background
+internal/install/   "Move to Applications?" (macOS app run from Downloads or a disk image)
 internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim
 internal/source/    data sources (direct CGMiner with controls; read-only remote dashboard for previews, no controls)

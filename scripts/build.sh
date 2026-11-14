@@ -55,5 +55,15 @@ else
 fi
 echo "built dist/Hashwatch-macOS.zip"
 
+# ---- macOS: Hashwatch.dmg (drag-to-Applications window), built without mounting ----
+# Needs mkfs.hfsplus (hfsprogs), libdmg-hfsplus's `hfsplus` + `dmg`, and Python with ds_store + mac_alias.
+if command -v "${MKFS_HFSPLUS:-mkfs.hfsplus}" >/dev/null && command -v "${HFSPLUS:-hfsplus}" >/dev/null && command -v "${DMG:-dmg}" >/dev/null; then
+  "${DMG_PYTHON:-python3}" packaging/macos/make_dmg.py --app "$app" --volname Hashwatch \
+    --background packaging/macos/dmg-background.tiff --icon packaging/macos/Hashwatch.icns --out dist/Hashwatch.dmg
+  echo "built dist/Hashwatch.dmg"
+else
+  echo "skipped dist/Hashwatch.dmg (set MKFS_HFSPLUS, HFSPLUS, DMG; see README)"
+fi
+
 rm -rf dist/stage-*
-(cd dist && sha256sum *.zip > SHA256SUMS.txt)
+(cd dist && sha256sum *.zip $(ls *.dmg 2>/dev/null) > SHA256SUMS.txt)

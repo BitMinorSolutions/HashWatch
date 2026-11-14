@@ -637,3 +637,13 @@ a.icon-btn { text-decoration: none; }
 @media (max-width: 699px) { .top-acts .icon-btn { width: 40px; height: 40px; border-radius: 12px; } .top-acts::before { content: ""; } }
 .panel { scroll-margin-top: 84px; }
 @media (max-width: 699px) { .panel { scroll-margin-top: calc(var(--sat) + 72px); } }
+
+/* macOS-style alert ("Move to Applications?") */
+.dialog.mac-alert { text-align: center; width: min(360px, calc(100vw - 32px)); padding-top: 26px; }
+.mac-alert .ma-icon { display: block; margin: 0 auto 14px; border-radius: 15px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.mac-alert h2 { font-size: 16px; }
+.mac-alert p { font-size: 13px; }
+.mac-alert .err:empty { display: none; }
+.mac-alert .err { margin-top: 12px; text-align: left; }
+.mac-alert .acts { justify-content: stretch; margin-top: 20px; }
+.mac-alert .acts .btn { flex: 1; }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/hashwatch/hashwatch/internal/app"
 	"github.com/hashwatch/hashwatch/internal/autostart"
+	"github.com/hashwatch/hashwatch/internal/install"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/notify"
 	"github.com/hashwatch/hashwatch/internal/tunnel"
@@ -237,6 +238,47 @@ func main() {
 	}
 	if *remote == "" || private {
 		srv.Quit = shutdown
+	}
+	if inAppBundle() && (*remote == "" || private) {
+		home, _ := os.UserHomeDir()
+		srv.Install = install.Check(autostart.Exe(), home)
+		srv.Relaunch = func(dst string) {
+			// Wait for this process to exit (port + instance file freed), then open the installed copy.
+			// Same flags as this copy (settings folder, port…), minus -serve, plus -no-browser:
+			// the open tab reconnects by itself.
+			args := []string{"-no-browser"}
+			for i := 1; i < len(os.Args); i++ {
+				switch a := os.Args[i]; a {
+				case "-serve", "--serve", "-no-browser", "--no-browser":
+				case "-miner", "--miner": // already saved in settings
+					i++
+				default:
+					if !strings.HasPrefix(a, "-miner=") && !strings.HasPrefix(a, "--miner=") {
+						args = append(args, a)
+					}
+				}
+			}
+			exe := filepath.Join(dst, "Contents", "MacOS", filepath.Base(autostart.Exe()))
+			start := `exec "$0" "$@"`
+			argv := append([]string{exe}, args...)
+			if runtime.GOOS == "darwin" {
+				start = `app="$0"; exec /usr/bin/open -n "$app" --args "$@"`
+				argv = append([]string{dst}, args...)
+			}
+			script := fmt.Sprintf(`while kill -0 %d 2>/dev/null; do sleep 0.2; done; %s`, os.Getpid(), start)
+			cmd := exec.Command("/bin/sh", append([]string{"-c", script}, argv...)...)
+			detach(cmd)
+			if err := cmd.Start(); err != nil {
+				log.Printf("relaunch: %v", err)
+			} else {
+				_ = cmd.Process.Release()
+			}
+			log.Printf("%s: moved to %s, relaunching from there", app.AppName, dst)
+			shutdown()
+		}
+		if srv.Install.Offer {
+			log.Printf("running from %s (%s): will offer to move it to Applications", srv.Install.From, srv.Install.Where)
+		}
 	}
 	go func() {
 		ch := make(chan os.Signal, 1)

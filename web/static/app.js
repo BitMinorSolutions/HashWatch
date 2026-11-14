@@ -81,6 +81,45 @@ async function boot() {
   const ms = S.state.miners || [];
   S.miner = ms.find(m => m.id === localStorage.getItem("hw_miner")) || ms[0];
   shell();
+  moveOffer();
+}
+
+/* ---------------- "Move to Applications?" (macOS app run from Downloads / a disk image) ---------------- */
+function moveOffer() {
+  const inst = S.state.install;
+  if (!inst || !inst.offer || S.moveShown || LS.get("hw_move_no") === "1") return;
+  S.moveShown = true;
+  const name = inst.name || APP, where = { "disk image": "the disk image", downloads: "your Downloads folder", translocated: "your Downloads folder" }[inst.where] || "outside Applications";
+  const sc = document.createElement("div"); sc.className = "scrim";
+  const d = document.createElement("div"); d.className = "dialog mac-alert"; d.setAttribute("role", "alertdialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-labelledby", "mvT");
+  d.innerHTML = `<img class="ma-icon" src="/assets/icons/icon-192.png" alt="" width="64" height="64">
+    <h2 id="mvT">Move ${esc(name)} to Applications?</h2>
+    <p>${esc(name)} is running from ${esc(where)}. Move it to your Applications folder so it keeps working after you ${inst.where === "disk image" ? "eject the disk image" : "tidy up Downloads"}, and so it can start automatically.</p>
+    <div class="err" id="mvE" role="alert"></div>
+    <div class="acts"><button class="btn ghost" data-a="no">Not now</button><button class="btn accent" data-a="move">Move to Applications</button></div>`;
+  document.body.append(sc, d); requestAnimationFrame(() => { sc.classList.add("on"); d.classList.add("on"); });
+  const close = () => { sc.classList.remove("on"); d.classList.remove("on"); setTimeout(() => { sc.remove(); d.remove(); }, 220); document.removeEventListener("keydown", key); };
+  const no = async () => { LS.set("hw_move_no", "1"); close(); try { await api("/api/install", { method: "POST", body: { action: "dismiss" } }); } catch (e) {} };
+  const key = (e) => { if (e.key === "Escape") no(); };
+  document.addEventListener("keydown", key);
+  $('[data-a="no"]', d).onclick = no;
+  const mv = $('[data-a="move"]', d); mv.focus();
+  mv.onclick = async () => {
+    mv.disabled = true; mv.textContent = "Moving…"; $("#mvE", d).textContent = "";
+    let r;
+    try { r = await api("/api/install", { method: "POST", body: { action: "move" } }); }
+    catch (e) { mv.disabled = false; mv.textContent = "Try again"; $("#mvE", d).textContent = e.message; return; }
+    clearInterval(S.timer); close();
+    root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+      <h1>Moved to Applications</h1><p class="lead" id="mvL">Restarting ${esc(name)} from Applications…</p></div></div>`;
+    const t0 = Date.now(), oldId = r.id;
+    const poll = async () => {
+      try { const p = await (await fetch("/api/ping", { cache: "no-store" })).json(); if (p.id && p.id !== oldId) { location.reload(); return; } } catch (e) {}
+      if (Date.now() - t0 > 25000) { $("#mvL").innerHTML = `${esc(name)} is now in Applications. Open it from there (or Launchpad).${inst.where === "disk image" ? " You can eject the disk image." : " You can delete the copy in Downloads."}`; return; }
+      setTimeout(poll, 700);
+    };
+    setTimeout(poll, 1200);
+  };
 }
 
 /* ---------------- login / setup ---------------- */
