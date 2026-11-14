@@ -143,7 +143,7 @@ Finder instead.
 
 Prefer a zip? **HashWatch-macOS.zip** has the same app: unzip it, drag **HashWatch.app** to Applications.
 
-**The Mac app (v0.5.1):** a native window (WKWebView, dark title bar, minimum size; size and
+**The Mac app (v0.6.0):** a native window (WKWebView, dark title bar, minimum size; size and
 position are remembered) with the standard menus: **About**, **Settings… ⌘,**, **Quit ⌘Q**, Edit
 (copy/paste), View → **Reload ⌘R**, and Window. The **menu bar icon** (the hexagon) shows the live
 hashrate and has **Open Dashboard**, **Remote access** on/off and **Quit**. **Closing the window
@@ -220,7 +220,7 @@ go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
-./scripts/build.sh v0.5.1   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
+./scripts/build.sh v0.6.0   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
 ```
 
 The Mac build is a universal `HashWatch.app` (arm64 + x86_64 joined like `lipo -create`),

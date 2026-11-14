@@ -6,8 +6,9 @@ remote access, auto-start and multiple miners. Nothing is read-only.
 ## 1. Install
 1. Open `HashWatch.dmg`, drag **HashWatch** onto **Applications**, eject the disk image.
 2. Open HashWatch from Applications.
-3. "Apple could not verify…": **System Settings → Privacy & Security → Open Anyway**
-   (once), then confirm with your password or Touch ID.
+3. "Apple could not verify…": in Finder, Control-click (or right-click) HashWatch,
+   choose **Open**, then **Open** again. Or use **System Settings → Privacy &
+   Security → Open Anyway** (once) and confirm with your password or Touch ID.
 4. "Find devices on local networks?": click **Allow**. Allow notifications too.
 
 ## 2. Set up your miner
@@ -24,7 +25,7 @@ remote access, auto-start and multiple miners. Nothing is read-only.
 | Close | Close the window (red button or Cmd-W) | HashWatch keeps running in the menu bar, and the Dock icon goes away. |
 | Quit | Cmd-Q, or menu bar → Quit | Everything stops, including remote access. |
 | Live data | Leave it open for a few minutes | It updates every 5 seconds, with hashrate, temperatures and fans matching the miner's own page. |
-| Controls | **Controls** tab → change the work speed, toggle the light | A confirm dialog appears and the miner changes. Change it back afterwards. |
+| Controls | **Controls** → change the work speed, toggle the light | A confirm dialog appears and the miner changes. Change it back afterwards. |
 | Alerts | Unplug the miner's network cable for about 2 minutes | You get a Mac notification that it's offline, then another when it's back. |
 | Remote access | Settings → Remote access → On, and open the link on your phone (with Wi-Fi off) | The dashboard loads after you enter your password. |
 | iPhone | Open the phone link in Safari → Share → Add to Home Screen | It works like an app. |

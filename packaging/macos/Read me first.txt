@@ -1,11 +1,11 @@
 HashWatch for Mac · Powered by GrumpTech
 ========================================
 
-UPDATING FROM 0.5.0
+UPDATING FROM 0.5
 Quit the old HashWatch first (menu bar hexagon icon > Quit, or Activity Monitor >
 HashWatch > Quit), delete HashWatch from Applications, then install this one.
-0.5.1 never uses a port another program is using, so it can't open some other
-app's page by mistake. Other software on your Mac is never touched.
+From 0.5.1 on, HashWatch never uses a port another program is using, so it can't
+open some other app's page by mistake. Other software on your Mac is never touched.
 
 INSTALL
 1. Open HashWatch.dmg and drag HashWatch onto the Applications folder.
@@ -13,12 +13,15 @@ INSTALL
    If you open it straight from the disk image, it offers to move itself to Applications.
 
 FIRST LAUNCH: "Apple could not verify HashWatch"
-HashWatch isn't notarized by Apple yet, so macOS blocks the first launch:
+HashWatch isn't notarized by Apple yet, so macOS blocks the first launch.
+The easiest way: in Finder, Control-click (or right-click) HashWatch, choose Open,
+then click Open in the dialog. You only need to do this once.
+
+Or, if you already double-clicked it and saw the warning:
    - Click Done.
    - Open System Settings > Privacy & Security.
    - Scroll to Security and click "Open Anyway" next to HashWatch.
    - Click Open Anyway again and confirm with your password or Touch ID.
-   You only need to do this once.
 
 ALLOW LOCAL NETWORK
 When macOS asks "Allow HashWatch to find devices on local networks?", click Allow.
