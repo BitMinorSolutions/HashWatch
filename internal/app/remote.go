@@ -31,7 +31,7 @@ func (s *Server) remoteGet(w http.ResponseWriter, r *http.Request) {
 		"local_viewer": IsLocal(r), "password_set": s.Cfg.PasswordHash != "", "hostname": s.Cfg.Remote.Hostname,
 		"named": s.Cfg.Remote.Token != "", "last_url": s.Cfg.Remote.LastURL}
 	if s.Locked {
-		out["note"] = "Remote access is turned off in this preview. In your own copy of Hashwatch you can switch it on here."
+		out["note"] = "Remote access is turned off in this preview. In your own copy of " + AppName + " you can switch it on here."
 	}
 	if s.Tunnel != nil {
 		out["status"] = s.Tunnel.Status()
@@ -39,7 +39,7 @@ func (s *Server) remoteGet(w http.ResponseWriter, r *http.Request) {
 	if s.Auto.Exe != "" {
 		st := autostart.Get(s.Auto)
 		if autostart.Transient(s.Auto.Exe) {
-			st.Note = "Move Hashwatch out of your Downloads or temporary folder first, then turn this on."
+			st.Note = "Move " + AppName + " out of your Downloads or temporary folder first, then turn this on."
 		}
 		out["autostart"] = st
 	}
@@ -155,7 +155,7 @@ func (s *Server) autostartSet(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if b.Enabled {
 		if autostart.Transient(s.Auto.Exe) {
-			writeJSON(w, 409, map[string]string{"error": "Move Hashwatch out of your Downloads or temporary folder first (for example into Applications or your home folder), run it from there, then turn this on."})
+			writeJSON(w, 409, map[string]string{"error": "Move " + AppName + " out of your Downloads or temporary folder first (for example into Applications or your home folder), run it from there, then turn this on."})
 			return
 		}
 		st, err = autostart.Enable(s.Auto)

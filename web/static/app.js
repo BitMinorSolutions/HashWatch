@@ -1,7 +1,8 @@
 /* Hashwatch v0.4 frontend — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
-const APP = document.body.dataset.app || "Hashwatch";
+const APP = document.body.dataset.app || "HashWatch";
+const TAG = document.body.dataset.tagline || "";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const root = $("#root");
@@ -84,6 +85,12 @@ async function boot() {
   moveOffer();
 }
 
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return; } catch (e) {}
+  const ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;top:0"; document.body.append(ta); ta.select();
+  const ok = document.execCommand("copy"); ta.remove(); if (!ok) throw new Error("clipboard unavailable");
+}
+
 /* ---------------- "Move to Applications?" (macOS app run from Downloads / a disk image) ---------------- */
 function moveOffer() {
   const inst = S.state.install;
@@ -110,7 +117,7 @@ function moveOffer() {
     try { r = await api("/api/install", { method: "POST", body: { action: "move" } }); }
     catch (e) { mv.disabled = false; mv.textContent = "Try again"; $("#mvE", d).textContent = e.message; return; }
     clearInterval(S.timer); close();
-    root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+    root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
       <h1>Moved to Applications</h1><p class="lead" id="mvL">Restarting ${esc(name)} from Applications…</p></div></div>`;
     const t0 = Date.now(), oldId = r.id;
     const poll = async () => {
@@ -125,7 +132,7 @@ function moveOffer() {
 /* ---------------- login / setup ---------------- */
 function viewLogin() {
   root.innerHTML = `<div class="center"><div class="auth view">
-    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Welcome back</h1><p class="lead">Enter your ${esc(APP)} password.</p>
     <form class="panel" id="f" autocomplete="on">
       <input type="text" name="username" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
@@ -164,7 +171,7 @@ function wireMinerForm(id, done) {
 }
 function viewSetup() {
   root.innerHTML = `<div class="center"><div class="auth wide view">
-    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
     <form class="panel" id="s-form" autocomplete="off">${minerForm("s")}</form>
     <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p></div></div>`;
@@ -181,7 +188,7 @@ function shell() {
   const ms = S.state.miners || [];
   root.innerHTML = `<div class="shell">
     <aside class="sidebar">
-      <div class="brand">${logo}<b>${esc(APP)}</b></div>
+      <div class="brand">${logo}<span class="brand-t"><b>${esc(APP)}</b>${TAG ? `<small>${esc(TAG)}</small>` : ""}</span></div>
       <div class="miner-pick"><div class="btnish"><span class="m-ico">${ic("server", "sm")}</span><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
         ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
       <nav class="nav">${NAV.map((id, k) => { const [, n, i] = PAGES.find(p => p[0] === id); return (k === 6 ? '<div class="sep"></div>' : "") + `<a href="#/${id}" data-r="${id}" title="${n}">${ic(i)}<span>${n}</span>${id === "alerts" ? '<em class="badge" data-badge></em>' : ""}</a>`; }).join("")}</nav>
@@ -543,7 +550,7 @@ VIEWS.controls = {
   },
   update: () => {
     const c = D().control || {}, remote = D().source === "remote";
-    $("#ctlBanner").innerHTML = S.can ? "" : `<div class="banner">${ic(remote ? "lock" : "info")}<div><b>${remote ? "Read-only preview." : "Controls unavailable."}</b> ${remote ? "Controls are switched off here, so nothing on this page can change this miner. When you run Hashwatch on your own network, they talk directly to your miner." : "This miner can't be controlled from here."}</div></div>`;
+    $("#ctlBanner").innerHTML = S.can ? "" : `<div class="banner">${ic(remote ? "lock" : "info")}<div><b>${remote ? "Read-only preview." : "Controls unavailable."}</b> ${remote ? "Controls are switched off here, so nothing on this page can change this miner. When you run ${esc(APP)} on your own network, they talk directly to your miner." : "This miner can't be controlled from here."}</div></div>`;
     $("#ctlCols").classList.toggle("ctl-locked", !S.can);
     $$("#ctlCols button, #ctlCols input").forEach(x => x.disabled = !S.can || x.id === "ledApply" && !S.ctl.dirty || x.id === "ledReset" && !S.ctl.dirty);
     $("#wsNow").textContent = c.work_name ? "Currently " + (LEVEL[c.work_name] || c.work_name) : "—";
@@ -721,9 +728,10 @@ VIEWS.settings = {
             <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
             <div class="err" id="pwe"></div><button class="btn ghost block" style="margin-top:12px">${st.auth_required ? "Update password" : "Set password"}</button></form>`}</section>
         ${(st.lan_urls || []).length ? `<section class="panel panel-pad">${setH("smartphone", "On your Wi-Fi", "Open this on a phone on the same network:")}${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></section>` : ""}
-        <section class="panel panel-pad">${setH("info", "About", "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change under Controls. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
+        <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change under Controls. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
           ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
-          ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:${st.auth_required ? 8 : 16}px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including remote access" : ""}. Open the app again to restart it.</p>` : ""}</section>
+          <button class="btn ghost block" id="dbg" style="margin-top:16px">${ic("copy", "sm")}Copy debug info</button>
+          ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:8px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including remote access" : ""}. Open the app again to restart it.</p>` : ""}</section>
       </div></div>`;
   },
   wire: () => {
@@ -737,12 +745,15 @@ VIEWS.settings = {
         catch (er) { $("#pwe").textContent = er.message; } };
     }
     const so = $("#so"); if (so) so.onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); boot(); };
+    const db = $("#dbg"); if (db) db.onclick = async () => {
+      try { const t = await (await fetch("/api/debug", { cache: "no-store" })).text(); await copyText(t); toast("Debug info copied. Paste it into a message to support."); }
+      catch (e) { toast("Couldn't copy debug info: " + e.message, "bad"); } };
     const qb = $("#quit"); if (qb) qb.onclick = async () => {
       if (!await confirmDialog("Quit " + APP + "?", `Monitoring, alerts and remote access stop until you open ${esc(APP)} again.`, "Quit")) return;
       qb.disabled = true;
       try { await api("/api/quit", { method: "POST", body: {} }); } catch (e) { toast(e.message, "bad"); qb.disabled = false; return; }
       clearInterval(S.timer);
-      root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
+      root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
         <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
     };
     S.remForm = false; remoteLoad(); alertsSetUI();
@@ -822,11 +833,11 @@ function autoUI() {
   const el = $("#autoSet"); if (!el) return;
   const a = S.rem.autostart, locked = S.state.locked;
   const can = a && a.supported && !locked && S.rem.local_viewer;
-  el.innerHTML = setH("power", "Start automatically", `Start ${esc(APP)} quietly in the background when this computer starts, with no browser window. Fewer restarts also means your remote link changes less often.`,
+  el.innerHTML = setH("power", "Start automatically", `Start ${esc(APP)} quietly ${(S.state.shell || "").includes("native") ? "in the menu bar" : "in the background"} when this computer starts, with no window. Fewer restarts also means your remote link changes less often.`,
     sw("autoSw", a && a.enabled, !can, "Start automatically")) +
     `<div class="set-meta">${locked ? `${ic("lock", "sm")}<span>Not available in the preview.</span>` : !a ? `${ic("info", "sm")}<span>Not available here.</span>` :
       `${ic(a.enabled ? "circle-check" : "info", "sm")}<span>${a.enabled ? `On · ${esc(a.method)}` : `Uses a ${esc(a.method)}`}${a.note ? ` · ${esc(a.note)}` : ""}</span>`}</div>
-     <div class="set-meta">${ic("external-link", "sm")}<span>To open it later, just run ${esc(APP)} again. It opens your browser to the copy that's already running.</span></div>`;
+     <div class="set-meta">${ic("external-link", "sm")}<span>${(S.state.shell || "").includes("native") ? `To open it later, click the ${esc(APP)} icon in the menu bar or open ${esc(APP)} again.` : `To open it later, just run ${esc(APP)} again. It opens your browser to the copy that's already running.`}</span></div>`;
   const s = $("#autoSw"); if (s) s.onclick = async () => { const want = !(a && a.enabled); s.disabled = true;
     try { const r = await api("/api/autostart", { method: "POST", body: { enabled: want } }); S.rem.autostart = r.autostart; toast(want ? `${APP} will start automatically` : "Auto-start is off"); }
     catch (e) { toast(e.message, "bad"); } autoUI(); };

@@ -68,6 +68,19 @@ func inAppBundle() bool {
 	return runtime.GOOS == bundleGOOS && strings.Contains(autostart.Exe(), ".app/Contents/MacOS/")
 }
 
+// showRunning asks an already running copy to bring its window to the front.
+func showRunning(u string) bool {
+	req, _ := http.NewRequest("POST", strings.TrimRight(u, "/")+"/api/show", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", strings.TrimRight(u, "/"))
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200 || resp.StatusCode == 204
+}
+
 func main() {
 	defHost, defPort, defDir := "0.0.0.0", 8787, app.DefaultDir()
 	if bakedRemote != "" {
@@ -93,15 +106,27 @@ func main() {
 		}
 	}
 	every := flag.Duration("poll", app.DefaultPoll, "how often to read each miner (failed reads back off to 15s, then 30s)")
-	serve := flag.Bool("serve", false, "run the server in this process (used by the macOS app and auto-start)")
+	serve := flag.Bool("serve", false, "run the server in this process with no app window (browser only)")
+	hidden := flag.Bool("hidden", false, "start in the menu bar / system tray without opening a window (used by auto-start)")
 	flag.Parse()
 	private := bakedRemote != "" && *remote == bakedRemote // baked private preview: full app lifecycle
+	notify.AppName = app.AppName
+	// Native shell: HashWatch.app on macOS (window + menu bar) and HashWatch.exe on Windows (window + tray).
+	native := nativeSupported() && !*serve && (*remote == "" || private)
+	if native {
+		if err := os.MkdirAll(*dir, 0o755); err == nil {
+			if logf, err := os.OpenFile(filepath.Join(*dir, "hashwatch.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				log.SetOutput(logf)
+				os.Stdout, os.Stderr = logf, logf
+			}
+		}
+	}
 
 	// Inside Hashwatch.app the visible executable is only a launcher: it starts the
 	// server as a detached background process and exits, so macOS shows no Terminal,
 	// and double-clicking the app again launches a fresh launcher that just reopens
 	// the browser (a still-running bundle would swallow the second double-click).
-	if inAppBundle() && !*serve && (*remote == "" || private) {
+	if !native && inAppBundle() && !*serve && (*remote == "" || private) {
 		if u, ok := app.RunningInstance(*dir); ok {
 			if !*noOpen {
 				openBrowser(u)
@@ -129,6 +154,11 @@ func main() {
 	if *remote == "" || private {
 		if u, ok := app.RunningInstance(*dir); ok {
 			fmt.Printf("\n  %s is already running: %s\n\n", app.AppName, u)
+			if native { // bring the running copy's window forward
+				if *hidden || showRunning(u) {
+					return
+				}
+			}
 			if !*noOpen {
 				openBrowser(u)
 				time.Sleep(300 * time.Millisecond)
@@ -207,6 +237,9 @@ func main() {
 		srv.Tunnel = &tunnel.Manager{Dir: filepath.Join(*dir, "cloudflared"), Origin: "http://" + net.JoinHostPort(originHost, strconv.Itoa(srv.Port)),
 			Token: cfg.Remote.Token, Hostname: cfg.Remote.Hostname, OnURL: srv.TunnelURL}
 		args := []string{"-serve", "-no-browser", "-config", absPath(*dir)}
+		if nativeSupported() {
+			args = []string{"-hidden", "-config", absPath(*dir)} // starts quietly in the menu bar / tray
+		}
 		if *host != "0.0.0.0" {
 			args = append(args, "-host", *host)
 		}
@@ -291,6 +324,19 @@ func main() {
 		for _, a := range app.LANAddrs() {
 			fmt.Printf("  On your phone:     http://%s:%d\n", a, srv.Port)
 		}
+	}
+	if native {
+		srv.Shell = "native"
+		go func() { log.Fatal(http.Serve(ln, srv.Handler())) }()
+		if runNative(shellOpts{URL: fmt.Sprintf("http://127.0.0.1:%d/?shell=%s", srv.Port, runtime.GOOS), Hidden: *hidden, Srv: srv, Quit: shutdown,
+			Name: app.AppName, Tagline: app.Tagline, Version: version, Dir: *dir}) {
+			return
+		}
+		srv.Shell = "" // no native window on this machine: same app in the browser
+		if !*hidden && !*noOpen {
+			openBrowser(local)
+		}
+		select {}
 	}
 	if inAppBundle() {
 		fmt.Printf("\n  Settings: %s\n  Running in the background. Quit from Settings → Quit %s.\n\n", *dir, app.AppName)

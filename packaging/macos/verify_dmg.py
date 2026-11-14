@@ -37,9 +37,9 @@ with tempfile.TemporaryDirectory() as t:
     apps = [p for p in by if p.count("/") == 1 and p.endswith(".app")]
     check(len(apps) == 1, f"one app at the root: {apps}")
     app = apps[0]
-    exe = by.get(app + "/Contents/MacOS/Hashwatch")
-    check(exe and stat.S_ISREG(exe["mode"]) and exe["mode"] & 0o111 == 0o111, f"{app}/Contents/MacOS/Hashwatch is -rwxr-xr-x ({stat.filemode(exe['mode']) if exe else 'missing'})")
-    for f in ("/Contents/Info.plist", "/Contents/_CodeSignature/CodeResources", "/Contents/Resources/Hashwatch.icns"):
+    exe = by.get(app + "/Contents/MacOS/HashWatch")
+    check(exe and stat.S_ISREG(exe["mode"]) and exe["mode"] & 0o111 == 0o111, f"{app}/Contents/MacOS/HashWatch is -rwxr-xr-x ({stat.filemode(exe['mode']) if exe else 'missing'})")
+    for f in ("/Contents/Info.plist", "/Contents/_CodeSignature/CodeResources", "/Contents/Resources/HashWatch.icns"):
         e = by.get(app + f); check(e and e["mode"] & 0o444 == 0o444 and not e["mode"] & 0o111, f"{app}{f} is -rw-r--r--")
     a = by.get("/Applications")
     check(a and stat.S_ISLNK(a["mode"]) and a["link"] == "/Applications", "Applications -> /Applications symlink")
@@ -51,8 +51,11 @@ with tempfile.TemporaryDirectory() as t:
     print("     7z sees volume folder:", os.path.basename(root))
     with DSStore.open(os.path.join(root, ".DS_Store"), "r") as d:
         icvp = d["."]["icvp"]; bwsp = d["."]["bwsp"]
-        check(d[app[1:]]["Iloc"] == (170, 185) and d["Applications"]["Iloc"] == (490, 185), "icon positions: app (170,185), Applications (490,185)")
-        check(icvp["iconSize"] == 128 and icvp["backgroundType"] == 2, "icon view, 128 px icons, picture background")
+        check(d[app[1:]]["Iloc"] == (170, 170) and d["Applications"]["Iloc"] == (490, 170), "icon positions: app (170,170), Applications (490,170)")
+        for f in ("Read me first.txt", "TESTING.md"):
+            if "/" + f in by:
+                print(f"     {f} at {d[f]['Iloc']}")
+        check(icvp["iconSize"] == 112 and icvp["backgroundType"] == 2, "icon view, 112 px icons, picture background")
         print("     window:", bwsp["WindowBounds"], "toolbar", bwsp["ShowToolbar"], "sidebar", bwsp["ShowSidebar"])
         al = Alias.from_bytes(icvp["backgroundImageAlias"])
         bg, bgd = by["/.background/background.tiff"], by["/.background"]

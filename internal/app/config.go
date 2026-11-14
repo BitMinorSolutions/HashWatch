@@ -13,7 +13,15 @@ import (
 )
 
 // AppName is the product name used everywhere in the UI. Rename here.
-const AppName = "Hashwatch"
+// AppName is the product name shown everywhere (a private build may override it with -ldflags -X).
+var AppName = "HashWatch"
+
+// Tagline is shown under the logo, on the login/setup screens, in About and in the DMG window.
+// Keep it the single source of truth (the spelling may change).
+const Tagline = "Powered by GrumpTech"
+
+// dirName is the settings folder name. It stays "Hashwatch" so existing settings keep working.
+var dirName = "Hashwatch"
 
 type Miner struct {
 	ID   string `json:"id"`
@@ -53,7 +61,7 @@ func DefaultDir() string {
 	if err != nil {
 		d = "."
 	}
-	return filepath.Join(d, AppName)
+	return filepath.Join(d, dirName)
 }
 
 func LoadConfig(dir string) (*Config, error) {

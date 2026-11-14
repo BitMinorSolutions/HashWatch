@@ -4,7 +4,7 @@
   -> .DS_Store (window, icon positions, background alias pointing at the real CNIDs)
   -> `dmg build` (UDZO, zlib).
 
-Usage: python3 make_dmg.py --app X.app --volname NAME --background bg.tiff --icon vol.icns --out X.dmg
+Usage: python3 make_dmg.py --app X.app --volname NAME --background bg.tiff --icon vol.icns --out X.dmg [--extra FILE ...]
 Tools (env): MKFS_HFSPLUS, HFSPLUS, DMG  (needs Python packages ds_store + mac_alias)
 """
 import argparse, datetime, os, shutil, subprocess, sys, tempfile
@@ -13,8 +13,9 @@ import hfsinfo
 from ds_store import DSStore
 from mac_alias import Alias, VolumeInfo, TargetInfo, ALIAS_KIND_FILE, ALIAS_FIXED_DISK
 
-WIN_W, WIN_H = 660, 400       # content area, matches the background
-APP_XY, APPS_XY = (170, 185), (490, 185)
+WIN_W, WIN_H = 660, 520       # content area, matches the background
+APP_XY, APPS_XY = (170, 170), (490, 170)
+EXTRA_Y = 420                 # optional docs row (Read me first.txt, TESTING.md)
 
 def run(*a):
     subprocess.run(a, check=True, stdout=subprocess.DEVNULL)
@@ -23,6 +24,7 @@ def main():
     ap = argparse.ArgumentParser()
     for k in ("app", "volname", "background", "icon", "out"):
         ap.add_argument("--" + k, required=True)
+    ap.add_argument("--extra", action="append", default=[], help="file to show in the bottom row (repeatable)")
     a = ap.parse_args()
     mkfs = os.environ.get("MKFS_HFSPLUS", "mkfs.hfsplus")
     hfs = os.environ.get("HFSPLUS", "hfsplus")
@@ -36,6 +38,9 @@ def main():
         os.symlink("/Applications", os.path.join(stage, "Applications"))
         shutil.copy(a.background, os.path.join(stage, ".background", "background.tiff"))
         shutil.copy(a.icon, os.path.join(stage, ".VolumeIcon.icns"))
+        for x in a.extra:
+            shutil.copy(x, os.path.join(stage, os.path.basename(x)))
+            os.chmod(os.path.join(stage, os.path.basename(x)), 0o644)
         for f in (".background/background.tiff", ".VolumeIcon.icns"):
             os.chmod(os.path.join(stage, f), 0o644)
         os.chmod(os.path.join(stage, ".background"), 0o755)
@@ -69,10 +74,13 @@ def main():
                                "backgroundColorRed": 0.06, "backgroundColorGreen": 0.06, "backgroundColorBlue": 0.07,
                                "gridOffsetX": 0.0, "gridOffsetY": 0.0, "gridSpacing": 100.0, "arrangeBy": "none",
                                "showIconPreview": True, "showItemInfo": False, "labelOnBottom": True,
-                               "textSize": 13.0, "iconSize": 128.0, "scrollPositionX": 0.0, "scrollPositionY": 0.0}
+                               "textSize": 13.0, "iconSize": 112.0, "scrollPositionX": 0.0, "scrollPositionY": 0.0}
             d["."]["icvl"] = ("type", b"icnv")
             d[app_name]["Iloc"] = APP_XY
             d["Applications"]["Iloc"] = APPS_XY
+            n = len(a.extra)
+            for i, x in enumerate(a.extra):
+                d[os.path.basename(x)]["Iloc"] = (int(WIN_W / 2 + (i - (n - 1) / 2) * 170), EXTRA_Y)
         run(hfs, img, "add", ds, "/.DS_Store")
         run(hfs, img, "attr", "/.DS_Store", "V")
         if os.path.exists(a.out):

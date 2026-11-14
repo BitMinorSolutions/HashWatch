@@ -9,6 +9,12 @@ import (
 	"runtime"
 )
 
+// AppName labels notifications (set by main).
+var AppName = "HashWatch"
+
+// Native, when set (by the macOS/Windows app shell), shows notifications natively instead.
+var Native func(title, body string) error
+
 // Command builds the OS-specific notification command (exported for tests).
 func Command(title, body string) (*exec.Cmd, error) {
 	switch runtime.GOOS {
@@ -27,11 +33,11 @@ func Command(title, body string) (*exec.Cmd, error) {
 		return c, nil
 	default:
 		if p, err := exec.LookPath("notify-send"); err == nil {
-			return exec.Command(p, "-a", "Hashwatch", title, body), nil
+			return exec.Command(p, "-a", AppName, title, body), nil
 		}
 		if p, err := exec.LookPath("gdbus"); err == nil {
 			return exec.Command(p, "call", "--session", "--dest=org.freedesktop.Notifications", "--object-path=/org/freedesktop/Notifications",
-				"--method=org.freedesktop.Notifications.Notify", "Hashwatch", "0", "", title, body, "[]", "{}", "8000"), nil
+				"--method=org.freedesktop.Notifications.Notify", AppName, "0", "", title, body, "[]", "{}", "8000"), nil
 		}
 		return nil, errors.New("no desktop notification service found (install libnotify / notify-send)")
 	}
@@ -39,6 +45,11 @@ func Command(title, body string) (*exec.Cmd, error) {
 
 // Send shows the notification and returns without waiting for it to close.
 func Send(title, body string) error {
+	if Native != nil {
+		if err := Native(title, body); err == nil {
+			return nil
+		}
+	}
 	c, err := Command(title, body)
 	if err != nil {
 		return err

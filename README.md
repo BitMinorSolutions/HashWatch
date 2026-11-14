@@ -1,6 +1,8 @@
-# Hashwatch
+# HashWatch
 
-A fast, good-looking, **read-only** dashboard for Avalon home miners (Nano 3 / Nano 3S and other
+*Powered by GrumpTech*
+
+A fast, good-looking dashboard for Avalon home miners (Nano 3 / Nano 3S and other
 CGMiner-based Avalons). One small download, no installer, no Docker, no cloud account.
 
 - Live hashrate, temperatures, power, efficiency (J/TH), fan, uptime
@@ -16,7 +18,7 @@ CGMiner-based Avalons). One small download, no installer, no Docker, no cloud ac
 - Multiple miners, network auto-discovery, optional password
 - Works great on iPhone, Android, iPad and desktop. Add it to your home screen as an app.
 
-Hashwatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
+HashWatch talks to your miner **directly over your local network** (CGMiner API, TCP port 4028).
 For stats it only sends read commands (`summary`, `estats`/`stats`, `pools`, `devs`, `version`).
 It changes something only when you use the Controls panel and confirm. Your data stays on your
 network, unless you turn on Remote access (see below).
@@ -24,7 +26,7 @@ network, unless you turn on Remote access (see below).
 ## Controls
 
 The **Controls** panel changes your miner's settings through its API. Every change asks you
-to confirm, then Hashwatch reads the miner back and shows the result (or the miner's error).
+to confirm, then HashWatch reads the miner back and shows the result (or the miner's error).
 
 | Control | Command sent to the miner (port 4028) |
 | --- | --- |
@@ -32,12 +34,12 @@ to confirm, then Hashwatch reads the miner back and shows the result (or the min
 | Light | `ascset\|0,ledset,EFFECT-BRIGHTNESS-TEMPERATURE-R-G-B` with effect 0 Off, 1 Steady, 2 Flash, 3 Pulse (breath), 4 Loop; brightness 0–100; colour as 0–255 RGB |
 
 The commands are sent as cgminer JSON, e.g. `{"command":"ascset","parameter":"0,workmode,set,1"}`.
-They follow Canaan's published API for the Avalon Nano 3S and Avalon Q. Hashwatch never sends
+They follow Canaan's published API for the Avalon Nano 3S and Avalon Q. HashWatch never sends
 reboot, pool, fan or standby commands.
 
 - Work speed takes effect within about a minute. Hashrate, power and temperatures move gradually.
 - Some firmware (for example the original Nano 3) reports only the light mode, not its colour and
-  brightness. Hashwatch then shows the last colour you applied from Hashwatch.
+  brightness. HashWatch then shows the last colour you applied from HashWatch.
 - The colour-temperature value is kept at what the miner reports, or 50 if it doesn't report one.
 - If you set a password, you must be signed in to use the controls.
 - Some community reports say older Nano 3 firmware ignores `workmode`. If the miner replies with
@@ -45,7 +47,7 @@ reboot, pool, fan or standby commands.
 
 ## Alerts
 
-Hashwatch watches every miner on each poll (every 5 seconds; after a failed read it backs off to 15 s, then 30 s, until the miner answers again) and raises an alert when:
+HashWatch watches every miner on each poll (every 5 seconds; after a failed read it backs off to 15 s, then 30 s, until the miner answers again) and raises an alert when:
 
 | Alert | When |
 | --- | --- |
@@ -56,15 +58,15 @@ Hashwatch watches every miner on each poll (every 5 seconds; after a failed read
 | Pool disconnected | no pool is connected for two polls in a row, and when it reconnects |
 | Remote link changed | the remote-access link changes |
 
-Each alert shows up three ways: a native notification on the computer running Hashwatch
+Each alert shows up three ways: a native notification on the computer running HashWatch
 (macOS Notification Center, Windows notifications, or `notify-send` on Linux), a toast in any open
-Hashwatch window, and the **Alerts** page, which keeps the last 300. A block find also gets a banner
+HashWatch window, and the **Alerts** page, which keeps the last 300. A block find also gets a banner
 on every page until you dismiss it. Turn each alert type, and desktop notifications, on or off under
 **Settings → Alerts**. There's also a **Send a test alert** button there.
 
 Notes:
-- Alerts are raised by the Hashwatch app, so it has to be running (turn on **Start automatically**).
-  Your phone gets them when you open Hashwatch. There's no push to a closed phone app.
+- Alerts are raised by the HashWatch app, so it has to be running (turn on **Start automatically**).
+  Your phone gets them when you open HashWatch. There's no push to a closed phone app.
 - On Linux, desktop notifications need `notify-send` (package `libnotify-bin`) or `gdbus`.
 - On macOS the first notification may ask for permission (it comes from "Script Editor"/osascript).
 - Alerts only read data. They never send anything to the miner.
@@ -74,24 +76,24 @@ Notes:
 **Settings → Remote access** gives you an `https://….trycloudflare.com` link to your dashboard that
 works anywhere, like on mobile data, without router changes or port forwarding.
 
-- It's **off by default** and needs a **password**. If you don't have one, Hashwatch asks you to
+- It's **off by default** and needs a **password**. If you don't have one, HashWatch asks you to
   create one before switching it on. Anyone who opens the link must sign in.
 - Changing miners, the password, remote access or auto-start is only allowed **from your home network**,
   never through the link. Controls (work speed, light) work through the link once you're signed in.
-- The first time, Hashwatch downloads Cloudflare's official `cloudflared` for your system from
+- The first time, HashWatch downloads Cloudflare's official `cloudflared` for your system from
   [Cloudflare's GitHub releases](https://github.com/cloudflare/cloudflared/releases). It checks the
   file against the SHA-256 Cloudflare publishes for that release (and GitHub's own digest), then keeps
-  it in the settings folder (`…/Hashwatch/cloudflared/`). It's 20–40 MB, so the Hashwatch zips stay small.
-- Hashwatch watches the tunnel and restarts it if it stops or loses its connection. Remote access
+  it in the settings folder (`…/Hashwatch/cloudflared/`). It's 20–40 MB, so the HashWatch zips stay small.
+- HashWatch watches the tunnel and restarts it if it stops or loses its connection. Remote access
   stays on across restarts.
 - Scan the QR code with your phone, sign in, then in Safari tap **Share → Add to Home Screen**.
 
 ### The link can change
 
-The free "quick tunnel" link is **new every time cloudflared starts**: when Hashwatch or the computer
+The free "quick tunnel" link is **new every time cloudflared starts**: when HashWatch or the computer
 restarts, or after a long connection drop. To make that easy to live with:
 
-1. Turn on **Start automatically** so Hashwatch (and its link) restarts as rarely as possible.
+1. Turn on **Start automatically** so HashWatch (and its link) restarts as rarely as possible.
 2. When the link changes you get a **"New remote link" alert**, and the **Remote link** card on
    the Overview (shown on your home network) says **New link · re-scan**. Scan it again and replace the
    old Home Screen icon. Each browser remembers the last link it saw, so it knows when it's new.
@@ -105,60 +107,68 @@ school networks block it.
 
 ## Start automatically
 
-**Settings → Start automatically** starts Hashwatch in the background when you log in, with
-no window and no browser tab:
+**Settings → Start automatically** starts HashWatch quietly when you log in (on a Mac: in the menu bar, no window), with
+no browser tab:
 
 - **macOS**: a LaunchAgent (`~/Library/LaunchAgents/com.hashwatch.agent.plist`) that runs the binary inside
-  `Hashwatch.app` (`/Applications/Hashwatch.app/Contents/MacOS/Hashwatch -serve …`), effective from your next login.
+  `HashWatch.app` (`/Applications/HashWatch.app/Contents/MacOS/HashWatch -hidden …`), effective from your next login.
   Logs go to `~/Library/Application Support/Hashwatch/hashwatch.log`.
-- **Windows**: a Startup entry (`HKCU\…\CurrentVersion\Run`) that runs Hashwatch through a hidden launcher.
+- **Windows**: a Startup entry (`HKCU\…\CurrentVersion\Run`) that runs HashWatch through a hidden launcher.
 - **Linux**: a systemd user service (`~/.config/systemd/user/hashwatch.service`), or a desktop autostart
   entry if your system has no user systemd. On a headless Raspberry Pi also run
   `loginctl enable-linger $USER` so it starts without logging in.
 
-Put Hashwatch somewhere permanent first (on a Mac: drag it to Applications; elsewhere e.g. your home
+Put HashWatch somewhere permanent first (on a Mac: drag it to Applications; elsewhere e.g. your home
 folder, not Downloads), because the entry points at the file's location. Turn the switch off to remove it.
 
-To open Hashwatch, just run it again. If a copy is already running (for the same settings folder),
+To open HashWatch, just run it again. If a copy is already running (for the same settings folder),
 it opens your browser to that copy instead of starting a second one.
 
 ## Run it
 
 ### Mac
-1. Download **Hashwatch.dmg** from the Releases page (one app for both Apple Silicon and Intel Macs,
+1. Download **HashWatch.dmg** from the Releases page (one app for both Apple Silicon and Intel Macs,
    macOS 11 Big Sur or newer) and double-click it.
-2. In the window that opens, drag **Hashwatch** onto the **Applications** folder. Then eject the
-   "Hashwatch" disk (in the Finder sidebar or on the desktop).
-3. Open **Hashwatch** from Applications (or Launchpad). It runs quietly in the background (no
-   Terminal window, no Dock icon) and your browser opens the dashboard at `http://localhost:8787`.
+2. In the window that opens, drag **HashWatch** onto the **Applications** folder. Then eject the
+   "HashWatch" disk (in the Finder sidebar or on the desktop).
+3. Open **HashWatch** from Applications (or Launchpad). It opens in its **own window** (a native
+   macOS window with the dashboard, no browser needed), with a Dock icon and a **menu bar icon**.
 4. Enter your miner's IP address (or tap **Scan my network**). That's it.
 
-If you open Hashwatch straight from the disk image or from Downloads, the dashboard asks
-**"Move Hashwatch to Applications?"**. **Move to Applications** copies it there (with `ditto`, so
+If you open HashWatch straight from the disk image or from Downloads, the dashboard asks
+**"Move HashWatch to Applications?"**. **Move to Applications** copies it there (with `ditto`, so
 permissions and the signature stay intact), restarts it from Applications and reconnects the page.
 **Not now** is remembered. If your account can't write to Applications, it says so; drag it in
 Finder instead.
 
-Prefer a zip? **Hashwatch-macOS.zip** has the same app: unzip it, drag **Hashwatch.app** to Applications.
+Prefer a zip? **HashWatch-macOS.zip** has the same app: unzip it, drag **HashWatch.app** to Applications.
 
-To open the dashboard again later, double-click Hashwatch again: it reopens your browser to the copy
-that's already running. To stop it, use **Settings → Quit Hashwatch**.
-If macOS asks whether Hashwatch may find devices on your local network, click **Allow** (it needs that
+**The Mac app (v0.5.0):** a native window (WKWebView, dark title bar, minimum size; size and
+position are remembered) with the standard menus: **About**, **Settings… ⌘,**, **Quit ⌘Q**, Edit
+(copy/paste), View → **Reload ⌘R**, and Window. The **menu bar icon** (the hexagon) shows the live
+hashrate and has **Open Dashboard**, **Remote access** on/off and **Quit**. **Closing the window
+keeps HashWatch running in the menu bar** (the Dock icon goes away until you reopen it), so alerts
+keep coming. Alerts are native macOS notifications. **Quit** (⌘Q or the menu bar) stops everything,
+remote access included. Opening HashWatch again brings the window back. If the native window
+can't start for some reason, HashWatch falls back to opening the dashboard in your browser.
+You can still open the dashboard in any browser at `http://localhost:8787`, and on your phone.
+
+If macOS asks whether HashWatch may find devices on your local network, click **Allow** (it needs that
 to read your miner).
 
-**"Apple could not verify Hashwatch" / "cannot be opened":** Hashwatch is ad-hoc signed but not
+**"Apple could not verify HashWatch" / "cannot be opened":** HashWatch is ad-hoc signed but not
 notarized by Apple yet, so the first launch is blocked once. Click **Done**, then open
 **System Settings → Privacy & Security**, scroll to **Security** and click **Open Anyway** next to
-Hashwatch, then confirm. You only need to do this once. (The zip includes these steps in
-`How to open.txt`.)
+HashWatch, then confirm. You only need to do this once. (The DMG and zip include these steps in
+`Read me first.txt`, and `TESTING.md` lists what to try.)
 
 ### Windows and Linux
 1. Download the zip for your computer from the Releases page and unzip it.
-2. Double-click **Hashwatch.exe** (Linux: run `./hashwatch`). A small window opens and your browser
+2. Double-click **HashWatch.exe** (Linux: run `./hashwatch`). A small window opens and your browser
    opens the dashboard at `http://localhost:8787`.
 3. Enter your miner's IP address (or tap **Scan my network**).
 
-Keep the window open while you use it; close it (or use **Settings → Quit Hashwatch**) to stop.
+Keep the window open while you use it; close it (or use **Settings → Quit HashWatch**) to stop.
 
 To watch from your phone, open the address shown under **Settings → On your Wi-Fi**
 (for example `http://192.168.1.20:8787`) while on the same Wi-Fi, then **Share → Add to Home Screen**.
@@ -183,13 +193,14 @@ Use `hashwatch-linux-armv7` for 32-bit Raspberry Pi OS.
 | `--miner 192.168.1.50` | | Add a miner without the setup screen |
 | `--poll` | `5s` | How often to read each miner. Failed reads back off to 15s, then 30s, until it recovers |
 | `--no-browser` | | Don't open a browser on start |
-| `--serve` | | Run the server in this process (used inside Hashwatch.app and by auto-start) |
+| `--serve` | | Server only, no app window (browser-based) |
+| `--hidden` | | Start in the menu bar without opening the window (used by auto-start) |
 | `--config DIR` | OS config dir | Where settings and chart history are stored |
 
 Settings live in your user config folder (`~/Library/Application Support/Hashwatch`,
 `%AppData%\Hashwatch`, or `~/.config/Hashwatch`). Delete it to start over.
 
-**Security note:** by default Hashwatch is reachable by devices on your local network so your phone
+**Security note:** by default HashWatch is reachable by devices on your local network so your phone
 can use it. Set a password in Settings if you share your network. Don't port-forward it to the internet.
 Use Remote access instead, which is password-protected and served over https by Cloudflare.
 
@@ -209,32 +220,34 @@ go run ./cmd/avalon-sim &                      # simulated Nano 3 on 127.0.0.1:4
 go run ./cmd/hashwatch --miner 127.0.0.1:4028  # try everything, controls included, without hardware
 go run ./cmd/avalon-sim -admin 127.0.0.1:4029 &  # test knobs: curl 127.0.0.1:4029/block (found blocks +1),
                                                 #   /offline?on=1, /pool?down=1, /hash?f=0.5, /heat?c=6
-./scripts/build.sh v0.4.2   # cross-compiles every platform into dist/ (+ Hashwatch.dmg, SHA256SUMS.txt)
+./scripts/build.sh v0.5.0   # cross-compiles every platform into dist/ (+ HashWatch.dmg, SHA256SUMS.txt)
 ```
 
-The Mac build is a universal `Hashwatch.app` (arm64 + x86_64 joined like `lipo -create`),
-with `Info.plist` (`app.hashwatch`, `LSUIElement`, macOS 11+), an `.icns` icon and an ad-hoc
+The Mac build is a universal `HashWatch.app` (arm64 + x86_64 joined like `lipo -create`),
+with `Info.plist` (`app.hashwatch`, macOS 11+, local-network ATS exception), an `.icns` icon and an ad-hoc
 signature. On a Mac the script uses `lipo`, `codesign --force --deep -s -` and `ditto`; on Linux it
 uses `packaging/macos/lipo.py`, [rcodesign](https://github.com/indygreg/apple-platform-rs)
 (`RCODESIGN=/path/to/rcodesign`) and a zip writer that keeps exec bits. Check a built bundle with
-`python3 packaging/macos/verify_sig.py Hashwatch.app` (or `codesign --verify --deep --strict` on a Mac).
+`python3 packaging/macos/verify_sig.py HashWatch.app` (or `codesign --verify --deep --strict` on a Mac).
 
-`Hashwatch.dmg` is built without mounting anything: `mkfs.hfsplus` (hfsprogs) makes an HFS+ image,
+`HashWatch.dmg` is built without mounting anything: `mkfs.hfsplus` (hfsprogs) makes an HFS+ image,
 [libdmg-hfsplus](https://github.com/mozilla/libdmg-hfsplus)'s `hfsplus` adds the app, the
 `Applications` symlink, `.VolumeIcon.icns` and the background, `packaging/macos/make_dmg.py` writes the
 `.DS_Store` (window size, icon positions, background alias) with the `ds_store`/`mac_alias` Python
 packages, and `dmg build` compresses it to UDZO. Point the build at the tools with `MKFS_HFSPLUS`,
 `HFSPLUS`, `DMG` and `DMG_PYTHON`; the DMG step is skipped if they're missing. Check the result with
-`python3 packaging/macos/verify_dmg.py dist/Hashwatch.dmg` (or `hdiutil verify` on a Mac). The window
+`python3 packaging/macos/verify_dmg.py dist/HashWatch.dmg` (or `hdiutil verify` on a Mac). The window
 background comes from `make_dmg_background.py` (1x + 2x in one HiDPI TIFF).
-Inside the app, the visible executable is a launcher: it starts the server (`-serve`) in the background
-and exits, so the app never holds a Terminal and opening it again just reopens the browser.
+The native Mac shell (`cmd/hashwatch/native_darwin.go`) is pure Go: it calls Cocoa and WebKit through
+the Objective-C runtime with [purego](https://github.com/ebitengine/purego), so `CGO_ENABLED=0`
+cross-compiles from Linux still work. The server runs in the same process; `-serve` skips the window
+(browser only), and `-hidden` starts in the menu bar (auto-start uses it).
 
 Layout:
 
 ```
-cmd/hashwatch/      entry point (flags, browser launch, macOS app launcher)
-packaging/macos/    Info.plist, icon (.icns + generator), How to open.txt, lipo/verify helpers, DMG builder + background
+cmd/hashwatch/      entry point (flags, browser launch, native macOS shell)
+packaging/macos/    Info.plist, icon (.icns + generator), Read me first.txt, lipo/verify helpers, DMG builder + background
 internal/install/   "Move to Applications?" (macOS app run from Downloads or a disk image)
 internal/cgminer/   CGMiner TCP client, Avalon "MM ID" parser, typed control commands (workmode, ledset)
 internal/sim/       simulated Avalon Nano 3 API used by tests and cmd/avalon-sim

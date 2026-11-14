@@ -32,7 +32,7 @@ type AlertKind struct {
 
 var AlertKinds = []AlertKind{
 	{"block", "Block found", "When the miner's Found Blocks count goes up."},
-	{"offline", "Offline / back online", "When Hashwatch can't reach a miner for 30 seconds, and when it's back."},
+	{"offline", "Offline / back online", "When " + AppName + " can't reach a miner for 30 seconds, and when it's back."},
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
 	{"temp", "Running hot", "Max chip temperature above the miner's target for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
@@ -177,7 +177,7 @@ func (a *Alerts) Observe(id, name string, snap *model.Snapshot, hist []model.Sam
 		s.fails++
 		if s.fails >= offlineAfter && s.seenOK && !s.offline {
 			s.offline = true
-			fire("offline", "bad", name+" is offline", "Hashwatch can't reach the miner. Check its power and network.")
+			fire("offline", "bad", name+" is offline", AppName+" can't reach the miner. Check its power and network.")
 		}
 		s.lowSince, s.hotSince = time.Time{}, time.Time{}
 		return

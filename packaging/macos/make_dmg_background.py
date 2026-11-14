@@ -1,12 +1,15 @@
 """Render the DMG window background (660x400 pt) at 1x and 2x and pack both into one
 HiDPI TIFF (like `tiffutil -cathidpicheck`: 72 dpi + 144 dpi representations).
 Usage: python3 make_dmg_background.py OUT.tiff "App name" [preview-prefix]   (needs Pillow)
-Layout must match make_dmg.py: app icon centred at (170,185), Applications at (490,185).
+Layout must match make_dmg.py: app icon centred at (170,170), Applications at (490,170), docs row at y=420.
 """
 import math, struct, sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H = 660, 400
+W, H = 660, 520
+import re
+# The tagline's single source of truth is app.Tagline in internal/app/config.go.
+TAGLINE = re.search(r'const Tagline = "([^"]*)"', open(__file__.rsplit("/", 3)[0] + "/internal/app/config.go").read()).group(1)
 FONT = __file__.rsplit("/", 3)[0] + "/web/static/vendor/Geist.ttf"
 
 def font(px, wght):
@@ -17,7 +20,7 @@ def font(px, wght):
         pass
     return f
 
-def render(scale, name):
+def render(scale, name, tagline=TAGLINE):
     w, h = W * scale, H * scale
     s = lambda v: int(round(v * scale))
     g = Image.new("RGB", (1, 256))
@@ -28,7 +31,7 @@ def render(scale, name):
     # warm glow behind the arrow + faint cool glow corners
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(glow)
-    d.ellipse([s(170), s(60), s(490), s(310)], fill=(170, 95, 20, 70))
+    d.ellipse([s(170), s(45), s(490), s(295)], fill=(170, 95, 20, 70))
     glow = glow.filter(ImageFilter.GaussianBlur(s(70)))
     im = Image.alpha_composite(im, glow)
     # subtle hexagon lattice, fading out toward the bottom
@@ -47,7 +50,7 @@ def render(scale, name):
     # arrow from app to Applications
     ar = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ad = ImageDraw.Draw(ar)
-    y, x0, x1 = 185, 262, 398
+    y, x0, x1 = 170, 262, 398
     for i in range(10):  # dotted shaft with a gradient
         t = i / 9
         cx = x0 + (x1 - 26 - x0) * t
@@ -65,10 +68,19 @@ def render(scale, name):
     t1 = f"Drag {name} to Applications"
     f1, f2 = font(s(17), 560), font(s(12.5), 420)
     tw = td.textlength(t1, font=f1)
-    td.text(((w - tw) / 2, s(306)), t1, font=f1, fill=(238, 232, 224, 235))
-    t2 = "Then open it from Applications. It runs in your browser."
+    td.text(((w - tw) / 2, s(262)), t1, font=f1, fill=(238, 232, 224, 235))
+    t2 = "Then open it from Applications."
     tw = td.textlength(t2, font=f2)
-    td.text(((w - tw) / 2, s(334)), t2, font=f2, fill=(238, 232, 224, 120))
+    td.text(((w - tw) / 2, s(289)), t2, font=f2, fill=(238, 232, 224, 120))
+    # thin divider + docs row label, then the tagline at the very bottom
+    td.line([(s(250), s(330)), (s(410), s(330))], fill=(238, 232, 224, 28), width=max(1, scale))
+    f3 = font(s(11), 420)
+    t3 = "Before you start"
+    tw = td.textlength(t3, font=f3)
+    td.text(((w - tw) / 2, s(342)), t3, font=f3, fill=(238, 232, 224, 95))
+    f4 = font(s(10.5), 450)
+    tw = td.textlength(tagline, font=f4)
+    td.text(((w - tw) / 2, s(500)), tagline, font=f4, fill=(247, 170, 80, 120))
     return im.convert("RGB")
 
 def hidpi_tiff(out, im1, im2):

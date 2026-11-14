@@ -45,7 +45,7 @@ func Enable(s Spec) (Status, error) {
 		<false/>
 	</dict>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Interactive</string>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>

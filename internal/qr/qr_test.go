@@ -14,7 +14,7 @@ func TestEncodeSizes(t *testing.T) {
 		}
 	}
 	if dir := os.Getenv("QR_DUMP"); dir != "" {
-		for i, s := range []string{"https://example.com", "https://engine-limiting-refresh-sing.trycloudflare.com", "https://lucky-hash-miner-fresh-dawn.trycloudflare.com/#/overview", strings.Repeat("https://hashwatch.example.org/", 5), strings.Repeat("Q", 280), strings.Repeat("hello-wor", 30), strings.Repeat("ab", 125), strings.Repeat("k", 150), strings.Repeat("z", 190), strings.Repeat("y", 210), strings.Repeat("m", 120), strings.Repeat("r", 400)} {
+		for i, s := range []string{"https://example.com", "https://quiet-river-sample-link.trycloudflare.com", "https://lucky-hash-miner-fresh-dawn.trycloudflare.com/#/overview", strings.Repeat("https://hashwatch.example.org/", 5), strings.Repeat("Q", 280), strings.Repeat("hello-wor", 30), strings.Repeat("ab", 125), strings.Repeat("k", 150), strings.Repeat("z", 190), strings.Repeat("y", 210), strings.Repeat("m", 120), strings.Repeat("r", 400)} {
 			c, _ := Encode([]byte(s))
 			os.WriteFile(dir+"/"+string(rune('a'+i))+".txt", []byte(s), 0o644)
 			var b strings.Builder

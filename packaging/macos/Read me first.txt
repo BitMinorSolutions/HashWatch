@@ -1,0 +1,33 @@
+HashWatch for Mac · Powered by GrumpTech
+========================================
+
+INSTALL
+1. Open HashWatch.dmg and drag HashWatch onto the Applications folder.
+2. Eject the disk image, then open HashWatch from Applications (or Launchpad).
+   If you open it straight from the disk image, it offers to move itself to Applications.
+
+FIRST LAUNCH: "Apple could not verify HashWatch"
+HashWatch isn't notarized by Apple yet, so macOS blocks the first launch:
+   - Click Done.
+   - Open System Settings > Privacy & Security.
+   - Scroll to Security and click "Open Anyway" next to HashWatch.
+   - Click Open Anyway again and confirm with your password or Touch ID.
+   You only need to do this once.
+
+ALLOW LOCAL NETWORK
+When macOS asks "Allow HashWatch to find devices on local networks?", click Allow.
+HashWatch needs it to read your miner (port 4028). If you clicked Don't Allow:
+System Settings > Privacy & Security > Local Network > turn HashWatch on.
+Allow notifications too if you want alerts as Mac notifications.
+
+USING IT
+- HashWatch opens in its own window. Closing the window keeps it running in the
+  menu bar (the hexagon icon at the top right): live hashrate, Open Dashboard,
+  Remote access on/off, Quit.
+- Quit fully: HashWatch menu > Quit HashWatch (Cmd-Q), or the menu bar icon > Quit.
+- Settings: HashWatch menu > Settings (Cmd-,).
+
+SOMETHING WRONG?
+Settings > Copy debug info, then paste it into a message to us. It includes the
+app and macOS versions, the miner's raw replies and recent errors; passwords are
+removed. See TESTING.md for what to try.

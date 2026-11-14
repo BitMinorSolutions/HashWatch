@@ -37,6 +37,8 @@ type Server struct {
 	Quit       func()           // stops the server and cloudflared cleanly; nil in preview
 	Install    install.Info     // "Move to Applications?" offer (macOS app only)
 	Relaunch   func(app string) // stops this copy and starts the one at app
+	Shell      string           // "browser", "macos-native", "windows-native"
+	ShowWindow func()           // native shells: bring the window forward (second launch)
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -58,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ping", s.ping)
 	mux.HandleFunc("POST /api/quit", s.auth(s.quitGuard(s.quit)))
 	mux.HandleFunc("POST /api/install", s.auth(s.quitGuard(s.installSet)))
+	mux.HandleFunc("GET /api/debug", s.auth(s.debug))
+	mux.HandleFunc("POST /api/show", s.quitGuard(s.show)) // second launch asks the running copy to show its window
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
@@ -105,7 +109,7 @@ func (s *Server) tpl(w http.ResponseWriter, name, ctype string) {
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write([]byte(strings.ReplaceAll(string(b), "{{APP}}", AppName)))
+	w.Write([]byte(strings.NewReplacer("{{APP}}", AppName, "{{TAGLINE}}", Tagline).Replace(string(b))))
 }
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	s.tpl(w, "index.html", "text/html; charset=utf-8")
@@ -214,7 +218,7 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := s.authed(r)
 	out := map[string]any{"app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
-		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil}
+		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install
 	}
@@ -542,4 +546,13 @@ func (s *Server) installSet(w http.ResponseWriter, r *http.Request) {
 	if s.Relaunch != nil {
 		go func() { time.Sleep(300 * time.Millisecond); s.Relaunch(dst) }()
 	}
+}
+
+func (s *Server) show(w http.ResponseWriter, r *http.Request) {
+	if s.ShowWindow == nil || !peerIP(r).IsLoopback() {
+		writeJSON(w, 404, map[string]bool{"ok": false})
+		return
+	}
+	s.ShowWindow()
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
