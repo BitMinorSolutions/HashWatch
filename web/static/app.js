@@ -1,656 +1,594 @@
-/* Hashwatch frontend — vanilla JS + uPlot. */
+/* Hashwatch v0.3 frontend — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "Hashwatch";
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const root = $("#root");
-const S = { state: null, miner: null, data: null, hist: [], range: 3600, lastFetch: 0, timer: null, charts: {}, prev: {} };
+const S = { state: null, miner: null, data: null, hist: [], range: 3600, err: null, charts: [], can: false, route: "overview",
+  ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { h5s: false, h15m: true, h5m: true } };
 
 /* ---------------- utils ---------------- */
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
 const fmt = (v, d = 0) => isNum(v) ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : "—";
-function si(v, d = 2) {
-  if (!isNum(v)) return "—"; v = Number(v);
-  const u = ["", "K", "M", "G", "T", "P", "E"]; let i = 0;
-  while (Math.abs(v) >= 1000 && i < u.length - 1) { v /= 1000; i++; }
-  return v.toFixed(i ? d : 0) + u[i];
-}
-function rel(unix) {
-  if (!unix) return "—";
-  const s = Math.max(0, Math.round(Date.now() / 1000 - unix));
-  if (s < 5) return "just now";
-  if (s < 60) return s + "s ago";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h ago";
-  return Math.floor(s / 86400) + "d ago";
-}
-const absTime = (unix) => unix ? new Date(unix * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600); }
+const cap = (s) => String(s || "").replace(/^\w/, c => c.toUpperCase());
+const ic = (n, c = "") => `<svg class="i ${c}" aria-hidden="true"><use href="#${n}"/></svg>`;
+function si(v, d = 2) { if (!isNum(v)) return "—"; v = +v; const u = ["", "K", "M", "G", "T", "P", "E"]; let i = 0;
+  while (Math.abs(v) >= 1000 && i < u.length - 1) { v /= 1000; i++; } return v.toFixed(i ? d : 0) + u[i]; }
+function rel(unix) { if (!unix) return "—"; const s = Math.max(0, Math.round(Date.now() / 1000 - unix));
+  if (s < 5) return "just now"; if (s < 60) return s + "s ago"; if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago"; }
+const absTime = (u) => u ? new Date(u * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
+function toast(msg) { const t = $("#toast"); t.innerHTML = ic("circle-check") + esc(msg); t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 2600); }
 async function api(path, opts = {}) {
   const o = { credentials: "same-origin", cache: "no-store", ...opts, headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) } };
   if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
-  const r = await fetch(path, o);
-  let j = {}; try { j = await r.json(); } catch (e) {}
+  const r = await fetch(path, o); let j = {}; try { j = await r.json(); } catch (e) {}
   if (r.status === 401 && path !== "/api/login" && path !== "/api/password") { boot(); throw new Error("Signed out"); }
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-function tempColor(t, target) {
-  if (!isNum(t)) return "var(--text-3)";
-  const tg = isNum(target) ? Number(target) : 90;
-  if (t > tg) return "var(--bad)";
-  if (t >= tg - 5) return "var(--warn)";
-  if (t >= tg - 15) return "var(--accent-2)";
-  return "var(--good)";
-}
-function heat(t, lo, hi) { // green → amber → red
-  if (!isNum(t)) return "#6c717d";
-  const x = Math.max(0, Math.min(1, (t - lo) / Math.max(1, hi - lo)));
-  const stops = [[61, 220, 151], [245, 185, 66], [255, 107, 107]];
-  const seg = x < .5 ? 0 : 1, f = x < .5 ? x * 2 : (x - .5) * 2;
-  const c = stops[seg].map((v, i) => Math.round(v + (stops[seg + 1][i] - v) * f));
-  return `rgb(${c.join(",")})`;
-}
 function tween(el, to, d, suffix = "") {
   if (!el) return;
   if (!isNum(to)) { el.textContent = "—"; el.dataset.v = ""; return; }
-  const from = isNum(el.dataset.v) ? Number(el.dataset.v) : null; to = Number(to); el.dataset.v = to;
+  const from = isNum(el.dataset.v) ? +el.dataset.v : (el.dataset.first ? null : to * 0.6); to = +to; el.dataset.v = to; el.dataset.first = 1;
   if (from === null || from === to || matchMedia("(prefers-reduced-motion: reduce)").matches) { el.textContent = fmt(to, d) + suffix; return; }
-  const t0 = performance.now(), dur = 700;
-  const step = (now) => { const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
-    el.textContent = fmt(from + (to - from) * e, d) + suffix; if (p < 1) requestAnimationFrame(step); };
-  requestAnimationFrame(step);
+  const t0 = performance.now(), dur = 900; cancelAnimationFrame(el._raf);
+  const step = (now) => { const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 4);
+    el.textContent = fmt(from + (to - from) * e, d) + suffix; if (p < 1) el._raf = requestAnimationFrame(step); };
+  el._raf = requestAnimationFrame(step);
 }
-const I = {
-  hash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
-  temp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg>',
-  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v8M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>',
-  eff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20 20 4M7 4h-3v3M20 17v3h-3"/><circle cx="7" cy="17" r="2.5"/><circle cx="17" cy="7" r="2.5"/></svg>',
-  fan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M12 10c0-4 1-7 4-7s3 4-2 7M14 12c4 0 7 1 7 4s-4 3-7-2M12 14c0 4-1 7-4 7s-3-4 2-7M10 12c-4 0-7-1-7-4s4-3 7 2"/></svg>',
-  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
-  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>',
-  ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>',
-  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
-};
-const logo = '<img src="/assets/icons/icon-192.png" alt="" width="30" height="30">';
+function unsk(el) { if (el && el.classList.contains("sk")) el.classList.remove("sk"); return el; }
+const tgtOf = () => (S.data && S.data.temps && isNum(S.data.temps.target)) ? +S.data.temps.target : 90;
+function tempTone(t) { if (!isNum(t)) return "var(--t2)"; const g = tgtOf(); return t > g ? "var(--bad)" : t >= g - 5 ? "var(--warn)" : "var(--t1)"; }
+function heat(t, lo, hi) {
+  if (!isNum(t)) return "#5f656e";
+  const x = Math.max(0, Math.min(1, (t - lo) / Math.max(1, hi - lo)));
+  const st = [[60, 159, 207], [60, 207, 142], [240, 180, 76], [240, 99, 99]];
+  const seg = Math.min(2, Math.floor(x * 3)), f = x * 3 - seg;
+  return `rgb(${st[seg].map((v, i) => Math.round(v + (st[seg + 1][i] - v) * f)).join(",")})`;
+}
+const logo = '<img src="/assets/icons/icon-192.png" alt="" width="28" height="28">';
+
+/* ---------------- segmented control ---------------- */
+function seg(el) {
+  if (!el) return;
+  let th = el.querySelector(".thumb"); if (!th) { th = document.createElement("span"); th.className = "thumb"; el.prepend(th); }
+  const on = el.querySelector("button.on");
+  if (!on) { th.style.opacity = 0; return; }
+  th.style.opacity = 1; th.style.width = on.offsetWidth + "px"; th.style.transform = `translateX(${on.offsetLeft}px)`;
+  if (!el._ro) { el._ro = new ResizeObserver(() => seg(el)); el._ro.observe(el); }
+}
+function segSet(el, attr, val) { $$("button", el).forEach(b => b.classList.toggle("on", b.dataset[attr] === String(val))); seg(el); }
 
 /* ---------------- boot ---------------- */
+async function loadSprite() {
+  if ($("#lucide")) return;
+  try { const t = await (await fetch("/assets/vendor/lucide.svg")).text(); const d = document.createElement("div"); d.id = "lucide"; d.innerHTML = t; d.style.display = "none"; document.body.prepend(d); } catch (e) {}
+}
 async function boot() {
-  clearInterval(S.timer);
-  try { S.state = await api("/api/state"); } catch (e) { root.innerHTML = `<div class="center"><div class="auth"><h1>Can't reach ${esc(APP)}</h1><p class="lead">${esc(e.message)}</p></div></div>`; return; }
+  clearInterval(S.timer); await loadSprite();
+  try { S.state = await api("/api/state"); }
+  catch (e) { root.innerHTML = `<div class="center"><div class="auth"><h1>Can't reach ${esc(APP)}</h1><p class="lead">${esc(e.message)}</p></div></div>`; return; }
   if (S.state.auth_required && !S.state.authed) return viewLogin();
   if (S.state.setup_needed) return viewSetup();
   const ms = S.state.miners || [];
-  const saved = localStorage.getItem("hw_miner");
-  S.miner = ms.find(m => m.id === saved) || ms[0];
-  viewDash();
+  S.miner = ms.find(m => m.id === localStorage.getItem("hw_miner")) || ms[0];
+  shell();
 }
 
-/* ---------------- login ---------------- */
+/* ---------------- login / setup ---------------- */
 function viewLogin() {
-  root.innerHTML = `<div class="center"><div class="auth fade-in">
+  root.innerHTML = `<div class="center"><div class="auth view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
-    <h1>Welcome back</h1><p class="lead">Enter your ${esc(APP)} password to see your miners.</p>
-    <form class="card" id="f" autocomplete="on">
+    <h1>Welcome back</h1><p class="lead">Enter your ${esc(APP)} password.</p>
+    <form class="panel" id="f" autocomplete="on">
       <input type="text" name="username" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
       <label class="f" for="pw" style="margin-top:0">Password</label>
       <input class="input" id="pw" type="password" autocomplete="current-password" required autofocus>
       <div class="err" id="e"></div>
-      <button class="btn block" id="b" style="margin-top:6px">Sign in</button>
+      <button class="btn accent lg block" id="b">Sign in</button>
     </form></div></div>`;
-  $("#f").onsubmit = async (ev) => {
-    ev.preventDefault(); const b = $("#b"); b.disabled = true; $("#e").textContent = "";
-    try { await api("/api/login", { method: "POST", body: { password: $("#pw").value } }); boot(); }
-    catch (e) { $("#e").textContent = e.message; b.disabled = false; }
-  };
+  $("#f").onsubmit = async (ev) => { ev.preventDefault(); const b = $("#b"); b.disabled = true; $("#e").textContent = "";
+    try { await api("/api/login", { method: "POST", body: { password: $("#pw").value } }); boot(); } catch (e) { $("#e").textContent = e.message; b.disabled = false; } };
 }
-
-/* ---------------- setup ---------------- */
 function minerForm(id) {
   return `<label class="f" for="${id}-ip" style="margin-top:0">Miner IP address</label>
-    <input class="input mono" id="${id}-ip" inputmode="decimal" placeholder="192.168.1.50" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <label class="f" for="${id}-name">Name <span class="dim">(optional)</span></label>
+    <input class="input mono" style="font-size:16px" id="${id}-ip" inputmode="decimal" placeholder="192.168.1.50" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label class="f" for="${id}-name">Name <span class="t3">· optional</span></label>
     <input class="input" id="${id}-name" placeholder="Office Nano 3" autocomplete="off">
     <div class="err" id="${id}-e"></div>
-    <button type="submit" class="btn block" id="${id}-go">Connect miner</button>
+    <button type="submit" class="btn accent lg block" id="${id}-go">Connect miner</button>
     <div class="divider">or</div>
-    <button type="button" class="btn ghost block" id="${id}-scan">Scan my network</button>
+    <button type="button" class="btn ghost lg block" id="${id}-scan">${ic("radar")}Scan my network</button>
     <div class="found" id="${id}-found"></div>`;
 }
 function wireMinerForm(id, done) {
-  const go = async (host, name) => {
-    const b = $("#" + id + "-go"); b.disabled = true; b.textContent = "Connecting…"; $("#" + id + "-e").textContent = "";
+  const go = async (host, name) => { const b = $("#" + id + "-go"); b.disabled = true; b.textContent = "Connecting…"; $("#" + id + "-e").textContent = "";
     try { const r = await api("/api/miners", { method: "POST", body: { host, name } }); toast("Connected to " + (name || r.desc)); await done(r); }
-    catch (e) { $("#" + id + "-e").textContent = e.message; }
-    finally { b.disabled = false; b.textContent = "Connect miner"; }
-  };
+    catch (e) { $("#" + id + "-e").textContent = e.message; } finally { b.disabled = false; b.textContent = "Connect miner"; } };
   $("#" + id + "-form").onsubmit = (ev) => { ev.preventDefault(); const ip = $("#" + id + "-ip").value.trim();
     if (!ip) { $("#" + id + "-e").textContent = "Enter the miner's IP address. You can find it in your router or the Avalon app."; return; }
     go(ip, $("#" + id + "-name").value.trim()); };
-  $("#" + id + "-scan").onclick = async () => {
-    const b = $("#" + id + "-scan"), out = $("#" + id + "-found"); b.disabled = true; b.textContent = "Scanning your network…"; out.innerHTML = "";
-    try {
-      const r = await api("/api/discover", { method: "POST", body: {} });
-      if (!r.found || !r.found.length) out.innerHTML = '<div class="fine" style="margin-top:4px">No miners answered on port 4028. Make sure the miner is on the same network, then enter its IP above.</div>';
-      else out.innerHTML = r.found.map(f => `<button type="button" data-h="${esc(f.host)}" data-d="${esc(f.desc)}"><span><b>${esc(f.desc)}</b><br><span class="mono dim">${esc(f.host)}</span></span><span class="pill good plain">Add</span></button>`).join("");
-      out.querySelectorAll("button").forEach(x => x.onclick = () => { $("#" + id + "-ip").value = x.dataset.h; go(x.dataset.h, ""); });
-    } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-    finally { b.disabled = false; b.textContent = "Scan my network"; }
-  };
+  $("#" + id + "-scan").onclick = async () => { const b = $("#" + id + "-scan"), out = $("#" + id + "-found"); b.disabled = true; b.innerHTML = '<span class="spin"></span>Scanning your network…'; out.innerHTML = "";
+    try { const r = await api("/api/discover", { method: "POST", body: {} });
+      out.innerHTML = (r.found || []).length ? r.found.map(f => `<button type="button" data-h="${esc(f.host)}"><span><b>${esc(f.desc)}</b><br><span class="mono t3">${esc(f.host)}</span></span><span class="pill accent">Add</span></button>`).join("")
+        : '<p class="fine" style="margin-top:4px">No miners answered on port 4028. Make sure the miner is on the same network, then enter its IP above.</p>';
+      $$("button", out).forEach(x => x.onclick = () => { $("#" + id + "-ip").value = x.dataset.h; go(x.dataset.h, ""); });
+    } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; } finally { b.disabled = false; b.innerHTML = ic("radar") + "Scan my network"; } };
 }
 function viewSetup() {
-  root.innerHTML = `<div class="center"><div class="auth wide fade-in">
+  root.innerHTML = `<div class="center"><div class="auth wide view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">
-    <h1>Connect your miner</h1>
-    <p class="lead">${esc(APP)} reads your Avalon's stats directly over your local network. Nothing leaves your home.</p>
-    <form class="card" id="s-form" autocomplete="off">${minerForm("s")}</form>
-    <p class="fine">Tip: the miner's API listens on port 4028. If yours uses another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p>
-  </div></div>`;
+    <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
+    <form class="panel" id="s-form" autocomplete="off">${minerForm("s")}</form>
+    <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p></div></div>`;
   wireMinerForm("s", async () => boot());
 }
 
-/* ---------------- dashboard ---------------- */
-function kpi(cls, icon, label) {
-  return `<div class="card kpi ${cls}"><div class="label"><span>${label}</span>${icon}</div>
-    <div class="value num"><span class="sk" data-k="v">00.0</span></div>
-    <div class="spark" data-k="spark"></div><div class="foot" data-k="foot"><span class="sk">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div></div>`;
-}
-function viewDash() {
+/* ---------------- shell ---------------- */
+const PAGES = [
+  ["overview", "Overview", "layout-dashboard"], ["performance", "Performance", "activity"], ["hardware", "Hardware", "cpu"],
+  ["pools", "Pools", "network"], ["controls", "Controls", "sliders-horizontal"], ["raw", "Raw data", "table"] ];
+const TABS = ["overview", "performance", "hardware", "pools", "controls"];
+function shell() {
   const ms = S.state.miners || [];
-  const sel = ms.length > 1
-    ? `<div class="miner-select"><select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select></div>`
-    : `<div class="miner-name">${esc(S.miner.name)}</div>`;
-  root.innerHTML = `
-  <header class="topbar"><div class="topbar-in">
-    <div class="brand">${logo}<span class="brand-name">${esc(APP)}</span></div><span class="crumb">/</span>${sel}
-    <div class="spacer"></div>
-    <div class="live" id="live"><span class="dot"></span><span id="liveTxt">Connecting…</span></div>
-    <button class="icon-btn" id="openSettings" aria-label="Settings">${I.gear}</button>
-  </div></header>
-  <main class="page">
-    <div class="headline">
-      <div><h1 id="title">${esc(S.miner.name)}</h1><div class="sub" id="subline"><span class="sk">Loading live data from your miner</span></div></div>
-      <div class="pills" id="pills"></div>
+  root.innerHTML = `<div class="shell">
+    <aside class="sidebar">
+      <div class="brand">${logo}<b>${esc(APP)}</b></div>
+      <div class="miner-pick"><div class="btnish"><span class="m-ico">${ic("server", "sm")}</span><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
+        ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
+      <nav class="nav">${PAGES.map(([id, n, i], k) => (k === 5 ? '<div class="sep"></div>' : "") + `<a href="#/${id}" data-r="${id}" title="${n}">${ic(i)}<span>${n}</span></a>`).join("")}</nav>
+      <div class="side-foot">
+        <div class="side-status" id="sideStatus"><span class="dot warn"></span><span>Connecting…</span></div>
+        <div class="nav"><a href="#" id="openSet" title="Settings">${ic("settings")}<span>Settings</span></a></div>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar" id="topbar">
+        <span class="top-mobile-only">${logo.replace('width="28" height="28"', 'width="28" height="28" style="border-radius:8px"')}</span>
+        <h1 id="pageTitle">Overview</h1><span class="crumb-sub" id="crumbSub"></span>
+        <span class="grow desk-only"></span>
+        <span class="crumb-sub desk-only" id="liveTop"></span>
+        <button class="icon-btn" id="openSet2" aria-label="Settings">${ic("settings", "sm")}</button>
+      </header>
+      <div class="large-title"><h1 id="ltTitle">Overview</h1><div class="lt-sub" id="ltSub"><span class="dot warn"></span>${esc(S.miner.name)}</div></div>
+      <main class="content" id="view"></main>
     </div>
-    <div class="grid">
-      <section class="kpis" id="kpis">
-        ${kpi("k-hash", I.hash, "Hashrate")}${kpi("k-temp", I.temp, "Max chip temp")}${kpi("k-power", I.power, "Power")}
-        ${kpi("k-eff", I.eff, "Efficiency")}${kpi("k-fan", I.fan, "Fan")}${kpi("k-up", I.clock, "Uptime")}
-      </section>
-
-      <section class="card c-hash">
-        <div class="card-h"><div class="card-t">Hashrate</div>
-          <div class="seg" id="range"><button data-r="3600" class="on">1H</button><button data-r="21600">6H</button><button data-r="86400">24H</button></div></div>
-        <div class="hero-row">
-          <div><div class="hero-num num"><span id="heroV" class="sk">0.000</span><span class="u">TH/s</span></div>
-            <div class="hero-cap"><span>5-minute average</span><span class="delta" id="heroD"></span></div></div>
-          <div class="stats-inline num" id="hrStats"></div>
-        </div>
-        <div class="chart" id="chHash"><div class="chart-empty" id="chHashE"></div><div class="tip" id="tipHash"></div></div>
-        <div class="legend" style="margin-top:10px"><span><i style="background:var(--accent)"></i>5m avg</span><span><i style="background:#ffd8a3;opacity:.7"></i>15m avg</span><span><i style="background:rgba(255,255,255,.35)"></i>5s</span></div>
-        <div class="subgrid num" id="hrSub"></div>
-      </section>
-
-      <section class="card c-health">
-        <div class="card-h"><div class="card-t">Health</div><span class="dim" id="hUpd"></span></div>
-        <div class="alerts" id="alerts"><div class="sk" style="height:40px"></div></div>
-        <div class="health-split">
-          <div>
-            <div class="eyebrow">Accepted shares</div>
-            <div class="big-acc num"><b id="acc" class="sk">000,000</b><span class="dim" id="accPct"></span></div>
-            <div class="ratio" id="ratio"></div>
-            <div class="legend" style="margin-bottom:12px"><span><i style="background:var(--good)"></i>Accepted</span><span><i style="background:var(--warn)"></i>Stale</span><span><i style="background:var(--bad)"></i>Rejected</span></div>
-          </div>
-          <div class="kv num" id="shareKv"></div>
-        </div>
-      </section>
-
-      <section class="card c-temp">
-        <div class="card-h"><div class="card-t">Temperatures <span class="hint" id="tHint"></span></div></div>
-        <div class="legend" id="tLegend"></div>
-        <div class="chart sm" id="chTemp"><div class="chart-empty" id="chTempE"></div><div class="tip" id="tipTemp"></div></div>
-      </section>
-
-      <section class="card c-chips">
-        <div class="card-h"><div class="card-t">Chips <span class="hint" id="chipHint"></span></div><div class="chip-scale"><span>cool</span><i></i><span>hot</span></div></div>
-        <div class="chips num" id="chips">${Array.from({ length: 10 }, () => '<div class="chip sk" style="height:66px"></div>').join("")}</div>
-      </section>
-
-      <section class="card c-pools">
-        <div class="card-h"><div class="card-t">Pools <span class="hint" id="poolHint"></span></div></div>
-        <div class="pools" id="pools"><div class="sk" style="height:60px"></div><div class="sk" style="height:60px"></div></div>
-      </section>
-
-      <section class="card c-ctl" id="ctlCard">
-        <div class="card-h"><div class="card-t">Controls <span class="hint" id="ctlHint"></span></div><span id="ctlBadge"></span></div>
-        <div id="ctlNote"></div>
-        <div class="ctl-grid">
-          <div class="ctl-block">
-            <div class="ctl-label"><span>Work speed</span><span class="dim" id="ctlSpeedNow">Current: —</span></div>
-            <div class="seg big" id="ctlSpeed" role="group" aria-label="Work speed">
-              <button type="button" data-level="low">Low</button><button type="button" data-level="medium">Medium</button><button type="button" data-level="high">High</button></div>
-            <p class="fine" style="margin:8px 0 0">Changes hashrate, power draw, heat and fan noise.</p>
-          </div>
-          <div class="ctl-block">
-            <div class="ctl-label"><span>Light</span><span class="dim" id="ctlLedNow">—</span></div>
-            <div class="swatches" id="ctlSwatches"></div>
-            <div class="row" style="margin-top:12px;gap:12px">
-              <label class="color-pick" title="Custom colour"><input type="color" id="ctlColor" value="#f7931a" aria-label="Custom light colour"><span class="mono" id="ctlHex">#f7931a</span></label>
-              <div class="grow range-wrap"><input type="range" id="ctlBright" min="0" max="100" value="100" aria-label="Brightness"><b class="num" id="ctlBrightVal">100%</b></div>
-            </div>
-            <div class="seg modes" id="ctlMode" role="group" aria-label="Light mode" style="margin-top:12px">
-              <button type="button" data-mode="off">Off</button><button type="button" data-mode="fixed">Steady</button><button type="button" data-mode="flash">Flash</button><button type="button" data-mode="pulse">Pulse</button><button type="button" data-mode="loop">Loop</button></div>
-            <button type="button" class="btn block" id="ctlApplyLed" style="margin-top:14px">Apply light</button>
-          </div>
-        </div>
-        <div class="ctl-msg" id="ctlMsg" role="status" aria-live="polite"></div>
-      </section>
-
-      <section class="card c-device">
-        <div class="card-h"><div class="card-t">Device</div></div>
-        <div class="kv" id="devKv"><div><span class="sk">Model</span><b class="sk">Avalon</b></div></div>
-      </section>
-
-      <section class="card c-raw">
-        <details class="raw" id="raw"><summary><span class="card-t">All miner fields <span class="hint" id="rawN"></span></span><span class="chev"></span></summary>
-          <div class="raw-tools"><input class="input" id="rawQ" placeholder="Filter fields…" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-          <div class="raw-grid" id="rawGrid"></div></details>
-      </section>
-    </div>
-    <div class="footer"><span id="foot1">${esc(APP)}${S.state.version ? " " + esc(S.state.version) : ""} · read-only · data stays on your network</span><span id="foot2"></span></div>
-  </main>`;
+    <nav class="tabbar">${TABS.map(id => { const p = PAGES.find(x => x[0] === id); return `<a href="#/${id}" data-r="${id}">${ic(p[2])}<span>${p[1]}</span></a>`; }).join("")}</nav>
+  </div>`;
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
-  $("#openSettings").onclick = openSettings;
-  $("#range").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.range = +b.dataset.r;
-    $("#range").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); drawCharts(); };
-  $("#rawQ").oninput = renderRaw;
-  S.data = null; S.hist = []; S.charts = {}; S.can = false; S.ctlInit = false; S.ctlMode = "fixed";
-  initCharts();
-  ctlWire();
+  $("#openSet").onclick = (e) => { e.preventDefault(); openSettings(); };
+  $("#openSet2").onclick = openSettings;
+  S.data = null; S.hist = []; S.can = false; S.ctl.init = false;
+  window.onhashchange = route; route();
   refresh(true);
   S.timer = setInterval(tick, 1000);
 }
-let nextIn = 0;
-function tick() {
-  nextIn--;
-  if (nextIn <= 0) refresh(false);
-  liveLabel();
-  if (S.data) { const d = S.data; $("#hUpd").textContent = "Updated " + rel(d.fetched_at_unix); renderPoolTimes(); }
+const onScroll = () => $("#topbar") && $("#topbar").classList.toggle("scrolled", window.scrollY > 24);
+window.addEventListener("scroll", onScroll, { passive: true });
+function route() {
+  const r = (location.hash.replace(/^#\/?/, "") || "overview");
+  S.route = PAGES.some(p => p[0] === r) ? r : "overview";
+  const p = PAGES.find(x => x[0] === S.route);
+  $$(".nav a[data-r], .tabbar a").forEach(a => a.classList.toggle("on", a.dataset.r === S.route || (S.route === "raw" && a.dataset.r === "hardware" && a.closest(".tabbar"))));
+  $("#pageTitle").textContent = p[1]; $("#ltTitle").textContent = p[1]; document.title = `${p[1]} · ${APP}`;
+  S.charts.forEach(c => c.destroy()); S.charts = [];
+  const v = $("#view"); v.innerHTML = `<div class="view">${VIEWS[S.route].build()}</div>`;
+  window.scrollTo(0, 0); onScroll();
+  $$(".seg", v).forEach(seg);
+  if (VIEWS[S.route].wire) VIEWS[S.route].wire();
+  if (S.data) update(true);
 }
-function liveLabel() {
-  const el = $("#live"), t = $("#liveTxt"); if (!el) return;
-  const age = S.data && S.data.fetched_at_unix ? Date.now() / 1000 - S.data.fetched_at_unix : null;
-  el.classList.toggle("down", !!(S.data && !S.data.ok) || S.err);
-  el.classList.toggle("stale", age !== null && age > 60 && !(S.data && !S.data.ok));
-  if (S.err) t.textContent = "Can't refresh";
-  else if (!S.data) t.textContent = "Connecting…";
-  else if (!S.data.ok) t.textContent = "Miner offline";
-  else t.innerHTML = '<span class="txt-long">Live · </span>' + esc(rel(S.data.fetched_at_unix));
+let nextIn = 0;
+function tick() { if (--nextIn <= 0) refresh(false); liveUI(); $$("[data-rel]").forEach(el => el.textContent = rel(+el.dataset.rel)); }
+function liveUI() {
+  const d = S.data, age = d && d.fetched_at_unix ? Date.now() / 1000 - d.fetched_at_unix : null;
+  let k = "good", t;
+  if (S.err) { k = "bad"; t = "Can't refresh"; } else if (!d) { k = "warn"; t = "Connecting…"; }
+  else if (!d.ok) { k = "bad"; t = "Miner offline"; } else { if (age > 60) k = "warn"; t = "Live · " + rel(d.fetched_at_unix); }
+  const dot = `<span class="dot ${k === "good" ? "" : k}"></span>`;
+  $("#sideStatus").innerHTML = dot + `<span>${esc(t)}</span>`;
+  $("#liveTop").innerHTML = `<span style="display:inline-flex;align-items:center;gap:8px">${dot}${esc(t)}</span>`;
+  $("#ltSub").innerHTML = dot + `<span>${esc(S.miner.name)}</span><span class="t3">· ${esc(t.replace("Live · ", ""))}</span>`;
 }
 async function refresh(full) {
   nextIn = (S.state && S.state.poll_seconds) || 15;
   const since = full || !S.hist.length ? 0 : S.hist[S.hist.length - 1].t;
   try {
     const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}`);
-    S.err = null;
-    if (full) S.hist = r.history || []; else S.hist = S.hist.concat(r.history || []);
-    const cutoff = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cutoff) S.hist.shift();
-    S.can = !!r.can_control;
-    if (r.data) { S.data = r.data; render(); ctlRender(); }
-    else if (full) setTimeout(() => refresh(true), 1500);
-    drawCharts();
+    S.err = null; S.can = !!r.can_control;
+    S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
+    const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
+    if (r.data) { const first = !S.data; S.data = r.data; update(first); } else if (full) setTimeout(() => refresh(true), 1500);
   } catch (e) { S.err = e.message; }
-  liveLabel();
+  liveUI();
 }
-
-/* ---------------- render ---------------- */
-function setKpi(cls, value, d, unit, foot, spark, valueColor) {
-  const card = $(".kpi." + cls); if (!card) return;
-  const v = card.querySelector('[data-k="v"]');
-  if (v.classList.contains("sk")) { v.classList.remove("sk"); v.textContent = ""; v.parentElement.classList.add("fade-in"); }
-  if (typeof value === "string") { v.textContent = value; } else tween(v, value, d);
-  let u = card.querySelector(".value .u"); if (!u) { u = document.createElement("span"); u.className = "u"; v.after(u); }
-  u.textContent = unit || "";
-  v.style.color = valueColor || "";
-  card.querySelector('[data-k="foot"]').innerHTML = foot;
-  const sp = card.querySelector('[data-k="spark"]');
-  if (spark) sp.innerHTML = spark; else if (spark === null) sp.style.display = "none";
-}
-function sparkSVG(vals, color, id) {
-  const pts = vals.filter(isNum); if (pts.length < 2) return '<svg viewBox="0 0 100 30"></svg>';
-  const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1, n = vals.length;
-  let d = "", first = true;
-  vals.forEach((v, i) => { if (!isNum(v)) return; const x = (i / (n - 1)) * 100, y = 27 - ((v - lo) / span) * 24;
-    d += (first ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2); first = false; });
-  return `<svg viewBox="0 0 100 30" preserveAspectRatio="none"><defs><linearGradient id="g${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-    <path d="${d} L100 30 L0 30 Z" fill="url(#g${id})"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
-}
-const recent = (k, secs = 3600) => { const c = Date.now() / 1000 - secs; return S.hist.filter(h => h.t >= c).map(h => h[k]); };
-function pill(t, k) { return `<span class="pill ${k || ""}">${esc(t)}</span>`; }
-
-function render() {
-  const d = S.data, id = d.identity || {}, hr = d.hashrate || {}, tp = d.temps || {}, fan = d.fan || {}, pw = d.power || {},
-    up = d.uptime || {}, sh = d.shares || {}, er = d.errors || {}, dev = d.device || {}, ch = d.chips || {};
-  // headline
-  const bits = [];
-  if (id.model || id.product) bits.push(`<span>${esc([id.product === "Avalonnano" ? "Avalon Nano" : id.product, id.model ? id.model.replace(/^nano/i, "") : ""].filter(Boolean).join(" ").trim() || "Avalon")}</span>`);
-  if (id.core) bits.push(`<span>${esc(id.core)} · ${esc(id.chips || "")} chips</span>`);
-  if (id.firmware) bits.push(`<span>FW <span class="mono">${esc(id.firmware)}</span></span>`);
-  if (d.miner_host && d.source !== "remote") bits.push(`<span class="mono">${esc(d.miner_host)}</span>`);
-  $("#subline").innerHTML = bits.join("") || "<span>Avalon miner</span>";
-  const hashing = er.hash_status == 1 || (er.hash_status == null && d.ok);
-  const alive = (dev.status || "").toLowerCase() === "alive";
-  $("#pills").innerHTML = d.ok
-    ? pill(hashing ? "Hashing" : "Not hashing", hashing ? "good" : "bad") + pill(dev.status ? "Device " + dev.status.toLowerCase() : "API up", alive ? "good" : "warn") +
-      ((d.warnings || []).length ? pill(d.warnings.length + (d.warnings.length > 1 ? " warnings" : " warning"), "warn") : "")
-    : pill("Offline", "bad");
-
-  // KPIs
-  const hero = isNum(hr.ths_hero) ? +hr.ths_hero : isNum(hr.ths_5m) ? +hr.ths_5m : isNum(hr.ghs_spd) ? hr.ghs_spd / 1000 : null;
-  setKpi("k-hash", hero, 3, "TH/s", `<span>5s <b class="num">${fmt(hr.ths_5s, 2)}</b></span><span>15m <b class="num">${fmt(hr.ths_15m, 2)}</b></span>`, sparkSVG(recent("h5m"), "#f7931a", "h"));
-  const tgt = isNum(tp.target) ? +tp.target : null;
-  setKpi("k-temp", tp.max, 0, "°C", `<span>avg <b class="num">${fmt(tp.avg)}°</b></span><span>target <b class="num">${fmt(tp.target)}°</b></span>`,
-    `<div class="meter" style="margin-top:12px"><i style="width:${isNum(tp.max) ? Math.min(100, tp.max / 110 * 100) : 0}%;background:${tempColor(tp.max, tgt)}"></i>${tgt ? `<b style="left:${tgt / 110 * 100}%"></b>` : ""}</div>`,
-    tempColor(tp.max, tgt));
-  setKpi("k-power", pw.watts, 0, "W", `<span><b class="num">${fmt(pw.voltage_v, 2)}</b> V</span><span>MPO <b class="num">${fmt(pw.mpo_w)}</b> W</span>`, sparkSVG(recent("w"), "#6aa8ff", "p"));
-  const eff = isNum(pw.watts) && hero ? pw.watts / hero : null;
-  setKpi("k-eff", eff, 1, "J/TH", `<span>${pw.watts && hero ? `<b class="num">${fmt(hero * 1000 / pw.watts, 1)}</b> GH/W` : ""}</span><span class="f2">${d.control && d.control.work_name ? "mode <b>" + esc(cap(d.control.work_name)) + "</b>" : ""}</span>`, sparkSVG(S.hist.slice(-240).map(h => isNum(h.w) && h.h5m ? h.w / h.h5m : null), "#a78bfa", "e"));
-  setKpi("k-fan", fan.rpm, 0, "RPM", `<span><b class="num">${fmt(fan.percent)}%</b> of max</span><span></span>`,
-    `<div class="meter" style="margin-top:12px"><i style="width:${isNum(fan.percent) ? fan.percent : 0}%;background:var(--info)"></i></div>`);
-  setKpi("k-up", up.human || "—", 0, "", `<span title="${up.seconds ? esc(absTime(Math.floor(Date.now() / 1000) - up.seconds)) : ""}">since <b>${up.seconds ? esc(new Date((Math.floor(Date.now() / 1000) - up.seconds) * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })) : "—"}</b></span>`, null);
-
-  // hashrate card
-  const hv = $("#heroV"); if (hv.classList.contains("sk")) hv.classList.remove("sk");
-  if (d.ok) tween(hv, hero, 3); else { hv.textContent = "Offline"; hv.dataset.v = ""; }
-  const h1 = S.hist.find(h => h.t >= Date.now() / 1000 - 3600 && isNum(h.h5m));
-  const dEl = $("#heroD");
-  if (h1 && hero && S.hist.length > 20) { const p = (hero - h1.h5m) / h1.h5m * 100;
-    dEl.className = "delta " + (p >= 0.05 ? "up" : p <= -0.05 ? "down" : ""); dEl.textContent = (p >= 0 ? "▲ " : "▼ ") + Math.abs(p).toFixed(1) + "% vs 1h"; }
-  else { dEl.className = "delta"; dEl.textContent = "collecting history"; }
-  $("#hrStats").innerHTML = [["5s", hr.ths_5s], ["1m", hr.ths_1m], ["15m", hr.ths_15m], ["Lifetime", hr.ths_avg]].map(([k, v]) => `<div><span>${k}</span><b>${fmt(v, 2)}</b></div>`).join("");
-  $("#hrSub").innerHTML = [["GHS spd", fmt(hr.ghs_spd, 1)], ["GHS mm", fmt(hr.ghs_mm, 1)], ["GHS avg", fmt(hr.ghs_avg, 1)], ["Work utility", fmt(hr.wu, 0)]].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
-
-  // health
-  const w = d.warnings || [];
-  let al = "";
-  if (!d.ok) al = `<div class="alert bad">${I.warn}<div>Can't read the miner. ${esc((d.query_errors || []).join("; ") || "No reply.")}</div></div>`;
-  else if (w.length) al = w.map(x => `<div class="alert">${I.warn}<div>${esc(x)}</div></div>`).join("");
-  else al = `<div class="alert ok">${I.ok}<div>All systems normal. No errors or warnings.</div></div>`;
-  $("#alerts").innerHTML = al;
-  const acc = $("#acc"); acc.classList.remove("sk"); tween(acc, sh.accepted, 0);
-  const tot = (+sh.accepted || 0) + (+sh.rejected || 0) + (+sh.stale || 0);
-  $("#accPct").textContent = tot ? (sh.accepted / tot * 100).toFixed(2) + "%" : "";
-  $("#ratio").innerHTML = tot ? `<i style="flex-grow:${sh.accepted};background:var(--good)"></i><i style="flex-grow:${Math.max(sh.stale, tot * .004)};background:var(--warn)"></i><i style="flex-grow:${Math.max(sh.rejected, tot * .004)};background:var(--bad)"></i>` : "";
-  const echu = (er.echu && er.echu.length) ? er.echu.join(" ") : "0";
-  $("#shareKv").innerHTML = kv([
-    ["Rejected", `${fmt(sh.rejected)} <span class="dim">· ${fmt(sh.reject_pct, 2)}%</span>`],
-    ["Stale", `${fmt(sh.stale)} <span class="dim">· ${fmt(sh.stale_pct, 2)}%</span>`],
-    ["Hardware errors", `${fmt(sh.hw_errors)} <span class="dim">· DH ${isNum(sh.dh_pct) ? fmt(sh.dh_pct, 3) + "%" : "—"}</span>`],
-    ["Best share", `<span title="${fmt(sh.best_share)}">${si(sh.best_share)}</span>`],
-    ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"],
-    ["Get / remote failures", `${fmt(sh.get_failures)} / ${fmt(sh.remote_failures)}`],
-    ["ECHU / ECMM · CRC", `${esc(echu)} / ${fmt(er.ecmm)} · ${fmt(er.crc)}`],
-    ["Blocks found", fmt(sh.found_blocks)],
-  ]);
-
-  // temps legend
-  $("#tHint").textContent = tgt ? `target ${tgt}°C` : "";
-  $("#tLegend").innerHTML = [["Max", tp.max, "#ff6b6b"], ["Avg", tp.avg, "#f7931a"], ["Board", tp.ambient, "#3ddc97"], ["Outlet", tp.outlet, "#6aa8ff"]]
-    .map(([k, v, c]) => `<span><i style="background:${c}"></i>${k} <b class="num" style="color:var(--text)">${fmt(v)}°</b></span>`).join("") + (tgt ? `<span><i style="background:repeating-linear-gradient(90deg,#a3a8b4 0 3px,transparent 3px 6px)"></i>Target</span>` : "");
-
-  // chips
-  const ct = ch.temps || [], cv = ch.volts_mv || [], cn = ch.nonces || [];
-  const nC = Math.max(ct.length, cv.length, cn.length);
-  if (nC) {
-    const v = ct.filter(isNum), lo = Math.min(...v), hi = Math.max(...v);
-    $("#chipHint").textContent = v.length ? `${fmt(lo)}–${fmt(hi)}°C · spread ${fmt(hi - lo)}°` : "";
-    const hlo = Math.min(lo, (tgt || 90) - 20), hhi = Math.max(hi, (tgt || 90) + 4);
-    $("#chips").innerHTML = Array.from({ length: nC }, (_, i) => `<div class="chip" style="--c:${heat(ct[i], hlo, hhi)}">
-      <div class="n"><span>#${i + 1}</span>${ct[i] === hi ? '<span style="color:var(--bad)">hot</span>' : ""}</div>
-      <div class="t" style="color:${heat(ct[i], hlo, hhi)}">${isNum(ct[i]) ? fmt(ct[i]) + "°" : "—"}</div>
-      <div class="m">${isNum(cv[i]) ? fmt(cv[i]) + " mV" : ""}</div><div class="m mw">${isNum(cn[i]) ? "MW " + fmt(cn[i]) : ""}</div></div>`).join("");
-  } else { $("#chipHint").textContent = ""; $("#chips").innerHTML = '<div class="dim">No per-chip data in this reply.</div>'; }
-
-  // pools
-  const pools = d.pools || [];
-  $("#poolHint").textContent = pools.length ? `${pools.filter(p => (p.status || "").toLowerCase() === "alive").length} of ${pools.length} alive` : "";
-  $("#pools").innerHTML = pools.length ? pools.map(p => {
-    const alive = (p.status || "").toLowerCase() === "alive";
-    const st = p.stratum_active ? pill("Active", "good") : alive ? pill("Standby", "info") : pill(p.status || "Unknown", "bad");
-    const url = (p.url || "").replace(/^stratum\+tcp:\/\//, "");
-    return `<div class="pool${p.stratum_active ? " active" : ""}"><div class="idx">${esc(p.id)}</div>
-      <div style="min-width:0"><div class="url mono" title="${esc(p.url)}">${esc(url)}</div><div class="usr mono" title="${esc(p.user)}">${esc(p.user || "")}${p.block_height ? ` · block ${fmt(p.block_height)}` : ""}</div></div>
-      <div class="col c2 num"><span>Shares acc / rej / stale</span><b>${fmt(p.accepted)} <span class="dim">/ ${fmt(p.rejected)} / ${fmt(p.stale)}</span></b></div>
-      <div class="col c3 num"><span>Difficulty · last share</span><b>${fmt(p.difficulty)} <span class="dim" data-ls="${p.last_share_unix || 0}">· ${p.last_share_unix ? rel(p.last_share_unix) : "never"}</span></b></div>
-      <div style="text-align:right">${st}</div></div>`; }).join("") : '<div class="dim">No pools reported.</div>';
-
-  // device
-  const c = d.control || {};
-  const ps = (pw.ps_raw || []).join(" ");
-  const nf = er.net_fail || [];
-  $("#devKv").innerHTML = kv([
-    ["Model", esc([id.product, id.model].filter(Boolean).join(" ") || "—")],
-    ["Firmware", `<span class="mono">${esc(id.firmware || "—")}</span>`],
-    ["Hardware", `<span class="mono">${esc(id.hardware || "—")}</span>`],
-    ["Type", `<span class="mono">${esc([id.hwtype, id.swtype].filter(Boolean).join(" / ") || "—")}</span>`],
-    ["cgminer · API", `${esc(id.cgminer || "—")} · ${esc(id.api || "—")}`],
-    ["Work mode", c.work_name ? esc(cap(c.work_name)) + (isNum(c.work_level) ? ` <span class="dim">(level ${c.work_level})</span>` : "") : (isNum(pw.work_level) ? "Level " + pw.work_level : "—")],
-    ["Light", c.led_hex ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(c.led_hex)};box-shadow:0 0 8px ${esc(c.led_hex)};margin-right:6px"></span>${esc(cap(c.led_mode || ""))} · ${fmt(c.led_brightness)}%` : (er.led ? "LED " + esc(er.led) : "—")],
-    ["Power supply", `${pw.ps_ok === false ? '<span style="color:var(--bad)">Fault</span>' : "OK"} <span class="dim mono">[${esc(ps || "—")}]</span>`],
-    ["Soft-off", esc(er.soft_off == null ? "0" : er.soft_off)],
-    ["Network drops", nf.length ? `${nf.length} <span class="dim">· last ${rel(nf[nf.length - 1].unix)}</span>` : "None"],
-    ["Device", esc([dev.name, dev.enabled === "Y" ? "enabled" : dev.enabled].filter(Boolean).join(" · ") || "—")],
-  ]);
-  if (nf.length) $("#devKv").title = "Network drops:\n" + nf.map(n => absTime(n.unix)).join("\n");
-  renderRaw();
-  $("#foot2").textContent = d.source === "remote" ? "Preview: reading the miner through its existing dashboard" : (d.miner_host ? "Miner API " + d.miner_host : "");
-}
-const cap = (s) => String(s || "").replace(/^\w/, c => c.toUpperCase());
-function kv(rows) { return rows.map(([k, v]) => `<div><span>${esc(k)}</span><b>${v}</b></div>`).join(""); }
-function renderPoolTimes() { document.querySelectorAll("[data-ls]").forEach(el => { const u = +el.dataset.ls; el.textContent = "· " + (u ? rel(u) : "never"); }); }
-function renderRaw() {
-  if (!S.data) return;
-  const mm = S.data.mm_fields || {}, q = ($("#rawQ").value || "").toLowerCase();
-  const keys = Object.keys(mm).sort((a, b) => a.localeCompare(b));
-  $("#rawN").textContent = keys.length ? `${keys.length} fields` : "";
-  $("#rawGrid").innerHTML = keys.filter(k => !q || k.toLowerCase().includes(q) || String(mm[k]).toLowerCase().includes(q))
-    .map(k => `<div><span>${esc(k)}</span><b>${esc(mm[k])}</b></div>`).join("") || '<div><span>No matches</span></div>';
-}
+function update(first) { const v = VIEWS[S.route]; if (v.update) v.update(first); drawCharts(); }
 
 /* ---------------- charts ---------------- */
-function grad(u, c1, a1, a2) {
-  const g = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
-  g.addColorStop(0, c1.replace("A", a1)); g.addColorStop(1, c1.replace("A", a2)); return g;
+function tipPlugin(tip, fmtRow) {
+  return { hooks: { setCursor: (u) => {
+    const i = u.cursor.idx; if (i == null || u.data[0][i] == null || u.cursor.left < 0) { tip.classList.remove("on"); return; }
+    tip.innerHTML = `<div class="tt">${new Date(u.data[0][i] * 1000).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}</div>` +
+      u.series.slice(1).map((s, k) => s.show && s.label && u.data[k + 1][i] != null ? `<div class="tr"><span><i style="background:${s._c}"></i>${s.label}</span><b class="num">${fmtRow(u.data[k + 1][i])}</b></div>` : "").join("");
+    const L = u.over.offsetLeft + u.cursor.left, W = tip.offsetWidth, PW = tip.parentElement.clientWidth;
+    tip.style.left = Math.max(8, Math.min(PW - W - 8, L + 16 > PW - W - 8 ? L - W - 16 : L + 16)) + "px";
+    tip.style.top = Math.max(0, u.over.offsetTop + u.cursor.top - 30) + "px"; tip.classList.add("on"); } } };
 }
-function tooltipPlugin(tipId, fmtRow) {
-  return { hooks: {
-    setCursor: (u) => {
-      const tip = document.getElementById(tipId); if (!tip) return;
-      const i = u.cursor.idx;
-      if (i == null || u.data[0][i] == null) { tip.classList.remove("on"); return; }
-      tip.innerHTML = `<div class="t">${new Date(u.data[0][i] * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}</div>` +
-        u.series.slice(1).map((s, k) => s.show && s.label ? `<div class="r"><span><i style="background:${s._c}"></i>${s.label}</span><b class="num">${fmtRow(u.data[k + 1][i])}</b></div>` : "").join("");
-      const L = u.over.offsetLeft + u.cursor.left, W = tip.offsetWidth, pw = u.over.parentElement.parentElement.clientWidth;
-      tip.style.left = Math.max(0, Math.min(pw - W, L - W / 2)) + "px"; tip.style.top = (u.over.offsetTop + 6) + "px";
-      tip.classList.add("on");
-    } } };
-}
-const axis = (fmtv) => ({ stroke: "#6c717d", grid: { stroke: "rgba(255,255,255,.045)", width: 1 }, ticks: { show: false }, font: "11px Geist, sans-serif", size: 42, gap: 6, values: fmtv });
-function timeAxis() {
-  return { stroke: "#6c717d", grid: { show: false }, ticks: { show: false }, font: "11px Geist, sans-serif", size: 28, space: 70,
+function xAxis() {
+  return { stroke: "#5f656e", grid: { show: false }, ticks: { show: false }, font: "500 11px Geist, sans-serif", size: 30, space: 80, gap: 8,
     values: (u, ts) => { const span = (u.scales.x.max || 0) - (u.scales.x.min || 0); let last = "";
-      return ts.map(t => { const d = new Date(t * 1000);
-        const s = span > 86400 * 1.5 ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-          : d.toLocaleTimeString(undefined, span < 900 ? { hour: "numeric", minute: "2-digit", second: "2-digit" } : { hour: "numeric", minute: "2-digit" });
+      return ts.map(t => { const s = new Date(t * 1000).toLocaleTimeString(undefined, span < 900 ? { hour: "numeric", minute: "2-digit", second: "2-digit" } : { hour: "numeric", minute: "2-digit" });
         if (s === last) return ""; last = s; return s; }); } };
 }
-function mkChart(el, series, yfmt, tipId, rowFmt, yRange) {
-  const spline = uPlot.paths && uPlot.paths.spline ? uPlot.paths.spline() : undefined;
-  const opts = {
-    width: el.clientWidth || 600, height: el.clientHeight || 260, padding: [10, 18, 0, 0], pxAlign: 0,
-    cursor: { points: { size: 7, width: 2, fill: "#0f1115" }, drag: { x: false, y: false }, y: false },
-    legend: { show: false }, scales: { x: { time: true }, y: { range: yRange } },
-    axes: [timeAxis(), axis(yfmt)],
-    series: [{}].concat(series.map(s => ({ label: s.label, stroke: s.c, width: s.w || 2, dash: s.dash, _c: s.c, paths: s.linear ? undefined : spline,
-      fill: s.fill ? (u) => grad(u, s.fill, ".32", "0") : undefined, points: { show: false }, spanGaps: true }))),
-    plugins: [tooltipPlugin(tipId, rowFmt)],
-  };
-  const u = new uPlot(opts, [[], ...series.map(() => [])], el);
+function yAxis(f) { return { side: 1, stroke: "#5f656e", grid: { stroke: "rgba(255,255,255,.045)", width: 1, dash: [2, 4] }, ticks: { show: false }, font: "500 11px Geist, sans-serif", size: 52, gap: 10, space: 44, values: f }; }
+function chart(el, series, yf, rowF, yRange) {
+  if (!window.uPlot || !el) return null;
+  const tip = document.createElement("div"); tip.className = "tip"; el.appendChild(tip);
+  const spline = uPlot.paths.spline ? uPlot.paths.spline() : undefined;
+  const u = new uPlot({
+    width: el.clientWidth || 600, height: el.clientHeight || 280, padding: [12, 0, 0, 28], pxAlign: 0,
+    cursor: { points: { size: 9, width: 2.5, fill: "#0b0c0e", stroke: (u, i) => u.series[i]._c }, drag: { x: false, y: false }, y: false },
+    legend: { show: false }, scales: { x: { time: true }, y: { range: yRange } }, axes: [xAxis(), yAxis(yf)],
+    series: [{}].concat(series.map(s => ({ label: s.label, stroke: s.c, width: s.w || 2, dash: s.dash, _c: s.c, _k: s.k, show: s.show !== false,
+      paths: s.linear ? undefined : spline, points: { show: false }, spanGaps: false,
+      fill: s.fill ? (u) => { const g = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height); g.addColorStop(0, s.fill[0]); g.addColorStop(1, s.fill[1]); return g; } : undefined }))),
+    plugins: [tipPlugin(tip, rowF)],
+  }, [[], ...series.map(() => [])], el);
+  u._keys = series.map(s => s.k);
   new ResizeObserver(() => { if (el.clientWidth) u.setSize({ width: el.clientWidth, height: el.clientHeight }); }).observe(el);
-  el.addEventListener("mouseleave", () => { const t = document.getElementById(tipId); t && t.classList.remove("on"); });
-  return u;
+  el.addEventListener("mouseleave", () => tip.classList.remove("on"));
+  S.charts.push(u); return u;
 }
-function initCharts() {
-  if (!window.uPlot) return;
-  S.charts.hash = mkChart($("#chHash"), [
-    { label: "5s", c: "rgba(255,255,255,.28)", w: 1, linear: true },
-    { label: "15m avg", c: "#ffd8a3", w: 1.4, dash: [4, 4] },
-    { label: "5m avg", c: "#f7931a", w: 2.4, fill: "rgba(247,147,26,A)" },
-  ], (u, v) => v.map(x => x.toFixed(1)), "tipHash", v => isNum(v) ? fmt(v, 3) + " TH/s" : "—",
-    (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.15, (hi - lo) * .25); return [Math.max(0, lo - p), hi + p]; });
-  S.charts.temp = mkChart($("#chTemp"), [
-    { label: "Max", c: "#ff6b6b", w: 2 }, { label: "Avg", c: "#f7931a", w: 2, fill: "rgba(247,147,26,A)" },
-    { label: "Board", c: "#3ddc97", w: 1.6 }, { label: "Outlet", c: "#6aa8ff", w: 1.6 }, { label: "Target", c: "rgba(163,168,180,.7)", w: 1, dash: [3, 4], linear: true },
-  ], (u, v) => v.map(x => x + "°"), "tipTemp", v => isNum(v) ? fmt(v) + "°C" : "—",
-    (u, lo, hi) => lo == null ? [20, 100] : [Math.max(0, Math.floor((lo - 6) / 5) * 5), Math.ceil((hi + 4) / 5) * 5]);
-}
+const HASH_SERIES = () => [
+  { k: "h5s", label: "5s", c: "rgba(255,255,255,.26)", w: 1, linear: true, show: S.series.h5s },
+  { k: "h15m", label: "15m avg", c: "rgba(255,210,150,.55)", w: 1.25, dash: [3, 4], show: S.series.h15m },
+  { k: "h5m", label: "5m avg", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.h5m } ];
+const hashRange = (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.2, (hi - lo) * .3); return [Math.max(0, lo - p), hi + p]; };
 function drawCharts() {
-  if (!S.charts.hash) return;
-  const c = Date.now() / 1000 - S.range, h = S.hist.filter(x => x.t >= c);
-  const tgt = S.data && S.data.temps ? S.data.temps.target : null;
-  const col = (k) => h.map(x => isNum(x[k]) ? +x[k] : null), ts = h.map(x => x.t);
-  S.charts.hash.setData([ts, col("h5s"), col("h15m"), col("h5m")]);
-  S.charts.temp.setData([ts, col("tmax"), col("tavg"), col("tamb"), col("tout"), h.map(() => isNum(tgt) ? +tgt : null)]);
-  const msg = h.length < 2 ? `Collecting history… charts fill in as ${esc(APP)} runs (a point every ${(S.state && S.state.poll_seconds) || 15}s).` : "";
-  $("#chHashE").textContent = msg; $("#chTempE").textContent = msg;
+  const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = ((S.state && S.state.poll_seconds) || 15) * 8, h = [];
+  S.hist.filter(x => x.t >= c).forEach((x, i, a) => { if (i && x.t - a[i - 1].t > gap) h.push({ t: a[i - 1].t + 1 }); h.push(x); });
+  S.charts.forEach(u => {
+    const ts = h.map(x => x.t);
+    u.setData([ts, ...u._keys.map(k => k === "target" ? h.map(() => tg) : k === "eff" ? h.map(x => isNum(x.w) && x.h5m ? x.w / x.h5m : null) : h.map(x => isNum(x[k]) ? +x[k] : null))]);
+    const e = u.root.parentElement.querySelector(".chart-empty");
+    if (e) e.textContent = h.length < 2 ? `Collecting history… a new point every ${(S.state && S.state.poll_seconds) || 15}s.` : "";
+  });
+}
+function rangeSeg() { return `<div class="seg" id="range">${[[3600, "1H"], [21600, "6H"], [86400, "24H"]].map(([r, l]) => `<button data-r="${r}" class="${S.range === r ? "on" : ""}">${l}</button>`).join("")}</div>`; }
+function wireRange() { ["#range", "#range2"].forEach(sel => { const el = $(sel); if (!el) return; el.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.range = +b.dataset.r;
+  ["#range", "#range2"].forEach(x => $(x) && segSet($(x), "r", S.range)); drawCharts(); }; }); }
+function spark(vals, color, id) {
+  const pts = vals.filter(isNum); if (pts.length < 2) return "";
+  let lo = Math.min(...pts), hi = Math.max(...pts); const mid = (lo + hi) / 2, minSp = Math.abs(mid) * .08 || 1; if (hi - lo < minSp) { lo = mid - minSp / 2; hi = mid + minSp / 2; } const sp = hi - lo, n = vals.length; let d = "", f = true;
+  vals.forEach((v, i) => { if (!isNum(v)) return; d += (f ? "M" : "L") + (i / (n - 1) * 100).toFixed(2) + " " + (26 - (v - lo) / sp * 22).toFixed(2); f = false; });
+  return `<svg viewBox="0 0 100 28" preserveAspectRatio="none"><defs><linearGradient id="sg${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".22"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L100 28 L0 28 Z" fill="url(#sg${id})"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+const recent = (k, secs = 3600) => { const c = Date.now() / 1000 - secs; return S.hist.filter(h => h.t >= c).map(h => typeof k === "function" ? k(h) : h[k]); };
+
+/* ---------------- shared bits ---------------- */
+const D = () => S.data || {};
+function heroVal() { const hr = D().hashrate || {}; return isNum(hr.ths_hero) ? +hr.ths_hero : isNum(hr.ths_5m) ? +hr.ths_5m : isNum(hr.ghs_spd) ? hr.ghs_spd / 1000 : null; }
+function activePool() { const ps = D().pools || []; return ps.find(p => p.stratum_active) || ps.find(p => (p.status || "").toLowerCase() === "alive"); }
+const kv = (rows) => rows.map(([k, v, i]) => `<div class="row-kv"><span>${i ? ic(i, "sm t3") : ""}${esc(k)}</span><b>${v}</b></div>`).join("");
+function notices() {
+  const d = D(), w = d.warnings || [];
+  if (!d.ok) return `<div class="notice bad"><div class="ic">${ic("wifi-off", "sm")}</div><div><b>Can't read the miner</b><span>${esc((d.query_errors || []).join("; ") || "No reply.")}</span></div></div>`;
+  if (!w.length) return `<div class="notice good"><div class="ic">${ic("circle-check", "sm")}</div><div><b>All systems normal</b><span>No errors or warnings reported by the miner.</span></div></div>`;
+  return w.map(x => `<div class="notice warn"><div class="ic">${ic("triangle-alert", "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${x.includes("temperature") ? "Chips are running hot. Check airflow or lower the work speed." : x.includes("hardware error") ? "A small hardware-error rate is normal; watch it if it keeps rising." : ""}</span></div></div>`).join("");
+}
+function sharesBlock() {
+  const sh = D().shares || {}, er = D().errors || {}, tot = (+sh.accepted || 0) + (+sh.rejected || 0) + (+sh.stale || 0);
+  return { tot, html: `<div class="label">Accepted shares</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span class="big num" id="accV">${fmt(sh.accepted)}</span><span class="t2 num">${tot ? (sh.accepted / tot * 100).toFixed(2) + "%" : ""}</span></div>
+    <div class="ratio">${tot ? `<i style="flex-grow:${sh.accepted};background:var(--good)"></i><i style="flex-grow:${Math.max(sh.stale, tot * .004)};background:var(--warn)"></i><i style="flex-grow:${Math.max(sh.rejected, tot * .004)};background:var(--bad)"></i>` : ""}</div>
+    <div class="legend" style="margin-bottom:8px"><span><i style="background:var(--good)"></i>Accepted</span><span><i style="background:var(--warn)"></i>Stale <b class="num">${fmt(sh.stale_pct, 2)}%</b></span><span><i style="background:var(--bad)"></i>Rejected <b class="num">${fmt(sh.reject_pct, 2)}%</b></span></div>` };
 }
 
+/* ---------------- views ---------------- */
+const VIEWS = {};
+VIEWS.overview = {
+  build: () => `
+    <section class="hero">
+      <div class="hero-top">
+        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· 5-minute average</span></div>
+          <div class="hero-num num"><span id="heroV" class="sk">0.000</span><span class="unit">TH/s</span></div>
+          <div class="hero-meta" id="heroMeta"><span class="sk" style="width:280px;height:20px"></span></div></div>
+        ${rangeSeg()}
+      </div>
+      <div class="hero-chart reveal" id="chHero"><div class="chart-empty"></div></div>
+      <div class="hero-range">${rangeSeg().replace('id="range"', 'id="range2"')}</div>
+    </section>
+    <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
+    <div class="cols">
+      <section class="panel panel-pad span-7"><div class="sec-h"><h2>Status</h2><span class="t3" id="stUpd"></span></div><div id="notices"><div class="sk" style="height:48px"></div></div></section>
+      <section class="panel panel-pad span-5"><div class="sec-h"><h2>Mining</h2><a class="t3" href="#/pools" style="display:inline-flex;align-items:center;gap:4px;font-size:13px">Pools${ic("chevron-right", "sm")}</a></div><div id="mining"><div class="sk" style="height:120px"></div></div></section>
+    </div>`,
+  wire: () => {
+    wireRange();
+    chart($("#chHero"), HASH_SERIES().filter(s => s.k !== "h5s").map(s => ({ ...s, show: true })), (u, v) => v.map(x => x.toFixed(1)), v => fmt(v, 3) + " TH/s", hashRange);
+  },
+  update: () => {
+    const d = D(), hr = d.hashrate || {}, tp = d.temps || {}, pw = d.power || {}, fan = d.fan || {}, up = d.uptime || {}, er = d.errors || {};
+    const hv = unsk($("#heroV")); if (d.ok) tween(hv, heroVal(), 3); else { hv.textContent = "Offline"; hv.dataset.v = ""; }
+    const h1 = S.hist.find(h => h.t >= Date.now() / 1000 - 3600 && isNum(h.h5m)); let delta = '<span class="delta">collecting history</span>';
+    if (h1 && heroVal() && S.hist.length > 20) { const p = (heroVal() - h1.h5m) / h1.h5m * 100; delta = `<span class="delta ${p >= .05 ? "up" : p <= -.05 ? "down" : ""}">${p >= 0 ? "↑" : "↓"} ${Math.abs(p).toFixed(1)}% <span style="opacity:.7;font-weight:500">1h</span></span>`; }
+    const hashing = er.hash_status == 1 || (er.hash_status == null && d.ok), ap = activePool();
+    $("#heroMeta").innerHTML = `${delta}<span class="pill ${d.ok ? (hashing ? "good" : "bad") : "bad"}"><span class="dot"></span>${d.ok ? (hashing ? "Hashing" : "Not hashing") : "Offline"}</span>` +
+      (ap ? `<span class="sep"></span><span>${esc((ap.stratum_url || ap.url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, ""))}</span>` : "") +
+      `<span class="sep desk-meta"></span><span class="desk-meta">5s <b class="num">${fmt(hr.ths_5s, 2)}</b></span><span class="sep desk-meta"></span><span class="desk-meta">15m <b class="num">${fmt(hr.ths_15m, 2)}</b></span>`;
+    const hv5 = heroVal(), eff = isNum(pw.watts) && hv5 ? pw.watts / hv5 : null, tg = tgtOf(), sh = d.shares || {};
+    const M = (icn, label, val, unit, sub, extra, color) => `<div class="metric"><div class="label">${ic(icn)}${label}</div><div class="val num"${color ? ` style="color:${color}"` : ""}>${val}<small>${unit}</small></div><div class="sub">${sub}</div>${extra || ""}</div>`;
+    $("#strip").innerHTML =
+      M("thermometer", "Max chip temp", fmt(tp.max), "°C", `avg <b>${fmt(tp.avg)}°</b> · target <b>${fmt(tp.target)}°</b>`, `<div class="bar"><i style="width:${isNum(tp.max) ? Math.min(100, tp.max / 110 * 100) : 0}%;background:${tempTone(tp.max)}"></i><em style="left:${tg / 110 * 100}%"></em></div>`, tempTone(tp.max)) +
+      M("plug", "Power", fmt(pw.watts), "W", `<b>${fmt(pw.voltage_v, 2)}</b> V · MPO <b>${fmt(pw.mpo_w)}</b> W`, `<div class="spark">${spark(recent("w"), "#9aa0a9", "p")}</div>`) +
+      M("leaf", "Efficiency", fmt(eff, 1), "J/TH", `<b>${hv5 && pw.watts ? fmt(hv5 * 1000 / pw.watts, 1) : "—"}</b> GH/W`, `<div class="spark">${spark(recent(h => isNum(h.w) && h.h5m ? h.w / h.h5m : null), "#9aa0a9", "e")}</div>`) +
+      M("fan", "Fan", fmt(fan.rpm), "RPM", `<b>${fmt(fan.percent)}%</b> of max speed`, `<div class="bar"><i style="width:${isNum(fan.percent) ? fan.percent : 0}%"></i></div>`) +
+      M("clock", "Uptime", esc(up.human || "—"), "", `since <b>${up.seconds ? esc(absTime(Math.floor(Date.now() / 1000) - up.seconds)) : "—"}</b>`);
+    $("#stUpd").innerHTML = `Updated <span data-rel="${d.fetched_at_unix || 0}">${rel(d.fetched_at_unix)}</span>`;
+    $("#notices").innerHTML = notices();
+    const sb = sharesBlock();
+    $("#mining").innerHTML = sb.html + `<div class="list" style="margin-top:6px">${kv([["Best share", si(sh.best_share)], ["Last share", ap && ap.last_share_unix ? `<span data-rel="${ap.last_share_unix}">${rel(ap.last_share_unix)}</span>` : "—"], ["Block height", ap && ap.block_height ? fmt(ap.block_height) : "—"]])}</div>`;
+  },
+};
+VIEWS.performance = {
+  build: () => `
+    <section class="panel panel-pad">
+      <div class="sec-h"><h2>Hashrate</h2>${rangeSeg()}</div>
+      <div class="legend" id="hsLegend" style="margin-bottom:8px"></div>
+      <div class="chart reveal" id="chPerf" style="height:var(--chart-h)"><div class="chart-empty"></div></div>
+    </section>
+    <section class="panel strip" id="hrStrip"></section>
+    <div class="cols">
+      <section class="panel panel-pad span-6"><div class="sec-h"><h2>Shares</h2></div><div id="shares"><div class="sk" style="height:220px"></div></div></section>
+      <section class="panel panel-pad span-6"><div class="sec-h"><h2>Power <span class="t3">watts</span></h2></div>
+        <div class="chart reveal" id="chPow" style="height:150px"><div class="chart-empty"></div></div><div class="list" id="powList" style="margin-top:12px"></div></section>
+    </div>`,
+  wire: () => {
+    wireRange();
+    chart($("#chPerf"), HASH_SERIES(), (u, v) => v.map(x => x.toFixed(1)), v => fmt(v, 3) + " TH/s", hashRange);
+    chart($("#chPow"), [{ k: "w", label: "Power", c: "#d4d7dd", w: 1.75, fill: ["rgba(255,255,255,.10)", "rgba(255,255,255,0)"] }], (u, v) => v.map(x => x + "W"), v => fmt(v) + " W",
+      (u, lo, hi) => lo == null ? [0, 200] : [Math.max(0, Math.floor(lo * .9 / 10) * 10), Math.ceil(hi * 1.08 / 10) * 10]);
+    const lg = $("#hsLegend");
+    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "h5m" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
+    lg.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; S.series[k] = !S.series[k]; b.classList.toggle("off", !S.series[k]);
+      const u = S.charts[0]; const i = u._keys.indexOf(k) + 1; u.setSeries(i, { show: S.series[k] }); };
+  },
+  update: () => {
+    const d = D(), hr = d.hashrate || {}, sh = d.shares || {}, er = d.errors || {}, pw = d.power || {}, c = d.control || {};
+    const M = (l, v, u, s) => `<div class="metric"><div class="label">${l}</div><div class="val num">${v}<small>${u}</small></div>${s ? `<div class="sub">${s}</div>` : ""}</div>`;
+    $("#hrStrip").innerHTML = M("5 seconds", fmt(hr.ths_5s, 2), "TH/s", "short-term, noisy") + M("1 minute", fmt(hr.ths_1m, 2), "TH/s") + M("5 minutes", fmt(hr.ths_5m, 2), "TH/s", "headline figure") +
+      M("15 minutes", fmt(hr.ths_15m, 2), "TH/s") + M("Lifetime", fmt(hr.ths_avg, 2), "TH/s", `GHS spd <b>${fmt(hr.ghs_spd, 0)}</b> · mm <b>${fmt(hr.ghs_mm, 0)}</b>`);
+    const echu = (er.echu && er.echu.length) ? er.echu.join(" ") : "0";
+    $("#shares").innerHTML = sharesBlock().html + `<div class="list two">${kv([
+      ["Rejected", `${fmt(sh.rejected)} <span class="t3">· ${fmt(sh.reject_pct, 2)}%</span>`], ["Stale", `${fmt(sh.stale)} <span class="t3">· ${fmt(sh.stale_pct, 2)}%</span>`],
+      ["Hardware errors", `${fmt(sh.hw_errors)} <span class="t3">· ${isNum(sh.dh_pct) ? fmt(sh.dh_pct, 3) + "%" : "—"}</span>`], ["Best share", `<span title="${fmt(sh.best_share)}">${si(sh.best_share)}</span>`],
+      ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"], ["Get / remote fails", `${fmt(sh.get_failures)} / ${fmt(sh.remote_failures)}`],
+      ["ECHU / ECMM / CRC", `${esc(echu)} / ${fmt(er.ecmm)} / ${fmt(er.crc)}`], ["Work utility", fmt(hr.wu, 0)], ["GHS avg", fmt(hr.ghs_avg, 1)], ["Blocks found", fmt(sh.found_blocks)]])}</div>`;
+    const hv = heroVal();
+    $("#powList").innerHTML = kv([["Draw", `${fmt(pw.watts)} W <span class="t3">· ${fmt(pw.voltage_v, 2)} V</span>`], ["Efficiency", isNum(pw.watts) && hv ? `${fmt(pw.watts / hv, 1)} J/TH` : "—"],
+      ["MPO limit", isNum(pw.mpo_w) ? fmt(pw.mpo_w) + " W" : "—"], ["Work speed", c.work_name ? cap(c.work_name) : (isNum(pw.work_level) ? "Level " + pw.work_level : "—")],
+      ["Power supply", `${pw.ps_ok === false ? '<span style="color:var(--bad)">Fault</span>' : "OK"} <span class="t3 mono">${esc((pw.ps_raw || []).join(" "))}</span>`]]);
+  },
+};
+VIEWS.hardware = {
+  build: () => `
+    <div class="cols">
+      <section class="panel panel-pad span-8"><div class="sec-h"><h2>Temperatures</h2>${rangeSeg()}</div>
+        <div class="legend" id="tLegend" style="margin-bottom:8px"></div><div class="chart reveal" id="chTemp" style="height:calc(var(--chart-h) * .78)"><div class="chart-empty"></div></div></section>
+      <section class="panel panel-pad span-4"><div class="sec-h"><h2>Thermals</h2></div><div class="list" id="thermList"><div class="sk" style="height:200px"></div></div></section>
+      <section class="panel panel-pad span-12"><div class="sec-h"><h2>Chips <span class="t3" id="chipHint"></span></h2><span class="ramp">cool<i></i>hot</span></div>
+        <div class="heat num" id="heat">${Array.from({ length: 10 }, () => '<div class="cell sk"></div>').join("")}</div></section>
+      <section class="panel panel-pad span-12"><div class="sec-h"><h2>Device</h2></div><div class="list three" id="devList"></div></section>
+      <section class="panel panel-pad span-6"><div class="sec-h"><h2>Network drops <span class="t3" id="nfN"></span></h2></div><div class="list" id="nfList"></div></section>
+      <div class="span-6" style="display:flex;flex-direction:column;gap:12px"><a class="link-row" href="#/raw">${ic("table", "t3")}<span class="grow">All miner fields</span><span class="t3" id="rawCount"></span>${ic("chevron-right", "sm t3")}</a></div>
+    </div>`,
+  wire: () => {
+    wireRange();
+    chart($("#chTemp"), [{ k: "tmax", label: "Max", c: "#f06363", w: 2 }, { k: "tavg", label: "Avg", c: "#f5a524", w: 2 },
+      { k: "tamb", label: "Board", c: "#3ccf8e", w: 1.5 }, { k: "tout", label: "Outlet", c: "#6ea8fe", w: 1.5 }, { k: "target", label: "Target", c: "rgba(255,255,255,.35)", w: 1, dash: [3, 4], linear: true }],
+      (u, v) => v.map(x => x + "°"), v => fmt(v) + "°C", (u, lo, hi) => lo == null ? [20, 100] : [Math.max(0, Math.floor((lo - 6) / 10) * 10), Math.ceil((hi + 4) / 10) * 10]);
+  },
+  update: () => {
+    const d = D(), tp = d.temps || {}, fan = d.fan || {}, id = d.identity || {}, ch = d.chips || {}, er = d.errors || {}, dev = d.device || {}, pw = d.power || {};
+    $("#tLegend").innerHTML = [["Max", tp.max, "#f06363"], ["Avg", tp.avg, "#f5a524"], ["Board", tp.ambient, "#3ccf8e"], ["Outlet", tp.outlet, "#6ea8fe"]].map(([k, v, c]) => `<span><i style="background:${c}"></i>${k} <b class="num">${fmt(v)}°</b></span>`).join("") + `<span><i style="background:rgba(255,255,255,.35)"></i>Target <b class="num">${fmt(tp.target)}°</b></span>`;
+    $("#thermList").innerHTML = kv([["Max chip", `<span style="color:${tempTone(tp.max)}">${fmt(tp.max)}°C</span>`, "flame"], ["Average", fmt(tp.avg) + "°C", "thermometer"], ["Target", fmt(tp.target) + "°C", "gauge"],
+      ["Board", fmt(tp.ambient) + "°C", "circuit-board"], ["Outlet", fmt(tp.outlet) + "°C", "waypoints"], ["Fan", `${fmt(fan.rpm)} RPM <span class="t3">· ${fmt(fan.percent)}%</span>`, "fan"]]);
+    const ct = ch.temps || [], cv = ch.volts_mv || [], cn = ch.nonces || [], n = Math.max(ct.length, cv.length, cn.length);
+    if (n) { const v = ct.filter(isNum), lo = Math.min(...v), hi = Math.max(...v), tg = tgtOf(), mwMax = Math.max(...cn.filter(isNum), 1);
+      $("#chipHint").textContent = v.length ? `${fmt(lo)}–${fmt(hi)}°C · spread ${fmt(hi - lo)}°` : "";
+      $("#heat").innerHTML = Array.from({ length: n }, (_, i) => `<div class="cell" style="--c:${heat(ct[i], Math.min(lo - 4, tg - 6), Math.max(hi + 2, tg + 4))}"><div class="n"><span>Chip ${i + 1}</span>${ct[i] === hi ? ic("flame", "sm") : ""}</div>
+        <div class="t">${isNum(ct[i]) ? fmt(ct[i]) : "—"}<small>°C</small></div>
+        <div><div class="m"><span>${isNum(cv[i]) ? fmt(cv[i]) + " mV" : ""}</span><span class="v2">${isNum(cn[i]) ? si(cn[i], 1) + " MW" : ""}</span></div><div class="mw"><i style="width:${isNum(cn[i]) ? cn[i] / mwMax * 100 : 0}%"></i></div></div></div>`).join("");
+    } else { $("#heat").innerHTML = '<div class="t3">No per-chip data in this reply.</div>'; }
+    const c = d.control || {};
+    $("#devList").innerHTML = kv([["Model", esc([id.product, id.model].filter(Boolean).join(" ") || "—")], ["Core", esc(id.core ? `${id.core} · ${id.chips || "?"} chips` : "—")],
+      ["Firmware", `<span class="mono">${esc(id.firmware || "—")}</span>`], ["Hardware", `<span class="mono">${esc(id.hardware || "—")}</span>`],
+      ["Type", `<span class="mono">${esc([id.hwtype, id.swtype].filter(Boolean).join(" / ") || "—")}</span>`], ["cgminer · API", `${esc(id.cgminer || "—")} · ${esc(id.api || "—")}`],
+      ["Device", esc([dev.name, dev.status].filter(Boolean).join(" · ") || "—")], ["Work speed", c.work_name ? cap(c.work_name) : "—"],
+      ["Light", c.led_mode ? `${c.led_hex ? `<span class="sw-i" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(cap(c.led_mode))}${isNum(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : (er.led ? "LED " + esc(er.led) : "—")],
+      ["Soft-off", esc(er.soft_off == null ? "0" : er.soft_off)], ["Host", d.source === "remote" ? "Preview" : `<span class="mono">${esc(d.miner_host || "—")}</span>`], ["Uptime", esc((d.uptime || {}).human || "—")]]);
+    const nf = (er.net_fail || []).slice().reverse();
+    $("#nfN").textContent = nf.length ? `${nf.length} recorded` : "";
+    $("#nfList").innerHTML = nf.length ? nf.slice(0, 6).map(x => `<div class="row-kv"><span>${ic("wifi-off", "sm t3")}${esc(absTime(x.unix))}</span><b class="t2" data-rel="${x.unix}">${rel(x.unix)}</b></div>`).join("") : '<div class="row-kv"><span>None recorded</span><b></b></div>';
+    $("#rawCount").textContent = Object.keys(d.mm_fields || {}).length + " fields";
+  },
+};
+VIEWS.pools = {
+  build: () => `<section class="panel" id="poolList"><div class="pool"><div class="sk" style="height:40px;grid-column:1/-1"></div></div></section>
+    <section class="panel panel-pad"><div class="sec-h"><h2>Connection</h2></div><div class="list three" id="poolStats"></div></section>`,
+  update: () => {
+    const d = D(), ps = d.pools || [], sh = d.shares || {}, er = d.errors || {};
+    $("#poolList").innerHTML = ps.length ? ps.map(p => { const alive = (p.status || "").toLowerCase() === "alive", url = (p.url || "").replace(/^stratum\+tcp:\/\//, "");
+      return `<div class="pool${p.stratum_active ? " active" : ""}"><div class="pi">${ic(p.stratum_active ? "zap" : alive ? "globe" : "wifi-off", "sm")}</div>
+        <div style="min-width:0"><div class="pu">${esc(url)}</div><div class="pw mono">${esc(p.user || "")}</div>
+          <div class="pstats num"><div><span>Accepted</span><b>${fmt(p.accepted)}</b></div><div><span>Rejected · stale</span><b>${fmt(p.rejected)} · ${fmt(p.stale)}</b></div>
+            <div><span>Difficulty</span><b>${fmt(p.difficulty)}</b></div><div><span>Last share</span><b>${p.last_share_unix ? `<span data-rel="${p.last_share_unix}">${rel(p.last_share_unix)}</span>` : "never"}</b></div>
+            ${p.block_height ? `<div><span>Block</span><b>${fmt(p.block_height)}</b></div>` : ""}</div></div>
+        <div>${p.stratum_active ? '<span class="pill accent"><span class="dot" style="background:var(--accent)"></span>Active</span>' : alive ? '<span class="pill">Standby</span>' : `<span class="pill bad"><span class="dot"></span>${esc(p.status || "Down")}</span>`}</div></div>`; }).join("")
+      : '<div class="pool"><span class="t3" style="grid-column:1/-1">No pools reported.</span></div>';
+    $("#poolStats").innerHTML = kv([["Pools alive", `${ps.filter(p => (p.status || "").toLowerCase() === "alive").length} of ${ps.length}`], ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"],
+      ["Best share", si(sh.best_share)], ["Get failures", fmt(sh.get_failures)], ["Remote failures", fmt(sh.remote_failures)], ["Network blocks", fmt(sh.network_blocks)]]);
+  },
+};
+
 /* ---------------- controls ---------------- */
-const PRESETS = [["Red", "#ff0000"], ["Orange", "#ff6a00"], ["Amber", "#f0a020"], ["Yellow", "#ffff00"], ["Green", "#00ff00"],
-  ["Cyan", "#00ffff"], ["Blue", "#0000ff"], ["Purple", "#8000ff"], ["Pink", "#ff40a0"], ["White", "#ffffff"]];
+const PRESETS = [["Red", "#ff3b30"], ["Orange", "#ff6a00"], ["Amber", "#f0a020"], ["Yellow", "#ffd60a"], ["Green", "#30d158"],
+  ["Cyan", "#40c8e0"], ["Blue", "#0a84ff"], ["Purple", "#8000ff"], ["Pink", "#ff40a0"], ["White", "#ffffff"]];
 const LEVEL = { low: "Low", medium: "Medium", high: "High" };
 const MODE = { off: "Off", fixed: "Steady", flash: "Flash", pulse: "Pulse", loop: "Loop" };
-function ctlWire() {
-  const sw = $("#ctlSwatches");
-  sw.innerHTML = PRESETS.map(([n, h]) => `<button type="button" class="swatch" data-hex="${h}" title="${n}" aria-label="${n}" style="--sw:${h}"></button>`).join("");
-  sw.onclick = (e) => { const b = e.target.closest(".swatch"); if (!b) return; setColor(b.dataset.hex); };
-  $("#ctlColor").oninput = (e) => setColor(e.target.value);
-  $("#ctlBright").oninput = (e) => { $("#ctlBrightVal").textContent = e.target.value + "%"; paintRange(); };
-  $("#ctlMode").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.ctlMode = b.dataset.mode; markMode(); };
-  $("#ctlSpeed").onclick = async (e) => {
-    const b = e.target.closest("button"); if (!b || !S.can) return;
-    const lvl = b.dataset.level, cur = S.data && S.data.control ? S.data.control.work_name : null;
-    if (lvl === cur) { ctlMsg(`Work speed is already ${LEVEL[lvl]}.`, "ok"); return; }
-    if (!await confirmDialog(`Change work speed to ${LEVEL[lvl]}?`,
-      `From ${cur ? LEVEL[cur] || cur : "the current setting"} to <b>${LEVEL[lvl]}</b>. This changes hashrate, power use, heat and fan noise. The miner may take a minute to settle.`, `Set ${LEVEL[lvl]}`)) return;
-    ctlSend("/api/control/workmode", { miner: S.miner.id, mode: lvl }, `Work speed → ${LEVEL[lvl]}`);
-  };
-  $("#ctlApplyLed").onclick = async () => {
-    if (!S.can) return;
-    const color = $("#ctlColor").value, br = +$("#ctlBright").value, mode = S.ctlMode;
-    if (!await confirmDialog("Change the miner light?",
-      `<span class="sw-inline" style="background:${esc(color)}"></span><b>${MODE[mode]}</b> · <span class="mono">${esc(color)}</span> · ${br}% brightness`, "Apply light")) return;
-    const c = S.data && S.data.control;
-    const body = { miner: S.miner.id, mode, color, brightness: br };
-    if (c && Number.isInteger(c.led_temper)) body.temper = c.led_temper;
-    ctlSend("/api/control/led", body, "Light updated");
-  };
-  markMode(); paintRange();
+VIEWS.controls = {
+  build: () => `
+    <div id="ctlBanner"></div>
+    <div class="cols" id="ctlCols">
+      <section class="panel panel-pad span-12 ws-panel" id="wsPanel"><div class="ws-text">
+        <div class="ctl-head"><h2 style="margin:0;font-size:15px;font-weight:600">Work speed</h2><span class="t3" id="wsNow">—</span></div>
+        <p class="ctl-desc">Higher speed means more hashrate, power, heat and fan noise.</p></div>
+        <div class="ws-ctl"><div class="seg lg full" id="wsSeg"><button data-l="low">Low</button><button data-l="medium">Medium</button><button data-l="high">High</button></div>
+        <div class="status-line" id="wsMsg"></div></div>
+      </section>
+      <section class="panel panel-pad span-12" id="ledPanel">
+        <div class="ctl-head"><h2 style="margin:0;font-size:15px;font-weight:600">Light</h2><span class="t3" id="ledNow">—</span></div>
+        <p class="ctl-desc">Colour, brightness and effect of the ring on the front of the miner.</p>
+        <div class="cols" style="--gap:24px">
+          <div class="span-6"><div class="device" id="dev"><div class="glow"></div><div class="unit"><div class="ring"></div></div><div class="cap" id="devCap"></div></div></div>
+          <div class="span-6">
+            <div class="ctl-field"><div class="lab">Colour <span id="hexLab" class="mono"></span></div>
+              <div class="chips" id="chips">${PRESETS.map(([n, h]) => `<button class="chip-c" data-hex="${h}" title="${n}" aria-label="${n}" style="--sw:${h}"></button>`).join("")}<label class="custom-c" id="customC" title="Custom colour"><input type="color" id="cPick" aria-label="Custom colour"></label></div></div>
+            <div class="ctl-field"><div class="lab">Brightness <span class="num" id="brVal">100%</span></div>
+              <div class="slider">${ic("lightbulb", "sm")}<input type="range" id="br" min="0" max="100" value="100" aria-label="Brightness"></div></div>
+            <div class="ctl-field"><div class="lab">Effect</div>
+              <div class="seg full" id="fxSeg">${Object.entries(MODE).map(([k, v]) => `<button data-m="${k}">${v}</button>`).join("")}</div></div>
+          </div>
+        </div>
+        <div class="apply-bar"><span class="t3" id="ledDirty">No changes</span><button class="btn ghost" id="ledReset" disabled>Reset</button><button class="btn" id="ledApply" disabled>Apply</button></div>
+        <div class="status-line" id="ledMsg"></div>
+      </section>
+    </div>`,
+  wire: () => {
+    $("#wsSeg").onclick = async (e) => {
+      const b = e.target.closest("button"); if (!b || !S.can) return;
+      const l = b.dataset.l, cur = (D().control || {}).work_name;
+      if (l === cur) return;
+      if (!await confirmDialog(`Set work speed to ${LEVEL[l]}?`, `From ${cur ? LEVEL[cur] || cur : "the current setting"} to <b style="color:var(--t1)">${LEVEL[l]}</b>. Hashrate, power use, heat and fan noise will change. The miner may take a minute to settle.`, `Set ${LEVEL[l]}`)) return;
+      send("/api/control/workmode", { miner: S.miner.id, mode: l }, `Work speed set to ${LEVEL[l]}`, "#wsMsg");
+    };
+    $("#chips").onclick = (e) => { const b = e.target.closest(".chip-c"); if (b) setLed({ color: b.dataset.hex }); };
+    $("#cPick").oninput = (e) => setLed({ color: e.target.value });
+    $("#br").oninput = (e) => setLed({ bright: +e.target.value });
+    $("#fxSeg").onclick = (e) => { const b = e.target.closest("button"); if (b) setLed({ mode: b.dataset.m }); };
+    $("#ledReset").onclick = () => { S.ctl.init = false; ctlFromMiner(); };
+    $("#ledApply").onclick = async () => {
+      if (!S.can) return; const { mode, color, bright } = S.ctl;
+      if (!await confirmDialog("Update the miner light?", `<span class="sw-i" style="background:${esc(color)}"></span><b style="color:var(--t1)">${MODE[mode]}</b> · <span class="mono">${esc(color)}</span> · ${bright}% brightness`, "Apply")) return;
+      const c = D().control || {}, body = { miner: S.miner.id, mode, color, brightness: bright }; if (Number.isInteger(c.led_temper)) body.temper = c.led_temper;
+      send("/api/control/led", body, "Light updated", "#ledMsg", () => { S.ctl.dirty = false; ledUI(); });
+    };
+    ctlFromMiner(); ledUI();
+  },
+  update: () => {
+    const c = D().control || {}, remote = D().source === "remote";
+    $("#ctlBanner").innerHTML = S.can ? "" : `<div class="banner">${ic(remote ? "lock" : "info")}<div><b>${remote ? "Read-only preview." : "Controls unavailable."}</b> ${remote ? "Controls are switched off here, so nothing on this page can change this miner. When you run Hashwatch on your own network, they talk directly to your miner." : "This miner can't be controlled from here."}</div></div>`;
+    $("#ctlCols").classList.toggle("ctl-locked", !S.can);
+    $$("#ctlCols button, #ctlCols input").forEach(x => x.disabled = !S.can || x.id === "ledApply" && !S.ctl.dirty || x.id === "ledReset" && !S.ctl.dirty);
+    $("#wsNow").textContent = c.work_name ? "Currently " + (LEVEL[c.work_name] || c.work_name) : "—";
+    segSet($("#wsSeg"), "l", c.work_name || "");
+    $("#ledNow").innerHTML = c.led_mode ? `Currently ${c.led_hex ? `<span class="sw-i" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(MODE[c.led_mode] || c.led_mode)}${isNum(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : "—";
+    if (!S.ctl.init) ctlFromMiner();
+  },
+};
+function ctlFromMiner() {
+  const c = D().control; if (!c) return;
+  if (c.led_hex) S.ctl.color = c.led_hex; if (Number.isInteger(c.led_brightness)) S.ctl.bright = c.led_brightness; if (c.led_mode && MODE[c.led_mode]) S.ctl.mode = c.led_mode;
+  S.ctl.init = true; S.ctl.dirty = false; ledUI();
 }
-function setColor(h) { h = h.toLowerCase(); $("#ctlColor").value = h; $("#ctlHex").textContent = h; markSwatch(); }
-function markSwatch() { const v = $("#ctlColor").value.toLowerCase(); document.querySelectorAll("#ctlSwatches .swatch").forEach(s => s.classList.toggle("on", s.dataset.hex === v)); }
-function markMode() { document.querySelectorAll("#ctlMode button").forEach(b => b.classList.toggle("on", b.dataset.mode === S.ctlMode)); }
-function paintRange() { const r = $("#ctlBright"); r.style.setProperty("--p", r.value + "%"); }
-function ctlMsg(text, kind) { const el = $("#ctlMsg"); el.className = "ctl-msg on " + (kind || ""); el.innerHTML = text; }
-function ctlBusy(b) { document.querySelectorAll("#ctlCard button, #ctlCard input").forEach(x => x.disabled = b || !S.can); $("#ctlCard").classList.toggle("busy", b); }
-function ctlRender() {
-  const card = $("#ctlCard"); if (!card || !S.data) return;
-  const c = S.data.control || {}, remote = S.data.source === "remote";
-  card.classList.toggle("disabled", !S.can);
-  $("#ctlBadge").innerHTML = S.can ? '<span class="pill info plain">Direct · port 4028</span>' : '<span class="pill plain">Disabled</span>';
-  $("#ctlNote").innerHTML = S.can ? "" : `<div class="alert" style="margin-bottom:16px">${I.warn}<div>${remote
-    ? "Controls are turned off in this preview, so nothing here can change this miner. In Hashwatch on your own network they talk directly to your miner."
-    : "Controls are turned off for this miner."}</div></div>`;
-  $("#ctlSpeedNow").textContent = "Current: " + (c.work_name ? (LEVEL[c.work_name] || c.work_name) : "—");
-  document.querySelectorAll("#ctlSpeed button").forEach(b => b.classList.toggle("on", b.dataset.level === c.work_name));
-  $("#ctlLedNow").innerHTML = c.led_mode ? `${c.led_hex ? `<span class="sw-inline" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(MODE[c.led_mode] || c.led_mode)}${c.led_hex ? " · " + esc(c.led_hex) : ""}${Number.isInteger(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : "—";
-  if (!S.ctlInit && (c.led_mode || c.led_hex)) {
-    if (c.led_hex) setColor(c.led_hex);
-    if (Number.isInteger(c.led_brightness)) { $("#ctlBright").value = c.led_brightness; $("#ctlBrightVal").textContent = c.led_brightness + "%"; }
-    if (c.led_mode && MODE[c.led_mode]) S.ctlMode = c.led_mode;
-    S.ctlInit = true; markMode(); paintRange();
-  }
-  markSwatch();
-  if (!card.classList.contains("busy")) ctlBusy(false);
+function setLed(p) { Object.assign(S.ctl, p); S.ctl.dirty = true; ledUI(); }
+function ledUI() {
+  const dv = $("#dev"); if (!dv) return; const { mode, color, bright, dirty } = S.ctl;
+  dv.style.setProperty("--lc", color); dv.style.setProperty("--lb", Math.max(.05, bright / 100));
+  dv.className = "device m-" + mode;
+  $("#devCap").innerHTML = `<span class="sw-i" style="background:${esc(color)}"></span>${MODE[mode]} · ${bright}%`;
+  $$("#chips .chip-c").forEach(b => b.classList.toggle("on", b.dataset.hex === color.toLowerCase()));
+  $("#customC").classList.toggle("on", !PRESETS.some(p => p[1] === color.toLowerCase()));
+  $("#cPick").value = color; $("#hexLab").textContent = color;
+  const br = $("#br"); br.value = bright; br.style.setProperty("--p", bright + "%"); $("#brVal").textContent = bright + "%";
+  segSet($("#fxSeg"), "m", mode);
+  $("#ledDirty").textContent = dirty ? "Unsaved changes" : "No changes";
+  $("#ledApply").disabled = $("#ledReset").disabled = !dirty || !S.can;
+  $("#ledApply").className = "btn" + (dirty ? " accent" : "");
 }
-async function ctlSend(path, body, okText) {
-  ctlBusy(true); ctlMsg('<span class="spin"></span>Sending to the miner, then reading it back…', "");
+async function send(path, body, okText, msgSel, after) {
+  const m = $(msgSel); m.className = "status-line on"; m.innerHTML = '<span class="spin"></span>Sending to the miner, then reading it back…';
+  $$("#ctlCols button, #ctlCols input").forEach(x => x.disabled = true);
   try {
     const r = await api(path, { method: "POST", body });
-    if (r.data) { S.data = r.data; render(); }
-    ctlBusy(false); ctlRender();
-    const c = r.control || {};
-    ctlMsg(`${I.ok}<span><b>${esc(okText)}.</b> Miner replied “${esc(r.message || "OK")}”. Now: ${esc(LEVEL[c.work_name] || c.work_name || "—")} · light ${esc(MODE[c.led_mode] || c.led_mode || "—")}.</span>`, "ok");
+    if (r.data) S.data = r.data; if (after) after();
+    update(false);
+    const c = r.control || {}, mm = $(msgSel);
+    if (mm) { mm.className = "status-line on ok"; mm.innerHTML = `${ic("circle-check", "sm")}<span><b style="color:var(--t1);font-weight:550">${esc(okText)}.</b> Miner replied “${esc(r.message || "OK")}”. Now ${esc(LEVEL[c.work_name] || c.work_name || "—")} · light ${esc(MODE[c.led_mode] || c.led_mode || "—")}.</span>`; }
     toast(okText);
-  } catch (e) { ctlBusy(false); ctlRender(); ctlMsg(`${I.warn}<span><b>Not applied.</b> ${esc(e.message)}</span>`, "bad"); }
+  } catch (e) { update(false); const mm = $(msgSel); if (mm) { mm.className = "status-line on bad"; mm.innerHTML = `${ic("circle-alert", "sm")}<span><b>Not applied.</b> ${esc(e.message)}</span>`; } }
 }
 function confirmDialog(title, html, okLabel) {
   return new Promise((resolve) => {
-    const scrim = document.createElement("div"); scrim.className = "scrim";
+    const sc = document.createElement("div"); sc.className = "scrim";
     const d = document.createElement("div"); d.className = "dialog"; d.setAttribute("role", "alertdialog"); d.setAttribute("aria-modal", "true");
-    d.innerHTML = `<h2>${esc(title)}</h2><p>${html}</p><div class="row" style="justify-content:flex-end;gap:10px;margin-top:20px">
-      <button class="btn ghost" data-a="0">Cancel</button><button class="btn" data-a="1">${esc(okLabel)}</button></div>`;
-    document.body.append(scrim, d);
-    requestAnimationFrame(() => { scrim.classList.add("on"); d.classList.add("on"); });
-    const done = (v) => { scrim.classList.remove("on"); d.classList.remove("on"); setTimeout(() => { scrim.remove(); d.remove(); }, 200); document.removeEventListener("keydown", key); resolve(v); };
+    d.innerHTML = `<h2>${esc(title)}</h2><p>${html}</p><div class="acts"><button class="btn ghost" data-a="0">Cancel</button><button class="btn accent" data-a="1">${esc(okLabel)}</button></div>`;
+    document.body.append(sc, d); requestAnimationFrame(() => { sc.classList.add("on"); d.classList.add("on"); });
+    const done = (v) => { sc.classList.remove("on"); d.classList.remove("on"); setTimeout(() => { sc.remove(); d.remove(); }, 220); document.removeEventListener("keydown", key); resolve(v); };
     const key = (e) => { if (e.key === "Escape") done(false); };
-    document.addEventListener("keydown", key);
-    scrim.onclick = () => done(false);
-    d.querySelectorAll("[data-a]").forEach(b => b.onclick = () => done(b.dataset.a === "1"));
-    d.querySelector('[data-a="1"]').focus();
+    document.addEventListener("keydown", key); sc.onclick = () => done(false);
+    $$("[data-a]", d).forEach(b => b.onclick = () => done(b.dataset.a === "1")); $('[data-a="1"]', d).focus();
   });
 }
 
-/* ---------------- settings sheet ---------------- */
+/* ---------------- raw ---------------- */
+VIEWS.raw = {
+  build: () => `<div class="search">${ic("search", "sm")}<input class="input" id="rawQ" placeholder="Filter fields" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <section class="panel" style="overflow:hidden"><div class="raw-table" id="rawT"></div></section>`,
+  wire: () => { $("#rawQ").oninput = () => VIEWS.raw.update(); },
+  update: () => {
+    const mm = D().mm_fields || {}, q = ($("#rawQ").value || "").toLowerCase();
+    const ks = Object.keys(mm).sort((a, b) => a.localeCompare(b)).filter(k => !q || k.toLowerCase().includes(q) || String(mm[k]).toLowerCase().includes(q));
+    $("#rawT").innerHTML = ks.map(k => `<div><span>${esc(k)}</span><b>${esc(mm[k])}</b></div>`).join("") || '<div><span>No matches</span></div>';
+  },
+};
+
+/* ---------------- settings ---------------- */
 function openSettings() {
   const st = S.state, locked = st.locked;
-  const scrim = document.createElement("div"); scrim.className = "scrim";
+  const sc = document.createElement("div"); sc.className = "scrim";
   const sh = document.createElement("aside"); sh.className = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-label", "Settings");
-  sh.innerHTML = `<div class="row"><h2 class="grow">Settings</h2><button class="icon-btn" id="sx" aria-label="Close">${I.x}</button></div>
-    ${locked ? `<div class="alert" style="margin-top:16px">${I.warn}<div>This is a read-only preview. Settings are locked.</div></div>` : ""}
-    <h3>Miners</h3><div class="mlist">${(st.miners || []).map(m => `<div class="mitem"><div class="grow"><b>${esc(m.name)}</b><span class="mono">${m.kind === "remote" ? "preview source" : esc(m.host + ":" + (m.port || 4028))}</span></div>
-      ${locked ? "" : `<button class="btn danger sm" data-del="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
-    ${locked ? "" : `<h3>Add a miner</h3><form class="card" id="a-form" style="padding:16px" autocomplete="off">${minerForm("a")}</form>`}
+  sh.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between"><h2>Settings</h2><button class="icon-btn" id="sx" aria-label="Close">${ic("x", "sm")}</button></div>
+    ${locked ? `<div class="banner" style="margin-top:20px">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings are locked.</div></div>` : ""}
+    <h3>Miners</h3><div class="panel">${(st.miners || []).map(m => `<div class="row-kv"><span style="flex-direction:column;align-items:flex-start;gap:0"><b style="color:var(--t1);font-weight:550">${esc(m.name)}</b><span class="mono t3">${m.kind === "remote" ? "preview source" : esc(m.host + ":" + (m.port || 4028))}</span></span>${locked ? "" : `<button class="btn danger" style="height:34px" data-del="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
+    ${locked ? "" : `<h3>Add a miner</h3><form class="panel" id="a-form" style="padding:16px" autocomplete="off">${minerForm("a")}</form>`}
     <h3>Password</h3>
-    ${locked ? `<p class="muted" style="margin:0">Managed by the preview host.</p>` : `<form id="pwf" class="card" style="padding:16px">
+    ${locked ? `<p class="t2" style="margin:0">Managed by the preview host.</p>` : `<form id="pwf" class="panel" style="padding:16px">
       <input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
-      ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : `<p class="muted" style="margin:0 0 4px">Optional. Anyone on your Wi-Fi can open ${esc(APP)} unless you set one.</p>`}
-      <label class="f" for="pwn">${st.auth_required ? "New password (leave empty to remove)" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
+      ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : `<p class="t2" style="margin:0 0 4px;font-size:13.5px">Optional. Without one, anyone on your Wi-Fi can open ${esc(APP)} and use the controls.</p>`}
+      <label class="f" for="pwn">${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
       <div class="err" id="pwe"></div><button class="btn ghost block">${st.auth_required ? "Update password" : "Set password"}</button></form>`}
-    ${(st.lan_urls || []).length ? `<h3>Open on your phone</h3><div class="card" style="padding:16px"><p class="muted" style="margin:0 0 8px">On the same Wi-Fi, open:</p>${st.lan_urls.map(u => `<div class="mono" style="font-size:15px;padding:4px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then use Share → Add to Home Screen for an app icon.</p></div>` : ""}
-    <h3>About</h3><p class="muted" style="margin:0">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028) and never changes miner settings. Your data stays on your network.</p>
-    ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:22px">Sign out</button>` : ""}`;
-  document.body.append(scrim, sh);
-  requestAnimationFrame(() => { scrim.classList.add("on"); sh.classList.add("on"); });
-  const close = () => { scrim.classList.remove("on"); sh.classList.remove("on"); setTimeout(() => { scrim.remove(); sh.remove(); }, 300); };
-  scrim.onclick = close; $("#sx", sh).onclick = close;
+    ${(st.lan_urls || []).length ? `<h3>Open on your phone</h3><div class="panel" style="padding:14px 16px"><p class="t2" style="margin:0 0 8px;font-size:13.5px">On the same Wi-Fi, open:</p>${st.lan_urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("")}<p class="fine" style="margin-top:10px">Then Share → Add to Home Screen.</p></div>` : ""}
+    <h3>About</h3><p class="t2" style="margin:0;font-size:13.5px">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes settings only when you confirm a change under Controls. Data stays on your network.</p>
+    ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:24px">${ic("log-out", "sm")}Sign out</button>` : ""}`;
+  document.body.append(sc, sh); requestAnimationFrame(() => { sc.classList.add("on"); sh.classList.add("on"); });
+  const close = () => { sc.classList.remove("on"); sh.classList.remove("on"); setTimeout(() => { sc.remove(); sh.remove(); }, 300); };
+  sc.onclick = close; $("#sx", sh).onclick = close;
   document.addEventListener("keydown", function k(e) { if (e.key === "Escape") { close(); document.removeEventListener("keydown", k); } });
-  sh.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-    if (!confirm("Remove this miner from " + APP + "? Its chart history is deleted too.")) return;
-    try { await api("/api/miners/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "Content-Type": "application/json" } }); close(); boot(); } catch (e) { toast(e.message); }
-  });
+  $$("[data-del]", sh).forEach(b => b.onclick = async () => { if (!await confirmDialog("Remove this miner?", "Its chart history is deleted too.", "Remove")) return;
+    try { await api("/api/miners/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "Content-Type": "application/json" } }); close(); boot(); } catch (e) { toast(e.message); } });
   if (!locked) {
     wireMinerForm("a", async (r) => { localStorage.setItem("hw_miner", r.id); close(); boot(); });
     $("#pwf", sh).onsubmit = async (e) => { e.preventDefault();
-      try { await api("/api/password", { method: "POST", body: { current: ($("#pwc", sh) || {}).value || "", new: $("#pwn", sh).value } });
-        toast($("#pwn", sh).value ? "Password saved" : "Password removed"); close(); boot(); }
+      try { await api("/api/password", { method: "POST", body: { current: ($("#pwc", sh) || {}).value || "", new: $("#pwn", sh).value } }); toast($("#pwn", sh).value ? "Password saved" : "Password removed"); close(); boot(); }
       catch (er) { $("#pwe", sh).textContent = er.message; } };
   }
   const so = $("#so", sh); if (so) so.onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); close(); boot(); };
 }
 
-document.addEventListener("visibilitychange", () => { if (!document.hidden && S.miner && $("#live")) refresh(false); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.miner && $("#view")) refresh(false); });
 boot();
 })();
