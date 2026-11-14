@@ -13,7 +13,7 @@ import (
 )
 
 // Automations runs each miner's opt-in automations after every poll: the work
-// speed schedule, auto-throttle, backup-pool failover, auto-restart, and the
+// speed schedule and the
 // light effects (status lamp, block celebration, best-share flash). Every action
 // it takes is recorded and raised as an "Automations" alert, so nothing happens
 // silently. Nothing runs in the read-only preview or for non-CGMiner sources.
@@ -34,7 +34,7 @@ type Automations struct {
 
 type Action struct {
 	T    int64  `json:"t"`
-	Kind string `json:"kind"` // schedule throttle failover restart light
+	Kind string `json:"kind"` // schedule light
 	Text string `json:"text"`
 	OK   bool   `json:"ok"`
 	Err  string `json:"err,omitempty"`
@@ -42,9 +42,6 @@ type Action struct {
 
 type autoState struct {
 	sched     auto.Scheduler
-	thr       auto.Throttle
-	fo        auto.Failover
-	rs        auto.Restarter
 	busy      bool
 	actions   []Action
 	lightSent *LightState // what we last set (nil = the user's own light is showing)
@@ -94,7 +91,7 @@ func (a *Automations) Event(id, kind string) {
 			s.celebrate = now.Add(celebFor)
 		}
 	case "best":
-		if m.Opts.Light.BestFlash && now.Sub(s.lastBest) >= bestEvery {
+		if Optional.BestFlash && m.Opts.Light.BestFlash && now.Sub(s.lastBest) >= bestEvery { // OPTIONAL:bestflash
 			s.bestFlash, s.lastBest = now.Add(bestFor), now
 		}
 	}
@@ -124,11 +121,8 @@ func (a *Automations) View(id string) map[string]any {
 	for i := len(s.actions) - 1; i >= 0; i-- {
 		acts = append(acts, s.actions[i])
 	}
-	out := map[string]any{"actions": acts, "throttled": s.thr.Throttled(), "throttle_steps": s.thr.Steps, "light_override": s.lightSent != nil,
-		"restarts_24h": len(s.rs.History), "problem": s.problem}
-	if s.thr.Throttled() {
-		out["restore_to"] = auto.LevelNames[s.thr.Restore]
-	}
+	out := map[string]any{"actions": acts, "light_override": s.lightSent != nil,
+		"problem": s.problem}
 	return out
 }
 
@@ -179,63 +173,22 @@ func (a *Automations) Observe(id, name string, snap *model.Snapshot) {
 			do: func(c source.Controller) (cgminer.Result, error) { return c.SetWorkMode(l) }}
 	}
 	if snap.OK {
-		// 1. auto-throttle (takes priority over the schedule)
-		if o.Throttle.On && level >= 0 {
-			if t, ok := fnum(snap.Temps.Max); ok {
-				if nl, act, why := s.thr.Step(o.Throttle.Cfg(), now, t, level); act {
-					jobs = append(jobs, setLevel("throttle", nl, "auto-throttle: "+why))
-				}
-			}
-		}
-		// 2. schedule
-		if o.Schedule.On && len(jobs) == 0 {
+		// 1. schedule: the owner's chosen speeds
+		if o.Schedule.On {
 			if want, act := s.sched.Step(o.Schedule.Rules, o.Schedule.Default, now); act {
-				if l, ok := auto.LevelOf(want); ok {
-					if s.thr.Throttled() {
-						s.thr.SetRestore(l) // apply after cooling down
-					} else if l != level {
-						j := setLevel("schedule", l, "schedule")
-						j.after = func(err error) {
-							if err != nil {
-								a.ResetSchedule(id)
-							}
+				if l, ok := auto.LevelOf(want); ok && l != level {
+					j := setLevel("schedule", l, "schedule")
+					j.after = func(err error) {
+						if err != nil {
+							a.ResetSchedule(id)
 						}
-						jobs = append(jobs, j)
 					}
+					jobs = append(jobs, j)
 				}
-			}
-		}
-		// 3. backup pool failover
-		if o.Failover.On && len(jobs) == 0 && len(snap.Pools) > 1 {
-			var pv []auto.PoolView
-			for _, p := range snap.Pools {
-				pv = append(pv, auto.PoolView{ID: p.ID, Priority: p.Priority, URL: p.URL, Active: p.StratumActive,
-					Alive: strings.EqualFold(p.Status, "Alive")})
-			}
-			if to, act, why := s.fo.Step(o.Failover.Cfg(), now, pv); act {
-				n := to.ID
-				jobs = append(jobs, job{kind: "failover", alert: true, text: fmt.Sprintf("Switched to pool %d %s (%s)", n, shortURL(to.URL), why),
-					do: func(c source.Controller) (cgminer.Result, error) {
-						c.EnablePool(n) // harmless if already enabled
-						return c.SwitchPool(n)
-					}})
-			}
-		}
-		// 4. auto-restart on a stalled hashrate
-		if o.Restart.On && len(jobs) == 0 {
-			ths := 0.0
-			if v, ok := fnum(snap.Hashrate.THs1m); ok {
-				ths = v
-			} else if v, ok := fnum(snap.Hashrate.THs5s); ok {
-				ths = v
-			}
-			if act, why := s.rs.Step(o.Restart.Cfg(), now, true, ths); act {
-				jobs = append(jobs, job{kind: "restart", alert: true, text: "Restarted mining (" + why + ")",
-					do: func(c source.Controller) (cgminer.Result, error) { return c.Restart() }})
 			}
 		}
 	}
-	// 5. light effects
+	// 2. light effects
 	s.problem = problemOf(snap)
 	if lj, ok := a.lightJob(id, m, s, now); ok && len(jobs) == 0 {
 		jobs = append(jobs, lj)
@@ -315,6 +268,7 @@ func problemOf(snap *model.Snapshot) string {
 // lightJob decides the light: celebration > best-share flash > status lamp > the user's own light.
 func (a *Automations) lightJob(id string, m Miner, s *autoState, now time.Time) (job, bool) {
 	lo := m.Opts.Light
+	lo.Lamp = lo.Lamp && Optional.StatusLamp // OPTIONAL:lamp
 	var want *LightState
 	why := ""
 	switch {

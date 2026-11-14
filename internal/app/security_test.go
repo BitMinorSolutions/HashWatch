@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashwatch/hashwatch/internal/totp"
 	"github.com/hashwatch/hashwatch/web"
 )
 
@@ -122,64 +121,6 @@ func TestNoPasswordNoRemote(t *testing.T) {
 	}
 }
 
-func TestTOTPFlow(t *testing.T) {
-	ts, s, now := secServer(t)
-	home := &tclient{t: t, ts: ts}
-	if r, _ := home.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
-		t.Fatal("login")
-	}
-	_, setup := home.do("POST", "/api/2fa/setup", "{}")
-	sec, _ := setup["secret"].(string)
-	if sec == "" || !strings.HasPrefix(setup["uri"].(string), "otpauth://totp/") || !strings.Contains(setup["qr_svg"].(string), "<svg") {
-		t.Fatalf("setup: %v", setup)
-	}
-	if r, _ := home.do("POST", "/api/2fa/enable", `{"code":"000000"}`); r.StatusCode != 400 {
-		t.Fatal("wrong code must not enable")
-	}
-	code, _ := totp.Code(sec, totp.Counter(*now))
-	r, en := home.do("POST", "/api/2fa/enable", `{"code":"`+code+`"}`)
-	rec, _ := en["recovery"].([]any)
-	if r.StatusCode != 200 || len(rec) != 10 || !s.Cfg.Security.TOTPOn {
-		t.Fatalf("enable: %d %v", r.StatusCode, en)
-	}
-	// remote sign-in now needs the code
-	far := &tclient{t: t, ts: ts, ip: "203.0.113.20"}
-	r, out := far.do("POST", "/api/login", `{"password":"mainpass1"}`)
-	if r.StatusCode != 401 || out["need_code"] != true {
-		t.Fatalf("want need_code: %d %v", r.StatusCode, out)
-	}
-	if r, _ := far.do("POST", "/api/login", `{"password":"mainpass1","code":"`+code+`"}`); r.StatusCode != 401 {
-		t.Fatal("the code used to enable can't be replayed")
-	}
-	*now = now.Add(30 * time.Second)
-	code2, _ := totp.Code(sec, totp.Counter(*now))
-	if r, _ := far.do("POST", "/api/login", `{"password":"mainpass1","code":"`+code2+`"}`); r.StatusCode != 200 {
-		t.Fatal("fresh code signs in")
-	}
-	// recovery code works once
-	far2 := &tclient{t: t, ts: ts, ip: "203.0.113.21"}
-	rc := rec[0].(string)
-	if r, _ := far2.do("POST", "/api/login", `{"password":"mainpass1","code":"`+rc+`"}`); r.StatusCode != 200 {
-		t.Fatal("recovery code")
-	}
-	far3 := &tclient{t: t, ts: ts, ip: "203.0.113.22"}
-	if r, _ := far3.do("POST", "/api/login", `{"password":"mainpass1","code":"`+rc+`"}`); r.StatusCode != 401 {
-		t.Fatal("recovery code is single-use")
-	}
-	// home network: no code unless "also at home" is on
-	home2 := &tclient{t: t, ts: ts}
-	if r, _ := home2.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
-		t.Fatal("home sign-in without code")
-	}
-	// disabling needs the password
-	if r, _ := home.do("POST", "/api/2fa/disable", `{"password":"bad"}`); r.StatusCode != 401 {
-		t.Fatal("disable needs password")
-	}
-	if r, _ := home.do("POST", "/api/2fa/disable", `{"password":"mainpass1"}`); r.StatusCode != 200 || s.Cfg.Security.TOTPOn {
-		t.Fatal("disable")
-	}
-}
-
 func TestViewOnlyRole(t *testing.T) {
 	ts, s, _ := secServer(t)
 	admin := &tclient{t: t, ts: ts}
@@ -206,7 +147,6 @@ func TestViewOnlyRole(t *testing.T) {
 		{"POST", "/api/features", `{"miner":"m","fun":{"summary":"off"}}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/sessions/revoke", `{}`},
-		{"GET", "/api/sessions", ""},
 		{"GET", "/api/remote", ""},
 		{"GET", "/api/debug", ""},
 		{"GET", "/api/security", ""},
@@ -246,7 +186,7 @@ func TestViewOnlyRole(t *testing.T) {
 	_ = s
 }
 
-func TestSessionsKickAndRevoke(t *testing.T) {
+func TestSignOutEverywhere(t *testing.T) {
 	ts, _, _ := secServer(t)
 	a := &tclient{t: t, ts: ts}
 	b := &tclient{t: t, ts: ts, ip: "203.0.113.40"}
@@ -256,36 +196,23 @@ func TestSessionsKickAndRevoke(t *testing.T) {
 			t.Fatal("login")
 		}
 	}
-	_, list := a.do("GET", "/api/sessions", "")
-	ss := list["sessions"].([]any)
-	if len(ss) != 3 {
-		t.Fatalf("want 3 sessions: %v", list)
-	}
-	var bid string
-	for _, x := range ss {
-		m := x.(map[string]any)
-		if m["ip"] == "203.0.113.40" {
-			bid = m["id"].(string)
-			if m["remote"] != true {
-				t.Fatal("tunnel session marked remote")
-			}
-		}
-	}
-	if r, _ := a.do("DELETE", "/api/sessions/"+bid, "{}"); r.StatusCode != 200 {
-		t.Fatal("kick")
-	}
-	if r, _ := b.do("GET", "/api/alerts", ""); r.StatusCode != 401 {
-		t.Fatal("kicked device is signed out")
-	}
 	_, rv := a.do("POST", "/api/sessions/revoke", "{}")
-	if rv["signed_out"].(float64) != 1 {
+	if rv["signed_out"].(float64) != 2 {
 		t.Fatalf("revoke: %v", rv)
 	}
-	if r, _ := c.do("GET", "/api/alerts", ""); r.StatusCode != 401 {
-		t.Fatal("everyone else signed out")
+	for _, x := range []*tclient{b, c} {
+		if r, _ := x.do("GET", "/api/alerts", ""); r.StatusCode != 401 {
+			t.Fatal("everyone else signed out")
+		}
 	}
-	if r, _ := a.do("GET", "/api/sessions", ""); r.StatusCode != 200 {
+	if r, _ := a.do("GET", "/api/alerts", ""); r.StatusCode != 200 {
 		t.Fatal("the asking device stays signed in")
+	}
+	// removed features stay removed
+	for _, p := range [][2]string{{"POST", "/api/2fa/setup"}, {"GET", "/api/sessions"}} {
+		if r, _ := a.do(p[0], p[1], "{}"); r.StatusCode != 404 && r.StatusCode != 405 {
+			t.Errorf("%v still answers: %d", p, r.StatusCode)
+		}
 	}
 }
 
@@ -301,10 +228,10 @@ func TestConfigMigration(t *testing.T) {
 	}
 	// new features are all off by default, live data on
 	o := c.Miners[0].Opts
-	if o.Schedule.On || o.Throttle.On || o.Failover.On || o.Restart.On || o.Light.Lamp || o.Light.Celebrate || o.Light.BestFlash {
+	if o.Schedule.On || o.Light.Lamp || o.Light.Celebrate || o.Light.BestFlash {
 		t.Fatal("automations must default to off")
 	}
-	if c.Privacy.NetworkOff || c.Security.TOTPOn || c.Security.ViewLink != "" {
+	if c.Privacy.NetworkOff || c.Security.ViewLink != "" {
 		t.Fatal("defaults")
 	}
 	c.Save()

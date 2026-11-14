@@ -2,20 +2,15 @@ package app
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/hashwatch/hashwatch/internal/qr"
-	"github.com/hashwatch/hashwatch/internal/totp"
 )
 
 // Roles. "admin" can use controls and settings; "view" can only look.
@@ -230,45 +225,13 @@ func tooMany(w http.ResponseWriter, wait time.Duration) {
 
 // ---------------- sign in ----------------
 
-func (s *Server) needs2FA(r *http.Request) bool {
-	sec := s.Cfg.Security
-	return sec.TOTPOn && sec.TOTPSecret != "" && (viaTunnel(r) || sec.TOTPLocalToo)
-}
-
-func hashRecovery(c string) string {
-	h := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(c))))
-	return hex.EncodeToString(h[:])
-}
-
-// checkSecond verifies a 6-digit code or a one-time recovery code (consumed on use).
-func (s *Server) checkSecond(code string) (via string, ok bool) {
-	code = strings.TrimSpace(code)
-	s.Cfg.mu.Lock()
-	defer s.Cfg.mu.Unlock()
-	sec := &s.Cfg.Security
-	if n, good := totp.Verify(sec.TOTPSecret, code, s.Now(), sec.TOTPLast); good {
-		sec.TOTPLast = n
-		return "password+2fa", true
-	}
-	if len(code) >= 8 {
-		h := hashRecovery(code)
-		for i, x := range sec.Recovery {
-			if subtle.ConstantTimeCompare([]byte(x), []byte(h)) == 1 {
-				sec.Recovery = append(sec.Recovery[:i:i], sec.Recovery[i+1:]...)
-				return "recovery", true
-			}
-		}
-	}
-	return "", false
-}
-
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ip, remote := clientIP(r), viaTunnel(r)
 	if wait := s.blocked(ip, remote); wait > 0 {
 		tooMany(w, wait)
 		return
 	}
-	var body struct{ Password, Code string }
+	var body struct{ Password string }
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
 	role := ""
 	switch {
@@ -290,24 +253,6 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	via := "password"
 	if role == RoleView {
 		via = "view-password"
-	}
-	if role == RoleAdmin && s.needs2FA(r) {
-		if strings.TrimSpace(body.Code) == "" {
-			writeJSON(w, 401, map[string]any{"need_code": true, "error": "Enter the 6-digit code from your authenticator app."})
-			return
-		}
-		v, ok := s.checkSecond(body.Code)
-		if !ok {
-			s.fail(ip, remote)
-			if wait := s.blocked(ip, remote); wait > 0 {
-				tooMany(w, wait)
-				return
-			}
-			writeJSON(w, 401, map[string]any{"need_code": true, "error": "That code didn't work. Codes change every 30 seconds."})
-			return
-		}
-		via = v
-		s.Cfg.Save()
 	}
 	s.succeed(ip)
 	s.issueVia(w, r, role, via)
@@ -334,73 +279,6 @@ func (s *Server) viewLink(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- sessions ----------------
 
-func (s *Server) sessionsGet(w http.ResponseWriter, r *http.Request) {
-	me := s.sessionOf(r)
-	s.mu.Lock()
-	var out []map[string]any
-	for _, se := range s.sessions {
-		out = append(out, map[string]any{"id": se.ID, "role": se.Role, "created": se.Created.Unix(), "last_seen": se.LastSeen.Unix(),
-			"ip": se.IP, "ua": se.UA, "device": deviceName(se.UA), "remote": se.Remote, "via": se.Via, "current": me != nil && me.ID == se.ID})
-	}
-	s.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i]["last_seen"].(int64) > out[j]["last_seen"].(int64) })
-	writeJSON(w, 200, map[string]any{"sessions": out, "password_set": s.Cfg.PasswordHash != ""})
-}
-
-// deviceName turns a user agent into "Safari on iPhone"-style text.
-func deviceName(ua string) string {
-	dev := "Unknown device"
-	switch {
-	case strings.Contains(ua, "iPhone"):
-		dev = "iPhone"
-	case strings.Contains(ua, "iPad"):
-		dev = "iPad"
-	case strings.Contains(ua, "Android"):
-		dev = "Android"
-	case strings.Contains(ua, "Macintosh"):
-		dev = "Mac"
-	case strings.Contains(ua, "Windows"):
-		dev = "Windows PC"
-	case strings.Contains(ua, "Linux"):
-		dev = "Linux"
-	}
-	br := ""
-	switch {
-	case strings.Contains(ua, "HashWatch"):
-		br = "HashWatch app"
-	case strings.Contains(ua, "Edg/"):
-		br = "Edge"
-	case strings.Contains(ua, "CriOS"), strings.Contains(ua, "Chrome/"):
-		br = "Chrome"
-	case strings.Contains(ua, "Firefox/"), strings.Contains(ua, "FxiOS"):
-		br = "Firefox"
-	case strings.Contains(ua, "Safari/"):
-		br = "Safari"
-	}
-	if br == "" {
-		return dev
-	}
-	return br + " on " + dev
-}
-
-func (s *Server) sessionKick(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	s.mu.Lock()
-	n := 0
-	for tok, se := range s.sessions {
-		if se.ID == id {
-			delete(s.sessions, tok)
-			n++
-		}
-	}
-	s.mu.Unlock()
-	if n == 0 {
-		writeJSON(w, 404, map[string]string{"error": "That device is already signed out."})
-		return
-	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
 // sessionsRevoke signs out every device except the one asking ("Sign out everywhere").
 func (s *Server) sessionsRevoke(w http.ResponseWriter, r *http.Request) {
 	me := s.sessionOf(r)
@@ -425,8 +303,8 @@ func (s *Server) revokeAll(keep func(*session) bool) int {
 
 func (s *Server) securityGet(w http.ResponseWriter, r *http.Request) {
 	sec := s.Cfg.Security
-	out := map[string]any{"password_set": s.Cfg.PasswordHash != "", "totp_on": sec.TOTPOn, "totp_local_too": sec.TOTPLocalToo,
-		"recovery_left": len(sec.Recovery), "view_password_set": sec.ViewHash != "", "view_link_on": sec.ViewLink != "",
+	out := map[string]any{"password_set": s.Cfg.PasswordHash != "",
+		"view_password_set": sec.ViewHash != "", "view_link_on": sec.ViewLink != "",
 		"remote_on": s.Cfg.Remote.Enabled, "lockout": map[string]any{"free_tries": freeTries, "max_lock_min": int(maxLock.Minutes()),
 			"remote_max": globalMax, "remote_window_min": int(globalWindow.Minutes())},
 		"signing_note": "The Mac app isn't signed with an Apple Developer ID yet (that needs a paid Apple account), so macOS asks you to confirm the first launch."}
@@ -439,20 +317,6 @@ func (s *Server) securityGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, out)
-}
-
-func (s *Server) securitySet(w http.ResponseWriter, r *http.Request) {
-	var b struct {
-		TOTPLocalToo *bool `json:"totp_local_too"`
-	}
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	if b.TOTPLocalToo != nil {
-		s.Cfg.mu.Lock()
-		s.Cfg.Security.TOTPLocalToo = *b.TOTPLocalToo
-		s.Cfg.mu.Unlock()
-		s.Cfg.Save()
-	}
-	s.securityGet(w, r)
 }
 
 func (s *Server) viewPassword(w http.ResponseWriter, r *http.Request) {
@@ -510,88 +374,6 @@ func (s *Server) viewLinkSet(w http.ResponseWriter, r *http.Request) {
 	// the old link's viewers lose access
 	s.revokeAll(func(se *session) bool { return se.Via != "view-link" })
 	s.securityGet(w, r)
-}
-
-// ---------------- 2FA ----------------
-
-func (s *Server) totpSetup(w http.ResponseWriter, r *http.Request) {
-	if s.Cfg.PasswordHash == "" {
-		writeJSON(w, 409, map[string]string{"error": "Set your main password first."})
-		return
-	}
-	sec := totp.NewSecret()
-	s.mu.Lock()
-	s.pendingTOTP = sec
-	s.mu.Unlock()
-	uri := totp.URI(AppName, "Nano miner dashboard", sec)
-	c, err := qr.Encode([]byte(uri))
-	svg := ""
-	if err == nil {
-		svg = c.SVG("#0b0c0e", "#ffffff")
-	}
-	writeJSON(w, 200, map[string]any{"secret": sec, "uri": uri, "qr_svg": svg})
-}
-
-func (s *Server) totpEnable(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Code string }
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	s.mu.Lock()
-	sec := s.pendingTOTP
-	s.mu.Unlock()
-	if sec == "" {
-		writeJSON(w, 409, map[string]string{"error": "Start setup again."})
-		return
-	}
-	n, ok := totp.Verify(sec, b.Code, s.Now(), 0)
-	if !ok {
-		writeJSON(w, 400, map[string]string{"error": "That code didn't match. Check the time on your phone and try the newest code."})
-		return
-	}
-	codes := totp.RecoveryCodes(10)
-	s.Cfg.mu.Lock()
-	s.Cfg.Security.TOTPOn, s.Cfg.Security.TOTPSecret, s.Cfg.Security.TOTPLast = true, sec, n
-	s.Cfg.Security.Recovery = nil
-	for _, c := range codes {
-		s.Cfg.Security.Recovery = append(s.Cfg.Security.Recovery, hashRecovery(c))
-	}
-	s.Cfg.mu.Unlock()
-	s.mu.Lock()
-	s.pendingTOTP = ""
-	s.mu.Unlock()
-	s.Cfg.Save()
-	writeJSON(w, 200, map[string]any{"ok": true, "recovery": codes})
-}
-
-func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Password string }
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	if !s.Cfg.CheckPassword(b.Password) {
-		writeJSON(w, 401, map[string]string{"error": "Incorrect password."})
-		return
-	}
-	s.Cfg.mu.Lock()
-	s.Cfg.Security.TOTPOn, s.Cfg.Security.TOTPSecret, s.Cfg.Security.Recovery, s.Cfg.Security.TOTPLast = false, "", nil, 0
-	s.Cfg.mu.Unlock()
-	s.Cfg.Save()
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
-func (s *Server) totpRecovery(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Password string }
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	if !s.Cfg.Security.TOTPOn || !s.Cfg.CheckPassword(b.Password) {
-		writeJSON(w, 401, map[string]string{"error": "Incorrect password."})
-		return
-	}
-	codes := totp.RecoveryCodes(10)
-	s.Cfg.mu.Lock()
-	s.Cfg.Security.Recovery = nil
-	for _, c := range codes {
-		s.Cfg.Security.Recovery = append(s.Cfg.Security.Recovery, hashRecovery(c))
-	}
-	s.Cfg.mu.Unlock()
-	s.Cfg.Save()
-	writeJSON(w, 200, map[string]any{"ok": true, "recovery": codes})
 }
 
 // remoteRotate gets a new free link (and signs out everyone who came in through the old one).

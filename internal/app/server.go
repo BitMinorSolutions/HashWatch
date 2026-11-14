@@ -41,13 +41,12 @@ type Server struct {
 
 	Net   *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
 	Stats *Stats           // lottery stats, badges, summaries
-	Auto  *Automations     // schedule, throttle, failover, restart, light effects
+	Auto  *Automations     // schedule, light effects
 
-	mu          sync.Mutex
-	sessions    map[string]*session
-	lim         limiter
-	pendingTOTP string
-	Now         func() time.Time
+	mu       sync.Mutex
+	sessions map[string]*session
+	lim      limiter
+	Now      func() time.Time
 }
 
 func (s *Server) Handler() http.Handler {
@@ -78,15 +77,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/remote/rotate", s.auth(s.admin(s.remoteRotate)))
 	mux.HandleFunc("GET /v/{token}", s.viewLink)
 	mux.HandleFunc("GET /api/security", s.auth(s.adminOnly(s.securityGet)))
-	mux.HandleFunc("POST /api/security", s.auth(s.admin(s.securitySet)))
 	mux.HandleFunc("POST /api/security/view", s.auth(s.admin(s.viewPassword)))
 	mux.HandleFunc("POST /api/security/viewlink", s.auth(s.admin(s.viewLinkSet)))
-	mux.HandleFunc("POST /api/2fa/setup", s.auth(s.admin(s.totpSetup)))
-	mux.HandleFunc("POST /api/2fa/enable", s.auth(s.admin(s.totpEnable)))
-	mux.HandleFunc("POST /api/2fa/disable", s.auth(s.admin(s.totpDisable)))
-	mux.HandleFunc("POST /api/2fa/recovery", s.auth(s.admin(s.totpRecovery)))
-	mux.HandleFunc("GET /api/sessions", s.auth(s.adminOnly(s.sessionsGet)))
-	mux.HandleFunc("DELETE /api/sessions/{id}", s.auth(s.mutating(s.sessionKick)))
 	mux.HandleFunc("POST /api/sessions/revoke", s.auth(s.mutating(s.sessionsRevoke)))
 	mux.HandleFunc("GET /api/lottery", s.auth(s.lotteryGet))
 	mux.HandleFunc("GET /api/features", s.auth(s.featuresGet))
@@ -222,7 +214,7 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	role := s.role(r)
 	ok := role != ""
-	out := map[string]any{"role": role, "view_only": role == RoleView, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
+	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil, "tagline": Tagline, "shell": s.Shell}
 	if s.Install.Offer && !s.Cfg.MoveDeclined && IsLocal(r) {
 		out["install"] = s.Install

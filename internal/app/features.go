@@ -109,11 +109,13 @@ func (s *Server) featuresGet(w http.ResponseWriter, r *http.Request) {
 		fun.Summary = "daily"
 	}
 	o := m.Opts
+	target := 0.0
+	if snap := s.Poll.Latest(id); snap != nil && snap.OK {
+		target, _ = fnum(snap.Temps.Target)
+	}
+	hot, fromMiner := auto.HotPoint(target)
 	out := map[string]any{"opts": o, "fun": fun, "privacy": priv, "can_control": s.canControl(id) && s.role(r) == RoleAdmin,
-		"defaults":     map[string]any{"throttle": o.Throttle.Cfg(), "failover": o.Failover.Cfg(), "restart": o.Restart.Cfg()},
-		"throttle_eff": map[string]any{"hot_c": o.Throttle.Cfg().HotC, "cool_c": o.Throttle.Cfg().CoolC, "hold_min": o.Throttle.Cfg().Hold.Minutes(), "cool_min": o.Throttle.Cfg().Cool.Minutes()},
-		"failover_eff": map[string]any{"dead_min": o.Failover.Cfg().DeadFor.Minutes(), "return_min": o.Failover.Cfg().ReturnAfter.Minutes(), "return_to_main": o.Failover.ReturnToMain},
-		"restart_eff":  map[string]any{"below_ths": o.Restart.Cfg().BelowTHs, "stall_min": o.Restart.Cfg().For.Minutes(), "cooldown_min": o.Restart.Cfg().Cooldown.Minutes(), "max_per_day": o.Restart.Cfg().MaxPerDay},
+		"heat": map[string]any{"hot_c": hot, "from_miner": fromMiner, "fallback_c": auto.FallbackHotC},
 	}
 	now := s.Now()
 	if mode, rule := auto.Desired(o.Schedule.Rules, o.Schedule.Default, now); o.Schedule.On {
@@ -129,9 +131,6 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Miner    string
 		Schedule *ScheduleOpts
-		Throttle *ThrottleOpts
-		Failover *FailoverOpts
-		Restart  *RestartOpts
 		Light    *struct{ Lamp, Celebrate, BestFlash *bool }
 		Fun      *FunSettings
 	}
@@ -139,13 +138,14 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad request"})
 		return
 	}
-	minerOpts := b.Schedule != nil || b.Throttle != nil || b.Failover != nil || b.Restart != nil || b.Light != nil
+	minerOpts := b.Schedule != nil || b.Light != nil
 	if minerOpts && !s.canControl(b.Miner) {
 		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
 		return
 	}
 	bad := func(msg string) { writeJSON(w, 400, map[string]string{"error": msg}) }
 	if sc := b.Schedule; sc != nil {
+		sc.Default = strings.ToLower(sc.Default)
 		if len(sc.Rules) > 24 {
 			bad("Up to 24 schedule rules.")
 			return
@@ -162,24 +162,6 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if t := b.Throttle; t != nil {
-		if err := t.Cfg().Validate(); err != nil {
-			bad(err.Error())
-			return
-		}
-		if t.HoldMin < 0 || t.CoolMin < 0 || t.HoldMin > 60 || t.CoolMin > 240 {
-			bad("Times must be 1–60 minutes (hold) and 1–240 minutes (cool-down).")
-			return
-		}
-	}
-	if f := b.Failover; f != nil && (f.DeadMin < 0 || f.DeadMin > 120 || f.ReturnMin < 0 || f.ReturnMin > 1440) {
-		bad("Failover times are out of range.")
-		return
-	}
-	if rs := b.Restart; rs != nil && (rs.BelowTHs < 0 || rs.BelowTHs > 100 || rs.StallMin < 0 || rs.StallMin > 240 || rs.MaxPerDay < 0 || rs.MaxPerDay > 12 || rs.CooldownMin < 0 || rs.CooldownMin > 1440) {
-		bad("Auto-restart settings are out of range.")
-		return
-	}
 	if f := b.Fun; f != nil {
 		if f.Summary != "" && f.Summary != "daily" && f.Summary != "weekly" && f.Summary != "off" {
 			bad("Summary must be daily, weekly or off.")
@@ -195,15 +177,6 @@ func (s *Server) featuresSet(w http.ResponseWriter, r *http.Request) {
 		s.Cfg.updateMiner(b.Miner, func(m *Miner) {
 			if b.Schedule != nil {
 				m.Opts.Schedule = *b.Schedule
-			}
-			if b.Throttle != nil {
-				m.Opts.Throttle = *b.Throttle
-			}
-			if b.Failover != nil {
-				m.Opts.Failover = *b.Failover
-			}
-			if b.Restart != nil {
-				m.Opts.Restart = *b.Restart
 			}
 			if l := b.Light; l != nil {
 				if l.Lamp != nil {

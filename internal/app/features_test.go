@@ -217,31 +217,6 @@ func (r *autoRig) sent(prefix string) int {
 	return n
 }
 
-func TestAutoThrottleE2E(t *testing.T) {
-	r := newAutoRig(t)
-	r.opts(func(o *MinerOpts) { o.Throttle = ThrottleOpts{On: true, HotC: 95, CoolC: 90, HoldMin: 1, CoolMin: 2} })
-	r.step(0) // sim at High: TMax 92 → nothing
-	if r.sent("ascset|0,workmode") != 0 {
-		t.Fatal("not hot yet")
-	}
-	r.m.ExtraHeat = 6 // 98 °C
-	r.step(5 * time.Second)
-	r.step(61 * time.Second)
-	if r.level() != 1 || r.sent("ascset|0,workmode") != 1 {
-		t.Fatalf("should step down to medium: %v", r.m.Log())
-	}
-	r.m.ExtraHeat = -4 // medium: 86+3-4 = 85 °C ≤ 90
-	r.step(4 * time.Minute)
-	r.step(2*time.Minute + time.Second)
-	if r.level() != 2 {
-		t.Fatalf("should restore high: %v", r.m.Log())
-	}
-	v := r.a.View("s")
-	if acts := v["actions"].([]Action); len(acts) != 2 || !acts[0].OK || !strings.Contains(acts[1].Text, "auto-throttle") {
-		t.Fatalf("actions %+v", acts)
-	}
-}
-
 func TestScheduleE2E(t *testing.T) {
 	r := newAutoRig(t)
 	wd := int(r.now.Weekday())
@@ -261,46 +236,6 @@ func TestScheduleE2E(t *testing.T) {
 	r.step(time.Hour)
 	if r.level() != 2 {
 		t.Fatal("after the rule: default high")
-	}
-}
-
-func TestFailoverE2E(t *testing.T) {
-	r := newAutoRig(t)
-	r.opts(func(o *MinerOpts) { o.Failover = FailoverOpts{On: true, DeadMin: 2, ReturnToMain: true, ReturnMin: 5} })
-	r.step(0)
-	r.m.PoolDown = true
-	r.step(5 * time.Second)
-	r.step(time.Minute)
-	if r.sent("switchpool") != 0 {
-		t.Fatal("too early")
-	}
-	r.step(2 * time.Minute)
-	if r.m.Active != 1 || r.sent("switchpool|1") != 1 {
-		t.Fatalf("should switch to backup pool 1: %v active=%d", r.m.Log(), r.m.Active)
-	}
-	r.m.PoolDown = false
-	r.step(time.Minute)
-	r.step(6 * time.Minute)
-	if r.m.Active != 0 {
-		t.Fatalf("should return to main: %v", r.m.Log())
-	}
-}
-
-func TestRestartE2E(t *testing.T) {
-	r := newAutoRig(t)
-	r.opts(func(o *MinerOpts) {
-		o.Restart = RestartOpts{On: true, BelowTHs: 1, StallMin: 5, CooldownMin: 30, MaxPerDay: 2}
-	})
-	r.m.HashFactor = 0.02
-	r.step(0)
-	r.step(5*time.Minute + time.Second)
-	if r.m.Restarts != 1 || r.sent("restart") != 1 {
-		t.Fatalf("restart expected: %v", r.m.Log())
-	}
-	time.Sleep(4200 * time.Millisecond) // the sim is "restarting"
-	r.step(6 * time.Minute)
-	if r.m.Restarts != 1 {
-		t.Fatal("cooldown")
 	}
 }
 
@@ -366,7 +301,7 @@ func TestAutomationsOffByDefaultAndLocked(t *testing.T) {
 			t.Fatalf("fresh install sent %q", l)
 		}
 	}
-	r.opts(func(o *MinerOpts) { o.Throttle.On = true })
+	r.opts(func(o *MinerOpts) { o.Schedule.On = true; o.Schedule.Default = "low"; o.Light.Lamp = true })
 	r.a.Locked = true
 	r.step(10 * time.Minute)
 	r.step(10 * time.Minute)

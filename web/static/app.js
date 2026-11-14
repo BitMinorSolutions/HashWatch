@@ -133,16 +133,20 @@ function moveOffer() {
 function viewLogin() {
   root.innerHTML = `<div class="center"><div class="auth view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
-    <h1>Welcome back</h1><p class="lead">Enter your ${esc(APP)} password.</p>
+    <h1>Welcome back</h1><p class="lead" id="lead">Enter your ${esc(APP)} password.</p>
     <form class="panel" id="f" autocomplete="on">
       <input type="text" name="username" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
-      <label class="f" for="pw" style="margin-top:0">Password</label>
-      <input class="input" id="pw" type="password" autocomplete="current-password" required autofocus>
+      <div id="pwWrap"><label class="f" for="pw" style="margin-top:0">Password</label>
+      <input class="input" id="pw" type="password" autocomplete="current-password" required autofocus></div>
       <div class="err" id="e"></div>
       <button class="btn accent lg block" id="b">Sign in</button>
     </form></div></div>`;
   $("#f").onsubmit = async (ev) => { ev.preventDefault(); const b = $("#b"); b.disabled = true; $("#e").textContent = "";
-    try { await api("/api/login", { method: "POST", body: { password: $("#pw").value } }); boot(); } catch (e) { $("#e").textContent = e.message; b.disabled = false; } };
+    const body = { password: $("#pw").value };
+    const r = await fetch("/api/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (r.ok) { boot(); return; }
+    b.disabled = false; $("#e").textContent = j.error || "HTTP " + r.status; };
 }
 function minerForm(id) {
   return `<label class="f" for="${id}-ip" style="margin-top:0">Miner IP address</label>
@@ -191,10 +195,11 @@ function shell() {
       <span class="hdr-div"></span>
       <div class="hdr-miner miner-pick"><div class="btnish"><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
         ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
+      ${isView() ? `<span class="pill view-pill">${ic("eye", "sm")}View only</span>` : ""}
       <span class="hdr-live" id="hdrLive"><span class="dot warn"></span><span>Connecting…</span></span>
       <span class="grow"></span>
       <div class="top-acts">
-        <a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Remote access" title="Remote access">${ic("globe", "sm")}<em class="rem-dot" id="remDot"></em></a>
+        ${isView() ? "" : `<a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Remote access" title="Remote access">${ic("globe", "sm")}<em class="rem-dot" id="remDot"></em></a>`}
         <a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts" title="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
         <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">${ic("settings", "sm")}</a></div>
     </header>
@@ -206,7 +211,7 @@ function shell() {
   const v = $("#view"); v.innerHTML = `<div class="view one-page"><div id="celebrate"></div>${DASH.build()}</div>`;
   $$(".seg", v).forEach(seg); DASH.wire();
   window.onhashchange = route; route(true);
-  refresh(true); loadAlerts();
+  refresh(true); loadAlerts(); S.lot = null; S.feat = null; S.rules = null; loadLotto(); loadFeatures();
   S.timer = setInterval(tick, 1000);
 }
 const onScroll = () => $("#topbar") && $("#topbar").classList.toggle("scrolled", window.scrollY > 8);
@@ -638,7 +643,8 @@ const DASH = {
     <div id="linkCard"></div>
     <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
     <div class="cols dash">
-      <section class="panel panel-pad span-7" id="secControls">
+      ${LOTTO.build()}
+      <section class="panel panel-pad span-7" id="secControls"${isView() ? ' hidden' : ''}>
         <div class="sec-h"><h2>Controls</h2><span class="t3 ctl-hint">${ic("lock", "sm")}Every change asks you to confirm</span></div>
         <div id="ctlBanner"></div>
         <div id="ctlCols">
@@ -662,9 +668,10 @@ const DASH = {
             <div class="status-line" id="ledMsg"></div></div>
         </div>
       </section>
-      <div class="span-5 stack">
+      <div class="${isView() ? "span-12 stack two-up" : "span-5 stack"}">
         <section class="panel panel-pad" id="secStatus"><div class="sec-h"><h2>Status</h2><span class="t3" id="stUpd"></span></div><div id="notices">${skList(48)}</div></section>
         <section class="panel panel-pad"><div class="sec-h"><h2>Hashrate</h2><span class="t3">TH/s</span></div><div class="list" id="hrList">${skList(150)}</div></section>
+        <section class="panel panel-pad" id="autoCard">${skList(120)}</section>
       </div>
       <section class="panel panel-pad span-8" id="secTemps"><div class="sec-h"><h2>Temperature</h2><span class="t3">same range as hashrate</span></div>
         <div class="legend" id="tLegend" style="margin-bottom:8px"></div><div class="chart reveal" id="chTemp" style="height:calc(var(--chart-h) * .7)"><div class="chart-empty"></div></div></section>
@@ -717,7 +724,7 @@ VIEWS.raw = {
 };
 
 /* ---------------- alerts ---------------- */
-const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activity", temp: "thermometer", pool: "network", link: "link", test: "bell" };
+const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activity", temp: "thermometer", pool: "network", link: "link", test: "bell", nearmiss: "crosshair", badge: "award", summary: "calendar-clock", auto: "sliders-horizontal" };
 async function loadAlerts() {
   try {
     const r = await api("/api/alerts");
@@ -746,6 +753,7 @@ function renderCelebrate() {
   const el = $("#celebrate"); if (!el) return;
   const ack = +LS.get("hw_block_ack", 0), b = S.route === "alerts" ? null : S.alerts.find(a => a.kind === "block" && a.id > ack);
   if (!b) { el.innerHTML = ""; return; }
+  if (b.t > Date.now() / 1000 - 6 * 3600 && LS.get("hw_block_big") !== String(b.id)) { LS.set("hw_block_big", b.id); bigCelebrate(b); }
   if (el.dataset.id === String(b.id) && el.innerHTML) return;
   el.dataset.id = b.id;
   const bits = Array.from({ length: 22 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 7) * .35}s;--r:${(i * 53) % 360}deg;--c:${["#f5a524", "#ffd60a", "#ffc266", "#3ccf8e", "#ffffff"][i % 5]}"></i>`).join("");
@@ -811,17 +819,25 @@ const setH = (icn, title, desc, right) => `<div class="set-h"><div class="set-ic
 VIEWS.settings = {
   build: () => {
     const st = S.state, locked = st.locked;
+    if (isView()) return `<div class="banner">${ic("eye", "sm")}<div><b>View-only access.</b> You can watch everything, but the owner's settings, controls and remote access can't be changed from here.</div></div>
+      <div class="cols set-cols"><div class="span-7 set-col"><section class="panel panel-pad" id="funSet">${skList(200)}</section></div>
+      <div class="span-5 set-col"><section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} · view-only.</p>
+        <button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button></section></div></div>`;
     return `${locked ? `<div class="banner">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings, remote access and alert switches are locked here. In your own copy of ${esc(APP)} they all work.</div></div>` : ""}
     <div class="cols set-cols">
       <div class="span-7 set-col">
         <section class="panel panel-pad" id="remoteSet"><div class="sk" style="height:120px"></div></section>
-        <section class="panel panel-pad" id="autoSet"><div class="sk" style="height:56px"></div></section>
+        <section class="panel panel-pad" id="secSet"><div class="sk" style="height:220px"></div></section>
+        <section class="panel panel-pad" id="sessSet"><div class="sk" style="height:120px"></div></section>
+        <section class="panel panel-pad" id="autoFeat"><div class="sk" style="height:220px"></div></section>
         <section class="panel panel-pad" id="alertsSet"><div class="sk" style="height:220px"></div></section>
       </div>
       <div class="span-5 set-col">
         <section class="panel panel-pad">${setH("server", "Miners", "")}
           <div class="list">${(st.miners || []).map(m => `<div class="row-kv"><span style="flex-direction:column;align-items:flex-start;gap:0"><b style="color:var(--t1);font-weight:550">${esc(m.name)}</b><span class="mono t3">${m.kind === "remote" ? "preview source" : esc(m.host + ":" + (m.port || 4028))}</span></span>${locked ? "" : `<button class="btn danger sm" data-del="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
           ${locked ? "" : `<details class="disclose"><summary>${ic("plus", "sm")}Add a miner</summary><form id="a-form" autocomplete="off" style="padding-top:12px">${minerForm("a")}</form></details>`}</section>
+        <section class="panel panel-pad" id="funSet"><div class="sk" style="height:200px"></div></section>
+        <section class="panel panel-pad" id="autoSet"><div class="sk" style="height:56px"></div></section>
         <section class="panel panel-pad">${setH("lock", "Password", locked ? "Managed by the preview host." : st.auth_required ? "Required to open " + esc(APP) + ", on your network and through remote access." : "Optional on your home network. Required for remote access.")}
           ${locked ? "" : `<form id="pwf"><input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
             ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : ""}
@@ -836,6 +852,7 @@ VIEWS.settings = {
   },
   wire: () => {
     const st = S.state, locked = st.locked;
+    if (isView()) { $("#so").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }); boot(); }; loadFeatures(); return; }
     $$("[data-del]").forEach(b => b.onclick = async () => { if (!await confirmDialog("Remove this miner?", "Its chart history is deleted too.", "Remove")) return;
       try { await api("/api/miners/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "Content-Type": "application/json" } }); boot(); } catch (e) { toast(e.message, "bad"); } });
     if (!locked) {
@@ -856,8 +873,8 @@ VIEWS.settings = {
       root.innerHTML = `<div class="center"><div class="auth view"><img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
         <h1>${esc(APP)} has stopped</h1><p class="lead">You can close this tab. To start it again, open ${esc(APP)} from Applications (or run it again).</p></div></div>`;
     };
-    S.remForm = false; remoteLoad(); alertsSetUI();
-    const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $(q === "alerts" ? "#alertsSet" : q === "remote" ? "#remoteSet" : null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
+    S.remForm = false; remoteLoad(); alertsSetUI(); secLoad(); sessLoad(); S.rules = null; autoSetUI(); funSetUI(); loadFeatures();
+    const q = location.hash.split("?")[1]; if (q) setTimeout(() => { const t = $({ alerts: "#alertsSet", remote: "#remoteSet", auto: "#autoFeat", security: "#secSet" }[q] || null); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }, 120);
   },
 };
 async function remoteLoad() {
@@ -955,6 +972,242 @@ function alertsSetUI() {
     try { const r = await api("/api/alerts/settings", { method: "POST", body }); S.kinds = r.kinds; S.desktop = r.desktop; } catch (e) { toast(e.message, "bad"); }
     alertsSetUI(); });
   $("#akTest").onclick = async () => { try { await api("/api/alerts/test", { method: "POST", body: {} }); refresh(false); } catch (e) { toast(e.message, "bad"); } };
+}
+
+/* ---------------- lottery: odds, tickets, best shares, blocks feed, badges ---------------- */
+const SFX = ["", "K", "M", "G", "T", "P", "E", "Z", "Y"];
+function big(v, d = 1) { if (!isNum(v)) return "—"; v = +v; let i = 0; while (Math.abs(v) >= 1000 && i < SFX.length - 1) { v /= 1000; i++; } return (i ? v.toFixed(v < 10 ? d : 0) : fmt(v)) + SFX[i]; }
+const WORDS = ["", " thousand", " million", " billion", " trillion", " quadrillion", " quintillion", " sextillion", " septillion"];
+function words(v) { if (!isNum(v)) return "—"; v = +v; let i = 0; while (v >= 1000 && i < WORDS.length - 1) { v /= 1000; i++; } return (v < 10 ? v.toFixed(1) : Math.round(v)) + WORDS[i]; }
+function oneIn(x) { return isNum(x) && x > 0 ? "1 in " + words(x) : "—"; }
+function pct(p) { if (!isNum(p) || p <= 0) return "0%"; p *= 100; if (p >= 1) return p.toFixed(1) + "%"; if (p < 1e-8) return "<0.00000001%"; return p.toFixed(Math.min(8, 1 - Math.floor(Math.log10(p)))) + "%"; }
+function yrs(y) { if (!isNum(y) || y <= 0) return "—"; if (y < 1 / 12) return Math.round(y * 365) + " days"; if (y < 2) return (y * 12).toFixed(0) + " months"; return words(y) + " years"; }
+const usd = (v) => isNum(v) && v > 0 ? "$" + Math.round(v).toLocaleString() : "—";
+const btc = (sat) => isNum(sat) ? (sat / 1e8).toFixed(3) + " BTC" : "—";
+const isView = () => !!(S.state && S.state.view_only);
+// Undecided features: one server switch each in internal/app/optional.go; their UI is tagged OPTIONAL:<name>.
+const opt = (k) => !(S.state && S.state.optional && S.state.optional[k] === false);
+
+async function loadLotto() {
+  clearTimeout(S.lotT); if (!S.miner || !$("#secLotto")) return;
+  try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); } catch (e) {}
+  S.lotT = setTimeout(() => { loadLotto(); loadFeatures(); }, 30000);
+}
+async function loadFeatures() {
+  if (!S.miner) return;
+  try { S.feat = await api("/api/features?miner=" + encodeURIComponent(S.miner.id)); } catch (e) { return; }
+  autoCard(); if ($("#autoFeat")) autoSetUI(); if ($("#funSet")) funSetUI();
+}
+const LOTTO = {
+  build: () => `
+    <section class="panel panel-pad lotto span-12" id="secLotto">
+      <div class="sec-h"><h2>${ic("ticket", "sm")}Lottery</h2><span class="t3" id="lotNet"></span></div>
+      <div class="lot-grid" id="lotGrid">${skList(150)}</div>
+      <div class="lot-close" id="lotClose"></div>
+    </section>
+    <section class="panel panel-pad span-5" id="secBest"><div class="sec-h"><h2>${ic("medal", "sm")}Best shares</h2><span class="t3" id="bestN"></span></div><div id="bestList">${skList(180)}</div></section>
+    <section class="panel panel-pad span-7" id="secBlocks"><div class="sec-h"><h2>${ic("blocks", "sm")}Network blocks</h2><span class="t3" id="blkTip"></span></div><div id="blkList">${skList(180)}</div></section>
+    <section class="panel panel-pad span-12" id="secBadges"><div class="sec-h"><h2>${ic("award", "sm")}${opt("badges") ? "Badges" : "Summary"}</h2><span id="streak"></span></div>${opt("badges") ? `<div class="badges" id="badgeList">${skList(90)}</div>` : ""}<div id="sumList"></div></section>`,
+  update: () => {
+    const L = S.lot; if (!L || !$("#lotGrid")) return;
+    const o = L.odds || {}, st = L.stats || {}, net = L.net || {}, rw = L.reward;
+    $("#lotNet").innerHTML = !net.network_on ? `${ic("eye-off", "sm")}Network data off` : L.difficulty ? `difficulty <b class="num">${big(L.difficulty, 1)}</b>${net.network_stale ? ' · <span style="color:var(--warn)">stale</span>' : ""}` : "waiting for network data…";
+    const has = o.difficulty > 0 && o.hashrate_hs > 0;
+    const T = (icn, k, v, sub, cls) => `<div class="lot-t ${cls || ""}"><div class="label">${ic(icn, "sm")}${k}</div><div class="lot-v num">${v}</div><div class="sub">${sub}</div></div>`;
+    $("#lotGrid").innerHTML =
+      T("dice-5", "Chance today", has ? oneIn(o.one_in_per_day) : "—", has ? `${pct(o.per_day)} per day · ${pct(o.per_year)} per year` : "needs hashrate and network difficulty", "hl") +
+      T("hourglass", "Time to block", has ? yrs(o.years_per_block) : "—", has ? `on average, at ${fmt(o.hashrate_hs / 1e12, 2)} TH/s. Every hash is a fresh draw.` : "") +
+      T("ticket", "Tickets today", words(st.tickets_today), `<b>${words(st.tickets_all)}</b> since ${st.first_seen ? esc(new Date(st.first_seen * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })) : "—"} · 1 hash = 1 ticket`) +
+      T("bitcoin", "Block reward", rw ? (rw.usd ? usd(rw.usd) : btc(rw.total_sat)) : "—", rw ? `${btc(rw.subsidy_sat)} + ${btc(rw.fees_sat)} fees${rw.usd ? " · " + usd(rw.price_usd) + "/BTC" : ""}` : (net.network_on ? "waiting for network data…" : "network data off in Settings"));
+    const best = o.best_share || 0, cl = o.best_share_closeness || 0;
+    const w = cl > 0 ? Math.max(1.5, Math.min(100, (Math.log10(cl) + 9) / 9 * 100)) : 0;
+    $("#lotClose").innerHTML = best ? `<div class="lc-row"><span>${ic("crosshair", "sm")}Your best share <b class="num">${big(best, 2)}</b> is <b class="num">${pct(cl)}</b> of a winning ticket</span><span class="t3">${L.difficulty ? "needs " + big(L.difficulty, 1) : ""}</span></div>
+      <div class="lc-bar" title="log scale"><i style="width:${w}%"></i>${[1e-6, 1e-3].map(m => `<em style="left:${(Math.log10(m) + 9) / 9 * 100}%"><small>${m === 1e-6 ? "0.0001%" : "0.1%"}</small></em>`).join("")}<em style="left:100%"><small>block</small></em></div>` : "";
+    // leaderboard
+    const lb = st.leaderboard || [];
+    $("#bestN").textContent = lb.length ? "top " + lb.length : "";
+    $("#bestList").innerHTML = lb.length ? `<ol class="lb">${lb.slice(0, 8).map((s, i) => `<li class="${i === 0 ? "top" : ""}"><span class="lb-r">${i + 1}</span><span class="lb-d num">${big(s.diff, 2)}</span><span class="lb-p">${s.net_diff ? pct(s.diff / s.net_diff) : ""}</span><span class="lb-t t3" title="${esc(absTime(s.t))}">${esc(rel(s.t))}</span></li>`).join("")}</ol>`
+      : `<div class="empty sm">${ic("medal")}<b>No best shares yet</b><span>Each time your miner beats its own best share, it lands here.</span></div>`;
+    // network blocks
+    const bl = L.blocks || [];
+    $("#blkTip").innerHTML = L.tip_height ? `tip <b class="num">${fmt(L.tip_height)}</b>` : "";
+    $("#blkList").innerHTML = !net.network_on ? `<div class="empty sm">${ic("eye-off")}<b>Network data is off</b><span>Turn it on in Settings › Privacy to see who found each new block.</span></div>`
+      : bl.length ? `<div class="blk">${bl.slice(0, 7).map(b => `<div class="blk-r${b.solo ? " solo" : ""}"><span class="blk-h num">${fmt(b.height)}</span><span class="blk-p">${b.solo ? ic("sparkles", "sm") : ""}${esc(b.pool || "Unknown")}${b.solo ? '<span class="pill accent">solo miner</span>' : ""}</span><span class="blk-x t3 num">${fmt(b.tx_count)} tx</span><span class="blk-t t3" data-rel="${b.time}">${rel(b.time)}</span></div>`).join("")}</div>
+        <p class="fine">Highlighted: blocks found by solo miners like you. It happens a few times a year.</p>` : skList(180);
+    // summary, then badges + streak (OPTIONAL:badges)
+    const sm = (st.summaries || [])[0];
+    $("#sumList").innerHTML = sm ? `<div class="sum">${ic("calendar-clock", "sm t3")}<span><b>${sm.kind === "weekly" ? "Last week" : "Yesterday"}</b> · ${fmt(sm.avg_ths, 2)} TH/s avg · ${fmt(sm.uptime_pct, 1)}% online · best share ${big(sm.best_share, 2)} · ${big(sm.hashes)} tickets${sm.blocks ? ` · <b style="color:var(--accent)">${sm.blocks} block!</b>` : ""}</span></div>` : "";
+    if (!opt("badges")) return;
+    const bd = st.badges || [];
+    $("#streak").innerHTML = st.streak_days ? `<span class="pill accent">${ic("flame", "sm")}${st.streak_days}-day streak</span>` : "";
+    $("#badgeList").innerHTML = bd.map(b => `<div class="bdg${b.earned ? " got" : ""}" title="${esc(b.desc)}"><div class="bdg-ic">${ic(b.icon || "award")}</div><div class="bdg-t"><b>${esc(b.title)}</b><span>${b.earned ? "Earned " + esc(new Date(b.earned * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })) : esc(b.hint || b.desc)}</span>${b.earned ? "" : `<div class="bdg-bar"><i style="width:${Math.round((b.progress || 0) * 100)}%"></i></div>`}</div></div>`).join("");
+  },
+};
+
+/* ---------------- automations card (dashboard) ---------------- */
+const AUTO_ROWS = [["schedule", "calendar-clock", "Work speed schedule"], ["light", "lightbulb", "Light effects"]];
+function autoOn(o, k) { if (!o) return false; if (k === "light") return !!(o.light && ((opt("status_lamp") && o.light.lamp) || o.light.celebrate || (opt("best_flash") && o.light.best_flash))); return !!(o[k] && o[k].on); }
+function autoCard() {
+  const el = $("#autoCard"); if (!el) return;
+  const F = S.feat; if (!F) { el.innerHTML = skList(120); return; }
+  const o = F.opts || {}, a = F.auto || {}, n = AUTO_ROWS.filter(([k]) => autoOn(o, k)).length;
+  const desc = (k) => {
+    if (!autoOn(o, k)) return "Off";
+    if (k === "schedule") return F.schedule_now ? (F.schedule_now.mode ? `Now ${cap(F.schedule_now.mode)}` : "No rule right now") : "On";
+    return [opt("status_lamp") && o.light.lamp && "status lamp", o.light.celebrate && "block flash", opt("best_flash") && o.light.best_flash && "best-share flash"].filter(Boolean).join(" · ");
+  };
+  const acts = (a.actions || []).slice(0, 3);
+  el.innerHTML = `<div class="sec-h"><h2>Automations</h2>${isView() ? "" : `<a class="btn ghost sm" href="#/settings?auto">${ic("sliders-horizontal", "sm")}Set up</a>`}</div>
+    <div class="list">${AUTO_ROWS.map(([k, icn, t]) => `<div class="row-kv"><span>${ic(icn, "sm t3")}${t}</span><b class="${autoOn(o, k) ? "" : "t3"}">${desc(k)}</b></div>`).join("")}</div>
+    ${n ? "" : `<p class="fine">All off. ${esc(APP)} never changes your miner on its own until you turn one on.</p>`}
+    ${acts.length ? `<div class="acts-log">${acts.map(x => `<div>${ic(x.ok ? "circle-check" : "circle-alert", "sm")}<span>${esc(x.text)}</span><span class="t3" data-rel="${x.t}">${rel(x.t)}</span></div>`).join("")}</div>` : ""}`;
+}
+
+/* ---------------- block celebration: confetti + sound + flash ---------------- */
+function chime() {
+  if (S.feat && S.feat.fun && S.feat.fun.sound_off) return;
+  try { const A = window.AudioContext || window.webkitAudioContext; const c = new A(); const t0 = c.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => { const o = c.createOscillator(), g = c.createGain(); o.type = "triangle"; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t0 + i * .12); g.gain.linearRampToValueAtTime(.18, t0 + i * .12 + .02); g.gain.exponentialRampToValueAtTime(.001, t0 + i * .12 + .9);
+      o.connect(g).connect(c.destination); o.start(t0 + i * .12); o.stop(t0 + i * .12 + 1); });
+  } catch (e) {}
+}
+function bigCelebrate(b) {
+  if ($("#bigCel")) return;
+  const d = document.createElement("div"); d.id = "bigCel"; d.className = "big-cel"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Block found");
+  const bits = Array.from({ length: 90 }, (_, i) => `<i style="--x:${(i * 37) % 100}%;--d:${(i % 11) * .18}s;--r:${(i * 53) % 360}deg;--s:${.7 + (i % 5) * .15};--c:${["#f5a524", "#ffd60a", "#ffc266", "#3ccf8e", "#ffffff", "#ff8a3d"][i % 6]}"></i>`).join("");
+  const rw = S.lot && S.lot.reward;
+  d.innerHTML = `<div class="bc-flash"></div><div class="confetti big" aria-hidden="true">${bits}</div>
+    <div class="bc-card"><div class="bc-ic">${ic("trophy")}</div><div class="cel-k">Block found · <span data-rel="${b.t}">${rel(b.t)}</span></div>
+      <h1>${esc(b.miner_name || "Your miner")} found a block!</h1>
+      <p>${rw ? `About <b>${rw.usd ? usd(rw.usd) : btc(rw.total_sat)}</b> (${btc(rw.total_sat)}) is heading to your payout address.` : esc(b.body)}</p>
+      <p class="fine">Odds were ${S.lot && S.lot.odds && S.lot.odds.one_in_per_block ? oneIn(S.lot.odds.one_in_per_block) + " per block" : "astronomical"}. Check your pool or wallet; the reward unlocks after 100 confirmations.</p>
+      <div class="acts"><button class="btn accent lg" id="bcOk">Woohoo!</button></div></div>`;
+  document.body.append(d); requestAnimationFrame(() => d.classList.add("on"));
+  chime();
+  $("#bcOk").onclick = () => { LS.set("hw_block_ack", b.id); d.classList.remove("on"); setTimeout(() => { d.remove(); renderCelebrate(); }, 300); };
+}
+
+/* ---------------- settings: security ---------------- */
+async function secLoad() { try { S.sec = await api("/api/security"); } catch (e) { return; } secUI(); }
+function sessLoad() { sessUI(); }
+function secUI() {
+  const el = $("#secSet"); if (!el || !S.sec) return;
+  const X = S.sec, locked = S.state.locked, need = !X.password_set;
+  el.innerHTML = setH("shield-check", "Security", `Sign-in protection for ${esc(APP)}, at home and through remote access.`) +
+    `<div class="toggles">
+      <div class="tg-row"><div class="tg-ic">${ic("timer", "sm")}</div><div class="tg-t"><b>Lockout after wrong passwords</b><span>Always on. ${X.lockout.free_tries} tries, then a growing wait (up to ${X.lockout.max_lock_min} min). Remote sign-ins are also capped at ${X.lockout.remote_max} per ${X.lockout.remote_window_min} min in total.</span></div><span class="pill good">${ic("check", "sm")}On</span></div>
+      <div class="tg-row"><div class="tg-ic">${ic("eye", "sm")}</div><div class="tg-t"><b>View-only password</b><span>${X.view_password_set ? "On · people who sign in with it can see everything but change nothing." : "A second password for family or friends: they can watch, but can't change the miner, settings or remote access."}</span></div><button class="btn ghost sm" id="vpBtn"${locked || need ? " disabled" : ""}>${X.view_password_set ? "Change" : "Set"}</button></div>
+      <div class="tg-row"><div class="tg-ic">${ic("share", "sm")}</div><div class="tg-t"><b>View-only link</b><span>${X.view_link_on ? (X.view_link_url ? `<span class="mono vl">${esc(X.view_link_url)}</span>` : "On · works through your remote link once remote access is on.") : "Share a link that opens a view-only dashboard with no password. Turn it off or make a new one anytime."}</span></div>
+        <div class="tg-acts">${X.view_link_on ? `${X.view_link_url ? `<button class="btn ghost sm" id="vlCopy">${ic("copy", "sm")}Copy</button>` : ""}<button class="btn ghost sm" id="vlNew">New link</button><button class="btn danger sm" id="vlOff">Off</button>` : `<button class="btn ghost sm" id="vlOn"${locked || need ? " disabled" : ""}>Create</button>`}</div></div>
+      <div class="tg-row"><div class="tg-ic">${ic("info", "sm")}</div><div class="tg-t"><b>App signing</b><span>${esc(X.signing_note)}</span></div></div>
+    </div>`;
+  const on = (id, f) => { const b = $("#" + id); if (b) b.onclick = f; };
+  on("vpBtn", async () => { const pw = await promptDialog("View-only password", "Anyone who signs in with this can see the dashboard but can't change anything. Leave empty to remove it.", "View-only password", "password", "Save", true); if (pw == null) return;
+    try { S.sec = await api("/api/security/view", { method: "POST", body: { password: pw } }); toast(pw ? "View-only password saved" : "View-only password removed"); secUI(); } catch (e) { toast(e.message, "bad"); } });
+  const vl = async (action, msg) => { try { S.sec = await api("/api/security/viewlink", { method: "POST", body: { action } }); toast(msg); secUI(); } catch (e) { toast(e.message, "bad"); } };
+  on("vlOn", () => vl("create", "View-only link created"));
+  on("vlNew", async () => { if (await confirmDialog("Make a new view-only link?", "The old link stops working and anyone watching through it is signed out.", "New link")) vl("rotate", "New view-only link · the old one no longer works"); });
+  on("vlOff", async () => { if (await confirmDialog("Turn off the view-only link?", "Anyone watching through it is signed out.", "Turn off")) vl("off", "View-only link is off"); });
+  on("vlCopy", (e) => copyLink(X.view_link_url, e.currentTarget));
+}
+function sessUI() {
+  const el = $("#sessSet"); if (!el) return;
+  const locked = S.state.locked, remoteOn = S.rem && S.rem.enabled && !(S.rem && S.rem.named);
+  el.innerHTML = setH("log-out", "Sign out everywhere", "Lost a phone, or shared your password or link by mistake?") +
+    `<div class="set-foot sec-acts"><button class="btn ghost" id="soAll"${locked || !S.state.auth_required ? " disabled" : ""}>${ic("log-out", "sm")}Sign out everywhere else</button>
+      <button class="btn ghost" id="newLink"${locked || !remoteOn ? " disabled" : ""} title="${remoteOn ? "" : "Needs remote access with the free link"}">${ic("refresh-cw", "sm")}New remote link</button></div>
+    <p class="fine">Sign out everywhere else: every other phone, tablet and browser has to sign in again; this one stays. New remote link: the old link stops working at once and everyone using it is signed out.${S.state.auth_required ? "" : " Set a password first: without one there are no sign-ins to end."}</p>`;
+  $("#soAll").onclick = async () => { if (!await confirmDialog("Sign out everywhere else?", "Every other phone, tablet and browser has to sign in again. This device stays signed in.", "Sign out others")) return;
+    try { const r = await api("/api/sessions/revoke", { method: "POST", body: {} }); toast(`Signed out ${r.signed_out} other session${r.signed_out === 1 ? "" : "s"}`); } catch (e) { toast(e.message, "bad"); } };
+  $("#newLink").onclick = async () => { if (!await confirmDialog("Get a new remote link?", "The current link stops working right away and everyone using it is signed out. Scan the new QR code on your phone afterwards.", "New link")) return;
+    try { const r = await api("/api/remote/rotate", { method: "POST", body: {} }); toast("New link on its way", "good", `${r.signed_out} remote session${r.signed_out === 1 ? "" : "s"} signed out`); remoteLoad(); } catch (e) { toast(e.message, "bad"); } };
+}
+function promptDialog(title, html, label, type, okLabel, allowEmpty) {
+  return new Promise((resolve) => {
+    const sc = document.createElement("div"); sc.className = "scrim";
+    const d = document.createElement("div"); d.className = "dialog"; d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true");
+    d.innerHTML = `<h2>${esc(title)}</h2><p>${html}</p><form id="pdF"><input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true"><label class="f" for="pdI" style="margin-top:0">${esc(label)}</label><input class="input" id="pdI" type="${type || "text"}" autocomplete="${type === "password" ? "new-password" : "off"}">
+      <div class="acts"><button type="button" class="btn ghost" data-a="0">Cancel</button><button class="btn accent">${esc(okLabel)}</button></div></form>`;
+    document.body.append(sc, d); requestAnimationFrame(() => { sc.classList.add("on"); d.classList.add("on"); $("#pdI", d).focus(); });
+    const done = (v) => { sc.classList.remove("on"); d.classList.remove("on"); setTimeout(() => { sc.remove(); d.remove(); }, 220); document.removeEventListener("keydown", key); resolve(v); };
+    const key = (e) => { if (e.key === "Escape") done(null); };
+    document.addEventListener("keydown", key); sc.onclick = () => done(null); $('[data-a="0"]', d).onclick = () => done(null);
+    $("#pdF", d).onsubmit = (e) => { e.preventDefault(); const v = $("#pdI", d).value; if (!v && !allowEmpty) return; done(v); };
+  });
+}
+
+/* ---------------- settings: automations ---------------- */
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function autoSetUI() {
+  const el = $("#autoFeat"); if (!el) return; const F = S.feat; if (!F) { el.innerHTML = skList(200); return; }
+  const o = F.opts || {}, can = F.can_control && !S.state.locked, dis = can ? "" : " disabled";
+  const sc = o.schedule || {}, li = o.light || {};
+  const rule = (r, i) => `<div class="rule" data-i="${i}"><div class="days">${DAYS.map((d, k) => `<button type="button" class="${(r.days || []).includes(k) ? "on" : ""}" data-d="${k}"${dis}>${d[0]}</button>`).join("")}</div>
+      <input class="input mono" type="time" value="${esc(r.start)}" data-k="start"${dis}><span class="t3">to</span><input class="input mono" type="time" value="${esc(r.end)}" data-k="end"${dis}>
+      <div class="seg sm" data-k="mode">${["low", "medium", "high"].map(m => `<button type="button" class="${r.mode === m ? "on" : ""}" data-m="${m}"${dis}>${cap(m)}</button>`).join("")}</div>
+      <button type="button" class="icon-btn rm" aria-label="Remove rule"${dis}>${ic("trash-2", "sm")}</button></div>`;
+  S.rules = S.rules || (sc.rules || []).map(r => ({ ...r, days: [...(r.days || [])] }));
+  el.innerHTML = setH("sliders-horizontal", "Automations", `Let ${esc(APP)} look after the miner while you're away. <b>All off by default</b>: installing ${esc(APP)} never changes your miner until you turn one on here.`) +
+    (can ? "" : `<div class="notice-s">${ic("lock", "sm")}<span>${S.state.locked ? "Locked in the preview." : isView() ? "View-only access." : "Only from your own copy on your home network."}</span></div>`) +
+    `<div class="toggles">
+    <div class="tg-row"><div class="tg-ic">${ic("calendar-clock", "sm")}</div><div class="tg-t"><b>Work speed schedule</b><span>${sc.on && F.schedule_now ? `On · ${F.schedule_now.mode ? "now " + cap(F.schedule_now.mode) : "no rule matches right now"}` : "Run quieter at night or while you're home, faster when you're out."}</span></div>${sw("auSched", sc.on, !can, "Schedule")}</div>
+    <div class="au-body${sc.on ? " open" : ""}" id="schedBody"><div id="rules">${S.rules.map(rule).join("")}</div>
+      <div class="au-row"><button type="button" class="btn ghost sm" id="addRule"${dis}>${ic("plus", "sm")}Add rule</button><span class="grow"></span><span class="t3">Outside rules</span>
+        <select class="input sm" id="schedDef"${dis}><option value="">Leave as is</option>${["low", "medium", "high"].map(m => `<option value="${m}"${sc.default === m ? " selected" : ""}>${cap(m)}</option>`).join("")}</select></div>
+      <div class="au-row"><span class="fine" style="margin:0">Times are this computer's local time. An end before the start runs past midnight.</span><span class="grow"></span><button type="button" class="btn accent sm" id="saveSched"${dis}>Save schedule</button></div></div>
+    <div class="tg-row tg-sep"><div class="tg-ic">${ic("party-popper", "sm")}</div><div class="tg-t"><b>Flash gold on a block</b><span>The light flashes gold for an hour when you find a block, then your own colour comes back.</span></div>${sw("liCel", li.celebrate, !can, "Block flash")}</div>
+    ${opt("status_lamp") ? /* OPTIONAL:lamp */ `<div class="tg-row"><div class="tg-ic">${ic("lightbulb", "sm")}</div><div class="tg-t"><b>Light as a status lamp</b><span>Steady green while hashing, red when something's wrong (not hashing, no pool, too hot).</span></div>${sw("liLamp", li.lamp, !can, "Status lamp")}</div>` : ""}
+    ${opt("best_flash") ? /* OPTIONAL:bestflash */ `<div class="tg-row"><div class="tg-ic">${ic("sparkles", "sm")}</div><div class="tg-t"><b>Flash on a new best share</b><span>A short purple flash when the miner beats its own best share. Your own light comes back after.</span></div>${sw("liBest", li.best_flash, !can, "Best-share flash")}</div>` : ""}
+    </div>`;
+  $$(".rule .seg", el).forEach(seg);
+  const put = async (body, msg) => { try { S.feat = await api("/api/features", { method: "POST", body: { miner: S.miner.id, ...body } }); toast(msg); S.rules = null; autoSetUI(); autoCard(); } catch (e) { toast(e.message, "bad"); autoSetUI(); } };
+  const confirmOn = (what, extra) => confirmDialog(`Turn on ${what}?`, `${esc(APP)} will change your miner on its own when this triggers. ${extra} Every change is logged and shown as an alert.`, "Turn on");
+  const sched = (on) => ({ on, default: $("#schedDef").value, rules: S.rules });
+  const tog = (id, f) => { const b = $("#" + id); if (b) b.onclick = f; };
+  tog("auSched", async () => { if (!sc.on && !S.rules.length) { S.rules.push({ days: [0, 1, 2, 3, 4, 5, 6], start: "22:00", end: "07:00", mode: "low" }); } if (!sc.on && !await confirmOn("the work speed schedule", "It sets the work speed at the times you choose.")) return; put({ schedule: sched(!sc.on) }, sc.on ? "Schedule off" : "Schedule on"); });
+  [["liLamp", "lamp"], ["liCel", "celebrate"], ["liBest", "best_flash"]].forEach(([id, k]) => tog(id, async () => { const want = !li[k];
+    if (want && !await confirmDialog("Let " + APP + " control the light?", "It changes the miner's light for this effect, then puts your own colour back.", "Turn on")) return;
+    put({ light: { [k === "best_flash" ? "BestFlash" : cap(k)]: want } }, want ? "Light effect on" : "Light effect off"); }));
+  // schedule editor
+  const rulesEl = $("#rules");
+  rulesEl.onclick = (e) => { const r = e.target.closest(".rule"); if (!r) return; const i = +r.dataset.i, R = S.rules[i];
+    const d = e.target.closest("[data-d]"); if (d) { const k = +d.dataset.d; R.days = R.days.includes(k) ? R.days.filter(x => x !== k) : [...R.days, k].sort(); d.classList.toggle("on"); }
+    const m = e.target.closest("[data-m]"); if (m) { R.mode = m.dataset.m; $$("[data-m]", r).forEach(x => x.classList.toggle("on", x === m)); seg(m.parentElement); }
+    if (e.target.closest(".rm")) { S.rules.splice(i, 1); autoSetUI(); } };
+  rulesEl.oninput = (e) => { const r = e.target.closest(".rule"); if (r && e.target.dataset.k) S.rules[+r.dataset.i][e.target.dataset.k] = e.target.value; };
+  tog("addRule", () => { S.rules.push({ days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00", mode: "high" }); autoSetUI(); });
+  tog("saveSched", () => put({ schedule: sched(sc.on) }, "Schedule saved"));
+}
+
+/* ---------------- settings: lottery extras + privacy ---------------- */
+function funSetUI() {
+  const el = $("#funSet"); if (!el || !S.feat) return;
+  const f = S.feat.fun || {}, p = S.feat.privacy || {}, locked = S.state.locked || isView();
+  el.innerHTML = setH("sparkles", "Lottery extras", "The fun part of solo mining.") +
+    `<div class="toggles">
+      <div class="tg-row"><div class="tg-ic">${ic(f.sound_off ? "volume-x" : "volume-2", "sm")}</div><div class="tg-t"><b>Block celebration sound</b><span>Confetti always; a short fanfare too, if this is on.</span></div>${sw("fnSound", !f.sound_off, locked, "Sound")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("crosshair", "sm")}</div><div class="tg-t"><b>Near-miss alerts</b><span>Alert on every new personal best${f.near_miss_diff ? `, and any share above ${big(f.near_miss_diff, 1)}` : ""}.</span></div>
+        <select class="input sm" id="fnNear"${locked ? " disabled" : ""}>${[[0, "Personal bests"], [1e9, "Above 1G"], [1e10, "Above 10G"], [1e11, "Above 100G"], [1e12, "Above 1T"]].map(([v, l]) => `<option value="${v}"${(f.near_miss_diff || 0) === v ? " selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="tg-row wrap"><div class="tg-ic">${ic("calendar-clock", "sm")}</div><div class="tg-t"><b>Summary</b><span>Average hashrate, time online, best share and tickets, as an alert.</span></div>
+        <div class="seg sm" id="fnSum">${["daily", "weekly", "off"].map(k => `<button class="${(f.summary || "daily") === k ? "on" : ""}" data-k="${k}"${locked ? " disabled" : ""}>${cap(k)}</button>`).join("")}</div></div>
+      ${(S.state.shell || "").includes("native") && opt("menu_sparkline") ? /* OPTIONAL:sparkline */ `<div class="tg-row"><div class="tg-ic">${ic("chart-spline", "sm")}</div><div class="tg-t"><b>Menu bar sparkline</b><span>A tiny hashrate graph next to the menu bar icon.</span></div>${sw("fnSpark", !f.menu_sparkline_off, locked, "Menu bar sparkline")}</div>` : ""}
+    </div>
+    <div class="set-h" style="margin-top:22px">${""}<div class="set-ic">${ic("eye-off")}</div><div class="set-t"><h2>Privacy</h2><p>Only public network data is fetched, from mempool.space. Nothing about you or your miner is sent.</p></div></div>
+    <div class="toggles">
+      <div class="tg-row"><div class="tg-ic">${ic("blocks", "sm")}</div><div class="tg-t"><b>Network data</b><span>Difficulty, newest blocks and who found them, every 10 minutes. Needed for live odds.</span></div>${sw("pvNet", !p.network_off, S.state.locked || isView(), "Network data")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("bitcoin", "sm")}</div><div class="tg-t"><b>Bitcoin price</b><span>For the block reward in dollars, every 30 minutes.</span></div>${sw("pvPrice", !p.price_off, S.state.locked || isView(), "Bitcoin price")}</div>
+    </div>`;
+  seg($("#fnSum"));
+  const putFun = async (patch) => { try { S.feat = await api("/api/features", { method: "POST", body: { miner: S.miner.id, fun: { ...f, ...patch } } }); funSetUI(); } catch (e) { toast(e.message, "bad"); } };
+  const b = (id, fn) => { const x = $("#" + id); if (x) x.onclick = fn; };
+  b("fnSound", () => putFun({ sound_off: !f.sound_off }));
+  b("fnSpark", () => putFun({ menu_sparkline_off: !f.menu_sparkline_off }));
+  const nr = $("#fnNear"); if (nr) nr.onchange = () => putFun({ near_miss_diff: +nr.value });
+  $("#fnSum").onclick = (e) => { const x = e.target.closest("button"); if (x) putFun({ summary: x.dataset.k }); };
+  const pv = async (body) => { try { await api("/api/privacy", { method: "POST", body }); await loadFeatures(); loadLotto(); } catch (e) { toast(e.message, "bad"); } };
+  b("pvNet", () => pv({ NetworkOff: !p.network_off }));
+  b("pvPrice", () => pv({ PriceOff: !p.price_off }));
 }
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.miner && $("#view")) refresh(false); });

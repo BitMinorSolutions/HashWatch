@@ -1,8 +1,6 @@
 package app
 
 import (
-	"time"
-
 	"github.com/hashwatch/hashwatch/internal/auto"
 )
 
@@ -10,9 +8,6 @@ import (
 // off until the user switches it on; zero values mean "use the default".
 type MinerOpts struct {
 	Schedule ScheduleOpts `json:"schedule,omitempty"`
-	Throttle ThrottleOpts `json:"throttle,omitempty"`
-	Failover FailoverOpts `json:"failover,omitempty"`
-	Restart  RestartOpts  `json:"restart,omitempty"`
 	Light    LightOpts    `json:"light,omitempty"`
 }
 
@@ -20,74 +15,6 @@ type ScheduleOpts struct {
 	On      bool        `json:"on"`
 	Default string      `json:"default,omitempty"` // speed outside every rule ("" = leave as is)
 	Rules   []auto.Rule `json:"rules,omitempty"`
-}
-
-type ThrottleOpts struct {
-	On      bool    `json:"on"`
-	HotC    float64 `json:"hot_c,omitempty"`
-	CoolC   float64 `json:"cool_c,omitempty"`
-	HoldMin int     `json:"hold_min,omitempty"`
-	CoolMin int     `json:"cool_min,omitempty"`
-}
-
-func (t ThrottleOpts) Cfg() auto.ThrottleCfg {
-	c := auto.ThrottleCfg{HotC: t.HotC, CoolC: t.CoolC, Hold: time.Duration(t.HoldMin) * time.Minute, Cool: time.Duration(t.CoolMin) * time.Minute, Gap: 3 * time.Minute}
-	if c.HotC == 0 {
-		c.HotC = 95
-	}
-	if c.CoolC == 0 {
-		c.CoolC = 88
-	}
-	if c.Hold == 0 {
-		c.Hold = 2 * time.Minute
-	}
-	if c.Cool == 0 {
-		c.Cool = 10 * time.Minute
-	}
-	return c
-}
-
-type FailoverOpts struct {
-	On           bool `json:"on"`
-	DeadMin      int  `json:"dead_min,omitempty"`
-	ReturnToMain bool `json:"return_to_main,omitempty"`
-	ReturnMin    int  `json:"return_min,omitempty"`
-}
-
-func (f FailoverOpts) Cfg() auto.FailoverCfg {
-	c := auto.FailoverCfg{DeadFor: time.Duration(f.DeadMin) * time.Minute, ReturnToMain: f.ReturnToMain, ReturnAfter: time.Duration(f.ReturnMin) * time.Minute}
-	if c.DeadFor == 0 {
-		c.DeadFor = 3 * time.Minute
-	}
-	if c.ReturnAfter == 0 {
-		c.ReturnAfter = 15 * time.Minute
-	}
-	return c
-}
-
-type RestartOpts struct {
-	On          bool    `json:"on"`
-	BelowTHs    float64 `json:"below_ths,omitempty"`
-	StallMin    int     `json:"stall_min,omitempty"`
-	CooldownMin int     `json:"cooldown_min,omitempty"`
-	MaxPerDay   int     `json:"max_per_day,omitempty"`
-}
-
-func (r RestartOpts) Cfg() auto.RestartCfg {
-	c := auto.RestartCfg{BelowTHs: r.BelowTHs, For: time.Duration(r.StallMin) * time.Minute, Cooldown: time.Duration(r.CooldownMin) * time.Minute, MaxPerDay: r.MaxPerDay}
-	if c.BelowTHs == 0 {
-		c.BelowTHs = 0.5
-	}
-	if c.For == 0 {
-		c.For = 10 * time.Minute
-	}
-	if c.Cooldown == 0 {
-		c.Cooldown = 60 * time.Minute
-	}
-	if c.MaxPerDay == 0 {
-		c.MaxPerDay = 3
-	}
-	return c
 }
 
 // LightOpts: the miner's light as a status lamp and for celebrations.
@@ -106,14 +33,9 @@ type LightState struct {
 
 // SecuritySettings: 2FA for remote sign-ins and view-only access.
 type SecuritySettings struct {
-	TOTPOn       bool     `json:"totp_on,omitempty"`
-	TOTPSecret   string   `json:"totp_secret,omitempty"`
-	TOTPLocalToo bool     `json:"totp_local_too,omitempty"` // also ask on the home network
-	TOTPLast     uint64   `json:"totp_last,omitempty"`      // last accepted step (no replays)
-	Recovery     []string `json:"recovery_hashes,omitempty"`
-	ViewHash     string   `json:"view_hash,omitempty"`
-	ViewSalt     string   `json:"view_salt,omitempty"`
-	ViewLink     string   `json:"view_link,omitempty"` // secret for /v/<token>; empty = off
+	ViewHash string `json:"view_hash,omitempty"`
+	ViewSalt string `json:"view_salt,omitempty"`
+	ViewLink string `json:"view_link,omitempty"` // secret for /v/<token>; empty = off
 }
 
 // PrivacySettings: every outside call can be switched off.

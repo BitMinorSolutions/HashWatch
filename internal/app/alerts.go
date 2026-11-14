@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/hashwatch/hashwatch/internal/auto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,13 +35,13 @@ var AlertKinds = []AlertKind{
 	{"block", "Block found", "When the miner's Found Blocks count goes up."},
 	{"offline", "Offline / back online", "When " + AppName + " can't reach a miner for 30 seconds, and when it's back."},
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
-	{"temp", "Running hot", "Max chip temperature above the miner's target for 5 minutes."},
+	{"temp", "Running hot", "Max chip temperature above the miner's own target (or 90 °C if it reports none) for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
 	{"link", "Remote link changed", "When the remote-access link changes, so you can re-scan it."},
 	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
 	{"badge", "Badges", "When you earn a badge (streaks, big shares, ticket milestones)."},
 	{"summary", "Daily / weekly summary", "Average hashrate, time online, best share and tickets for the day or week."},
-	{"auto", "Automations", "Whenever the schedule, auto-throttle, pool failover or auto-restart changes something."},
+	{"auto", "Automations", "Whenever the schedule or a light effect changes something on the miner."},
 }
 
 // Alert thresholds (vars so tests can shorten them).
@@ -233,14 +234,19 @@ func (a *Alerts) Observe(id, name string, snap *model.Snapshot, hist []model.Sam
 
 	// Temperature over target.
 	if t, ok := fnum(snap.Temps.Max); ok {
-		if tg, ok := fnum(snap.Temps.Target); ok && t > tg {
+		tgRaw, _ := fnum(snap.Temps.Target)
+		if tg, fromMiner := auto.HotPoint(tgRaw); t > tg {
+			what := "target"
+			if !fromMiner {
+				what = "safe limit"
+			}
 			if s.hotSince.IsZero() {
 				s.hotSince = now
 			}
 			if !s.hotFired && now.Sub(s.hotSince) >= hotFor {
 				s.hotFired = true
-				fire("temp", "warn", name+" is running hot", fmt.Sprintf("Max chip %.0f°C has been above the %.0f°C target for %d minutes. Check airflow or lower the work speed.",
-					t, tg, int(now.Sub(s.hotSince).Minutes())))
+				fire("temp", "warn", name+" is running hot", fmt.Sprintf("Max chip %.0f°C has been above the %.0f°C %s for %d minutes. Check airflow or lower the work speed.",
+					t, tg, what, int(now.Sub(s.hotSince).Minutes())))
 			}
 		} else {
 			s.hotSince, s.hotFired = time.Time{}, false

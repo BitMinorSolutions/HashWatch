@@ -4,6 +4,7 @@
 package sim
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -30,6 +31,7 @@ type Miner struct {
 	PoolDown   bool // the main pool (0) stops answering
 	HashFactor float64
 	ExtraHeat  int
+	Target     int // TarT the miner reports (0 = 90)
 	// Best share: simulated like a real miner. A miner at H hashes/s submits
 	// H/2^32 difficulty-1 shares per second, and the best of n such shares is
 	// -n/ln(U) (U uniform), so the best share grows roughly with uptime.
@@ -38,10 +40,8 @@ type Miner struct {
 	Active   int       // active pool
 	spikeEnd time.Time // temporary heat spike
 	spikeC   int
-	Restarts int
-	downTill time.Time // not answering while "restarting"
-	conc     int       // open API connections right now
-	MaxConc  int       // most connections ever open at once
+	conc     int // open API connections right now
+	MaxConc  int // most connections ever open at once
 }
 
 func New() *Miner {
@@ -101,7 +101,7 @@ func (m *Miner) handle(c net.Conn) {
 	defer func() { m.mu.Lock(); m.conc--; m.mu.Unlock() }()
 	time.Sleep(2 * time.Millisecond) // a real miner isn't instant; makes overlap visible
 	m.mu.Lock()
-	off := m.Offline || time.Now().Before(m.downTill)
+	off := m.Offline
 	m.mu.Unlock()
 	if off {
 		return
@@ -166,8 +166,8 @@ func (m *Miner) reply(cmd, param string) string {
 		if m.ReportLED {
 			led = fmt.Sprintf(" LEDUser[%d-%d-%d-%d-%d-%d]", m.LED[0], m.LED[1], m.LED[2], m.LED[3], m.LED[4], m.LED[5])
 		}
-		mm := fmt.Sprintf(`Ver[nano3-25103101_0736b2e] HVer[25103101_b906c52_1733f44] HashStatus[1] NETFAIL[%d] Elapsed[%d] HW[385] DH[1.827%%] Temp[41] OTemp[36] TMax[%d] TAvg[%d] TarT[90] Fan1[%d] FanR[%d%%] PS[0 0 0 4 2756 %d 328] GHSspd[%.2f] GHSmm[4241.60] GHSavg[3227.08] WU[45081.76] Led[%d]%s TA[10] Core[A3198S] PING[138] SoftOFF[0] ECHU[0] ECMM[0] PVT_T0[88  91  91  89  88  88  92  91  91  87] PVT_V0[318 309 313 316 316 316 315 309 314 314] MW0[13874 13534 14249 13947 14149 13732 13750 13753 13782 13715] CRC[0] WORKLEVEL[%d] MPO[125]`,
-			time.Now().Unix()-86400*4, el, 86+3*m.WorkLevel+heat, 84+3*m.WorkLevel+heat, 2100+525*m.WorkLevel, 29+7*m.WorkLevel, watts, base*1000+j*100, m.LED[0], led, m.WorkLevel)
+		mm := fmt.Sprintf(`Ver[nano3-25103101_0736b2e] HVer[25103101_b906c52_1733f44] HashStatus[1] NETFAIL[%d] Elapsed[%d] HW[385] DH[1.827%%] Temp[41] OTemp[36] TMax[%d] TAvg[%d] TarT[%d] Fan1[%d] FanR[%d%%] PS[0 0 0 4 2756 %d 328] GHSspd[%.2f] GHSmm[4241.60] GHSavg[3227.08] WU[45081.76] Led[%d]%s TA[10] Core[A3198S] PING[138] SoftOFF[0] ECHU[0] ECMM[0] PVT_T0[88  91  91  89  88  88  92  91  91  87] PVT_V0[318 309 313 316 316 316 315 309 314 314] MW0[13874 13534 14249 13947 14149 13732 13750 13753 13782 13715] CRC[0] WORKLEVEL[%d] MPO[125]`,
+			time.Now().Unix()-86400*4, el, 84+3*m.WorkLevel+heat, 82+3*m.WorkLevel+heat, cmp.Or(m.Target, 90), 2100+525*m.WorkLevel, 29+7*m.WorkLevel, watts, base*1000+j*100, m.LED[0], led, m.WorkLevel)
 		return status("S", 70, "CGMiner stats") + `,"STATS":[{"STATS":0,"ID":"AVANANO0","Elapsed":` + strconv.Itoa(el) + `,"MM ID0":"` + mm + `"}],"id":1}`
 	case "ascset":
 		p := strings.Split(param, ",")
@@ -189,21 +189,6 @@ func (m *Miner) reply(cmd, param string) string {
 			}
 		}
 		return status("E", 120, "ASC 0 set failed: invalid option") + `,"id":1}`
-	case "switchpool", "enablepool":
-		n, err := strconv.Atoi(param)
-		if err != nil || n < 0 || n > 2 {
-			return status("E", 26, "Invalid pool id") + `,"id":1}`
-		}
-		if cmd == "switchpool" {
-			m.Active = n
-			return status("S", 27, fmt.Sprintf("Switching to pool %d", n)) + `,"id":1}`
-		}
-		return status("I", 49, fmt.Sprintf("Pool %d already enabled", n)) + `,"id":1}`
-	case "restart":
-		m.Restarts++
-		m.start, m.Best, m.lastBest = time.Now(), 0, time.Now()
-		m.downTill = time.Now().Add(4 * time.Second)
-		return `{"STATUS":"RESTART"}`
 	}
 	return status("E", 14, "Invalid command") + `,"id":1}`
 }
@@ -233,7 +218,6 @@ func (m *Miner) Log() []string {
 //	GET /heat?c=6     add degrees to the chip temperatures
 //	GET /spike?c=9&s=300  add degrees for s seconds (a temperature spike)
 //	GET /best?d=2.1e9 the miner reports a new best share of difficulty d
-//	GET /stall?on=1   hashrate drops to almost nothing (on=0 restores it)
 func (m *Miner) Admin(addr string) error {
 	mux := http.NewServeMux()
 	on := func(r *http.Request, k string) bool { return r.URL.Query().Get(k) != "0" }
@@ -292,21 +276,11 @@ func (m *Miner) Admin(addr string) error {
 		m.mu.Unlock()
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/stall", func(w http.ResponseWriter, r *http.Request) {
-		m.mu.Lock()
-		if on(r, "on") {
-			m.HashFactor = 0.02
-		} else {
-			m.HashFactor = 1
-		}
-		m.mu.Unlock()
-		fmt.Fprintln(w, "ok")
-	})
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		json.NewEncoder(w).Encode(map[string]any{"work_level": m.WorkLevel, "led": m.LED, "active_pool": m.Active, "pool_down": m.PoolDown,
-			"best": m.Best, "blocks": m.Blocks, "restarts": m.Restarts, "received": len(m.Received)})
+			"best": m.Best, "blocks": m.Blocks, "received": len(m.Received)})
 	})
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

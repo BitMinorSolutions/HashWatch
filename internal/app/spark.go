@@ -14,7 +14,7 @@ import (
 // image, so macOS tints it for light and dark menu bars). w×h are pixels (use 2× for
 // Retina). It returns nil when the sparkline is off or there's too little history.
 func (s *Server) SparklinePNG(w, h int) []byte {
-	if s.Cfg.Fun.MenuSparklineOff {
+	if !Optional.MenuSparkline || s.Cfg.Fun.MenuSparklineOff { // OPTIONAL:sparkline
 		return nil
 	}
 	cut := time.Now().Unix() - 3600

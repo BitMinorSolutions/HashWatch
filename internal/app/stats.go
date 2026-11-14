@@ -281,7 +281,9 @@ func (s *Stats) observeLocked(ms *MinerStats, id, name string, snap *model.Snaps
 		}
 		ms.FoundCounter, ms.HaveFound = v, true
 	}
-	p.alerts = append(p.alerts, s.badges(ms, base, now, net)...)
+	if Optional.Badges { // OPTIONAL:badges
+		p.alerts = append(p.alerts, s.badges(ms, base, now, net)...)
+	}
 	return p
 }
 
@@ -514,6 +516,9 @@ func (s *Stats) View(id string, net netdata.Snapshot) StatsView {
 	}
 	if v.Today.SeenSec > 0 {
 		v.TodayUpPct = math.Min(100, v.Today.OnlineSec/v.Today.SeenSec*100)
+	}
+	if !Optional.Badges { // OPTIONAL:badges
+		return v
 	}
 	v.Streak = ms.Streak(now)
 	for _, b := range badgeDefs {
