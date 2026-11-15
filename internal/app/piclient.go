@@ -5,6 +5,7 @@ package app
 // mode this copy starts no miner pollers at all, so the miner is only read once.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,11 @@ import (
 type PiLink struct {
 	// Open shows url in the app window; "" means this Mac's own dashboard.
 	Open func(url string)
+	// Candidates replaces the addresses tried when finding the Pi (tests, previews).
+	Candidates func(ctx context.Context) []PiCandidate
+
+	mu  sync.Mutex
+	cur string // address in use this session when it isn't the saved one
 }
 
 // PiInfo is what the Test button found at the address.
@@ -50,12 +57,20 @@ var piClient = &http.Client{Timeout: 6 * time.Second}
 
 // TestPi checks that the address answers like a HashWatch (GET /api/state, app name).
 func TestPi(raw string) (PiInfo, error) {
+	return testPi(context.Background(), raw)
+}
+
+func testPi(ctx context.Context, raw string) (PiInfo, error) {
 	base, err := NormalizePiURL(raw)
 	if err != nil {
 		return PiInfo{}, err
 	}
 	host := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
-	resp, err := piClient.Get(base + "/api/state")
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/api/state", nil)
+	if err != nil {
+		return PiInfo{}, err
+	}
+	resp, err := piClient.Do(req)
 	if err != nil {
 		return PiInfo{}, fmt.Errorf("Couldn't reach %s. Check that the Pi is on and on the same network (or that Tailscale is on).", host)
 	}
@@ -109,6 +124,9 @@ func (s *Server) PiConnect(raw string) (PiInfo, error) {
 	}
 	s.Cfg.mu.Lock()
 	s.Cfg.PiMode, s.Cfg.PiURL = true, info.URL
+	s.Pi.mu.Lock()
+	s.Pi.cur = ""
+	s.Pi.mu.Unlock()
 	ms := append([]Miner(nil), s.Cfg.Miners...)
 	s.Cfg.mu.Unlock()
 	if err := s.Cfg.Save(); err != nil {
@@ -131,6 +149,9 @@ func (s *Server) PiLocal() error {
 	s.Cfg.mu.Lock()
 	s.Cfg.PiMode = false // the address is kept to prefill "Connect to my Pi"
 	s.Cfg.mu.Unlock()
+	s.Pi.mu.Lock()
+	s.Pi.cur = ""
+	s.Pi.mu.Unlock()
 	if err := s.Cfg.Save(); err != nil {
 		return err
 	}
@@ -152,7 +173,7 @@ func (s *Server) piBrief(r *http.Request) map[string]any {
 		u = s.Cfg.PiURL
 		s.Cfg.mu.Unlock()
 	}
-	return map[string]any{"mode": on, "url": u}
+	return map[string]any{"mode": on, "url": u, "current": s.PiCurrent()}
 }
 
 // piOnly: the Mac's own window only (loopback, same-origin JSON).

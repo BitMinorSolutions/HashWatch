@@ -355,6 +355,8 @@ input[type=range]:disabled { cursor: not-allowed; }
 .pi-acts { display: flex; gap: 10px; margin-top: 4px; } .pi-acts .btn { flex: 1; }
 .pi-ok { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--good-soft); color: var(--good); font-size: 13px; }
 .pi-ok[hidden] { display: none; }
+.pi-find .pi-ok { margin-top: 0; } .pi-find .err:empty { display: none; }
+.pi-look { display: flex; align-items: center; gap: 8px; color: var(--t3); font-size: 13.5px; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--t3); font-size: 12px; margin: 20px 0 4px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .fine { color: var(--t3); font-size: 12.5px; line-height: 1.55; margin: 16px 0 0; }

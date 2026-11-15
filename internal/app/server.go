@@ -84,6 +84,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/debug", s.auth(s.adminOnly(s.debug)))
 	mux.HandleFunc("POST /api/show", s.quitGuard(s.show)) // second launch asks the running copy to show its window
 	mux.HandleFunc("POST /api/pi/test", s.piOnly(s.mutating(s.piTest)))
+	mux.HandleFunc("POST /api/pi/find", s.piOnly(s.mutating(s.piFind)))
+	mux.HandleFunc("POST /api/pi/resolve", s.piOnly(s.mutating(s.piResolve)))
 	mux.HandleFunc("POST /api/pi/connect", s.piOnly(s.auth(s.mutating(s.piConnect))))
 	mux.HandleFunc("POST /api/pi/local", s.piOnly(s.auth(s.mutating(s.piLocal))))
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))

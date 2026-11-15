@@ -475,10 +475,18 @@ func (s *macShell) navigate() {
 	s.refreshSpark()
 }
 
-// piOrigin: the window may also show the saved Pi, but only while showing it.
+// piOrigin: the window may also show the Pi (its saved address, or the other
+// address found this session, home network vs Tailscale), but only while showing it.
 func (s *macShell) piOrigin(u string) bool {
 	p, on := s.o.Srv.PiActive()
-	return on && sameOrigin(u, p)
+	if !on {
+		return false
+	}
+	if sameOrigin(u, p) {
+		return true
+	}
+	c := s.o.Srv.PiCurrent()
+	return c != "" && sameOrigin(u, c)
 }
 
 func (s *macShell) navFailed(err objc.ID) {
