@@ -262,9 +262,10 @@ func main() {
 		}
 	}
 	alerts.Push = srv.NtfyPush
-	for _, m := range cfg.Miners {
-		poll.Start(m)
+	if native && runtime.GOOS == "darwin" && *remote == "" {
+		srv.Pi = &app.PiLink{} // "Connect to my Pi": the window fills in Open
 	}
+	srv.StartMiners() // none when the Mac app is showing a Pi (the miner is read only once)
 
 	// Bind only a port that verifiably reaches this process (never one another program answers on).
 	ln, bound, err := app.Listen(listenHost, app.PortCandidates(*port, cfg.Port, defPort))
@@ -398,6 +399,10 @@ func main() {
 			return
 		}
 		srv.Shell = "" // no native window on this machine: same app in the browser
+		if srv.Pi != nil {
+			srv.Pi = nil
+			srv.StartMiners() // no window to show the Pi in: read the miners here
+		}
 		if !*hidden && !*noOpen {
 			openBrowser(local)
 		}

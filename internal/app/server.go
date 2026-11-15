@@ -40,6 +40,7 @@ type Server struct {
 	Relaunch   func(app string) // stops this copy and starts the one at app
 	Shell      string           // "browser", "macos-native", "windows-native"
 	ShowWindow func()           // native shells: bring the window forward (second launch)
+	Pi         *PiLink          // macOS app only: "Connect to my Pi" (nil = off)
 
 	Net    *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
 	Stats  *Stats           // lottery stats, badges, summaries
@@ -82,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/install", s.auth(s.quitGuard(s.installSet)))
 	mux.HandleFunc("GET /api/debug", s.auth(s.adminOnly(s.debug)))
 	mux.HandleFunc("POST /api/show", s.quitGuard(s.show)) // second launch asks the running copy to show its window
+	mux.HandleFunc("POST /api/pi/test", s.piOnly(s.mutating(s.piTest)))
+	mux.HandleFunc("POST /api/pi/connect", s.piOnly(s.auth(s.mutating(s.piConnect))))
+	mux.HandleFunc("POST /api/pi/local", s.piOnly(s.auth(s.mutating(s.piLocal))))
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
@@ -257,6 +261,9 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
 		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !ServiceMode(), "tagline": Tagline, "shell": s.Shell, "service": ServiceMode()}
+	if pi := s.piBrief(r); pi != nil {
+		out["pi"] = pi
+	}
 	if tok := s.csrfToken(r); tok != "" {
 		out["csrf"] = tok
 	}
@@ -350,7 +357,7 @@ func (s *Server) addMiner(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	s.Poll.Start(m)
+	s.startMiner(m)
 	writeJSON(w, 200, map[string]any{"ok": true, "id": m.ID, "desc": desc})
 }
 

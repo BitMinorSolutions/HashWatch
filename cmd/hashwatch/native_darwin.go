@@ -107,6 +107,15 @@ type macShell struct {
 	itDetail objc.ID
 	itRemote objc.ID
 	icon     objc.ID // the hexagon, shown until there's a sparkline
+	// "Connect to my Pi": app menu and menu bar items (an NSMenuItem lives in one menu only)
+	piItems []piItem
+	navMu   sync.Mutex
+	navTo   string // next page for navigate: (set off the main thread)
+}
+
+type piItem struct {
+	it objc.ID
+	pi bool // shown while showing a Pi (else while running here)
 }
 
 var shell *macShell
@@ -143,6 +152,9 @@ func runNative(o shellOpts) (ok bool) {
 	s.buildStatusItem()
 	s.buildWindow()
 	s.setupNotifications()
+	if o.Srv.Pi != nil {
+		o.Srv.Pi.Open = func(u string) { s.open(u) } // from the HTTP server goroutine
+	}
 	o.Srv.ShowWindow = func() { // from the HTTP server goroutine: hop to the main thread
 		s.delegate.Send(sel("performSelectorOnMainThread:withObject:waitUntilDone:"), sel("showMain:"), objc.ID(0), false)
 	}
@@ -168,6 +180,20 @@ func registerClasses() error {
 		m("showSettings:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.show(); shell.js(`location.hash = "#settings"`) }),
 		m("reloadPage:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.web.Send(sel("reload:"), objc.ID(0)) }),
 		m("toggleRemote:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.toggleRemote() }),
+		m("navigate:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.navigate() }),
+		m("changePi:", func(self objc.ID, _ objc.SEL, _ objc.ID) {
+			shell.show()
+			shell.load(shell.o.Origin + "/?shell=darwin&view=pi")
+		}),
+		m("switchLocal:", func(self objc.ID, _ objc.SEL, _ objc.ID) {
+			if err := shell.o.Srv.PiLocal(); err != nil {
+				log.Printf("switch to this Mac: %v", err)
+			}
+			shell.show()
+		}),
+		// The Pi didn't answer: show a friendly page (Retry / Change address), never a blank window.
+		m("webView:didFailProvisionalNavigation:withError:", func(self objc.ID, _ objc.SEL, _, _, err objc.ID) { shell.navFailed(err) }),
+		m("webView:didFailNavigation:withError:", func(self objc.ID, _ objc.SEL, _, _, err objc.ID) { shell.navFailed(err) }),
 		m("showAbout:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.about() }),
 		m("menuWillOpen:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.refreshMenu() }),
 		m("refreshSpark:", func(self objc.ID, _ objc.SEL, _ objc.ID) { shell.refreshSpark() }),
@@ -193,7 +219,7 @@ func registerClasses() error {
 			if u != 0 {
 				s = gostr(u.Send(sel("absoluteString")))
 			}
-			if sameOrigin(s, shell.o.Origin) || s == "about:blank" {
+			if sameOrigin(s, shell.o.Origin) || s == "about:blank" || shell.piOrigin(s) {
 				callBlock(handler, 1) // WKNavigationActionPolicyAllow
 				return
 			}
@@ -256,6 +282,10 @@ func (s *macShell) buildMainMenu() {
 		sep(),
 		s.own("Settings…", "showSettings:", ","),
 		sep(),
+		s.piItem("Connect to My Pi…", "changePi:", false),
+		s.piItem("Change Pi Address…", "changePi:", true),
+		s.piItem("Switch to Running on This Mac", "switchLocal:", true),
+		sep(),
 		s.item("Hide "+n, "hide:", "h", 0),
 		s.item("Hide Others", "hideOtherApplications:", "h", cmdKey|optKey),
 		s.item("Show All", "unhideAllApplications:", "", 0),
@@ -309,6 +339,8 @@ func (s *macShell) buildStatusItem() {
 		s.itHash, s.itDetail, sep(),
 		s.own("Open Dashboard", "openDashboard:", ""),
 		s.itRemote,
+		s.piItem("Change Pi Address…", "changePi:", true),
+		s.piItem("Switch to Running on This Mac", "switchLocal:", true),
 		sep(),
 		s.own("Settings…", "showSettings:", ""),
 		s.item("Quit "+s.o.Name, "terminate:", "", 0),
@@ -334,7 +366,10 @@ func (s *macShell) refreshSpark() {
 		}
 	}()
 	btn := s.status.Send(sel("button"))
-	b := s.o.Srv.SparklinePNG(64, 32)
+	var b []byte
+	if _, pi := s.o.Srv.PiActive(); !pi { // showing a Pi: this Mac has no fresh hashrate of its own
+		b = s.o.Srv.SparklinePNG(64, 32)
+	}
 	if b == nil {
 		btn.Send(sel("setImage:"), s.icon)
 		return
@@ -352,7 +387,9 @@ func (s *macShell) refreshMenu() {
 	s.itHash.Send(sel("setTitle:"), nsstr(st.Hashrate))
 	s.itDetail.Send(sel("setTitle:"), nsstr(st.Detail))
 	s.itDetail.Send(sel("setHidden:"), st.Detail == "")
-	s.itRemote.Send(sel("setHidden:"), !st.RemoteOK)
+	_, pi := s.o.Srv.PiActive()
+	s.itRemote.Send(sel("setHidden:"), !st.RemoteOK || pi)
+	s.refreshPiItems()
 	state := 0
 	if st.Remote {
 		state = 1
@@ -404,8 +441,75 @@ func (s *macShell) buildWindow() {
 	s.web.Send(sel("setAllowsBackForwardNavigationGestures:"), false)
 	s.web.Send(sel("setAutoresizingMask:"), uint(18))
 	s.win.Send(sel("setContentView:"), s.web)
-	u := cls("NSURL").Send(sel("URLWithString:"), nsstr(s.o.URL))
-	s.web.Send(sel("loadRequest:"), cls("NSURLRequest").Send(sel("requestWithURL:"), u))
+	start := s.o.URL
+	if u, on := s.o.Srv.PiActive(); on {
+		start = u // showing the Pi: this copy reads no miners
+	}
+	s.load(start)
+}
+
+func (s *macShell) load(u string) {
+	nu := cls("NSURL").Send(sel("URLWithString:"), nsstr(u))
+	s.web.Send(sel("loadRequest:"), cls("NSURLRequest").Send(sel("requestWithURL:"), nu))
+}
+
+// open shows the Pi at u ("" = this Mac's dashboard). Safe from any goroutine.
+func (s *macShell) open(u string) {
+	if u == "" {
+		u = s.o.URL
+	}
+	s.navMu.Lock()
+	s.navTo = u
+	s.navMu.Unlock()
+	s.delegate.Send(sel("performSelectorOnMainThread:withObject:waitUntilDone:"), sel("navigate:"), objc.ID(0), false)
+}
+
+func (s *macShell) navigate() {
+	s.navMu.Lock()
+	u := s.navTo
+	s.navMu.Unlock()
+	if u != "" {
+		s.load(u)
+	}
+	s.refreshMenu()
+	s.refreshSpark()
+}
+
+// piOrigin: the window may also show the saved Pi, but only while showing it.
+func (s *macShell) piOrigin(u string) bool {
+	p, on := s.o.Srv.PiActive()
+	return on && sameOrigin(u, p)
+}
+
+func (s *macShell) navFailed(err objc.ID) {
+	if err == 0 || objc.Send[int](err, sel("code")) == -999 { // NSURLErrorCancelled: we refused it, or a reload
+		return
+	}
+	if _, on := s.o.Srv.PiActive(); !on {
+		return
+	}
+	failed := ""
+	if info := err.Send(sel("userInfo")); info != 0 {
+		failed = gostr(info.Send(sel("objectForKey:"), nsstr("NSErrorFailingURLStringKey")))
+	}
+	if sameOrigin(failed, s.o.Origin) {
+		return
+	}
+	log.Printf("window: the Pi didn't answer (%s)", gostr(err.Send(sel("localizedDescription"))))
+	s.load(s.o.Origin + "/?shell=darwin&view=pi-offline")
+}
+
+func (s *macShell) piItem(title, action string, pi bool) objc.ID {
+	it := s.own(title, action, "")
+	s.piItems = append(s.piItems, piItem{it: it, pi: pi})
+	return it
+}
+
+func (s *macShell) refreshPiItems() {
+	_, on := s.o.Srv.PiActive()
+	for _, p := range s.piItems {
+		p.it.Send(sel("setHidden:"), s.o.Srv.Pi == nil || p.pi != on)
+	}
 }
 
 func (s *macShell) show() {

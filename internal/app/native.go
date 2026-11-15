@@ -60,7 +60,13 @@ func (s *Server) Status() MenuStatus {
 			hottest = *t
 		}
 	}
+	if u, on := s.PiActive(); on {
+		total = -1
+		ms.Hashrate = "Showing your Pi"
+		ms.Detail = strings.TrimPrefix(strings.TrimPrefix(u, "http://"), "https://")
+	}
 	switch {
+	case total < 0:
 	case total == 0:
 		ms.Hashrate = "No miner yet"
 	case online == 0:
