@@ -1,5 +1,5 @@
-HashWatch for Mac · Powered by GrumpTech
-========================================
+HashWatch for Mac · Powered by Bitminor
+=======================================
 
 UPDATING FROM 0.5
 Quit the old HashWatch first (menu bar hexagon icon > Quit, or Activity Monitor >
@@ -38,7 +38,7 @@ USING IT
 
 RUNS SEPARATELY FROM OTHER MINER DASHBOARDS
 HashWatch is fully independent of any other dashboard on the same Mac or network
-(for example GrumpTech's own dashboard reading the same Nano 3):
+(for example another dashboard reading the same Nano 3):
 - Its own port (48412, or the next free one). It never uses a port another program
   answers on and checks that its own address really reaches HashWatch.
 - Its own folder: ~/Library/Application Support/Hashwatch. Nothing else is read or written.

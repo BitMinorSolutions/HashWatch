@@ -18,7 +18,7 @@ var AppName = "HashWatch"
 
 // Tagline is shown under the logo, on the login/setup screens, in About and in the DMG window.
 // Keep it the single source of truth (the spelling may change).
-const Tagline = "Powered by GrumpTech"
+const Tagline = "Powered by Bitminor"
 
 // dirName is the settings folder name. It stays "Hashwatch" so existing settings keep working.
 var dirName = "Hashwatch"

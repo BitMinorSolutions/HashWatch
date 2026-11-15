@@ -40,6 +40,6 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HashWatch reads your miner over your local network (port 4028) and serves the dashboard to your phone on the same Wi-Fi.</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>HashWatch · Powered by GrumpTech · MIT License</string>
+	<string>HashWatch · Powered by Bitminor · MIT License</string>
 </dict>
 </plist>

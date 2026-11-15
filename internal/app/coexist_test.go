@@ -17,7 +17,7 @@ import (
 	"github.com/hashwatch/hashwatch/web"
 )
 
-// HashWatch next to another dashboard (Grumpy Tech's) on the same computer and miner:
+// HashWatch next to another dashboard (for example one on a Raspberry Pi) on the same computer and miner:
 // a foreign HTTP server sits on HashWatch's preferred port and a foreign process polls
 // the same miner. HashWatch must take another port, answer only as itself, never send
 // the miner anything but reads on a fresh install, keep to one connection at a time,

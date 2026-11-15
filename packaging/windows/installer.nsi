@@ -6,7 +6,7 @@ Unicode true
 !include "FileFunc.nsh"
 
 !define NAME "HashWatch"
-!define TAGLINE "Powered by GrumpTech"
+!define TAGLINE "Powered by Bitminor"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\HashWatch"
 
 Name "${NAME}"
@@ -21,7 +21,7 @@ ManifestDPIAware true
 
 VIProductVersion "${NUMVER}"
 VIAddVersionKey "ProductName" "${NAME}"
-VIAddVersionKey "CompanyName" "GrumpTech"
+VIAddVersionKey "CompanyName" "Bitminor"
 VIAddVersionKey "FileDescription" "${NAME} Setup"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
@@ -71,7 +71,7 @@ Section "${NAME} (required)" SecMain
   WriteRegStr HKLM "Software\${NAME}" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${NAME}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "GrumpTech"
+  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "Bitminor"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\HashWatch.exe,0"
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\Uninstall ${NAME}.exe"'
