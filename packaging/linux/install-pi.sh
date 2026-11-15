@@ -165,6 +165,10 @@ else
 	mv -f "$tmp/hashwatch.installed" "$OPT/hashwatch"
 fi
 chmod 755 "$OPT/hashwatch"
+# A fresh install supersedes any half-finished OTA: drop its markers so the
+# supervise script doesn't treat this binary as an unconfirmed update.
+# Settings (config.json) and the update-skip/last records are left alone.
+rm -f "$DATA/update-pending.json" "$DATA/update-unconfirmed"
 
 # Supervise script: prefer the copy next to this installer, else write the
 # embedded helper so `curl | sudo sh` still works.

@@ -311,7 +311,6 @@ func main() {
 	if *remote == "" || private {
 		app.WriteInstance(*dir, srv.Port, srv.InstanceID)
 	}
-	go srv.ConfirmPendingUpdate()
 	var quitOnce sync.Once
 	shutdown := func() {
 		quitOnce.Do(func() {
@@ -330,6 +329,10 @@ func main() {
 	if *remote == "" || private {
 		srv.Quit = shutdown
 	}
+	// After an OTA swap (or a rollback) the updater exits through the normal
+	// shutdown; systemd + supervise start the binary now on disk.
+	srv.Update.Exit = shutdown
+	go srv.ConfirmPendingUpdate()
 	if inAppBundle() && (*remote == "" || private) {
 		home, _ := os.UserHomeDir()
 		srv.Install = install.Check(autostart.Exe(), home)

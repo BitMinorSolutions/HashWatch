@@ -118,7 +118,15 @@ export HASHWATCH_BIN="$ROOT/opt/hashwatch/hashwatch"
 export HASHWATCH_CONFIG="$ROOT/var/lib/hashwatch"
 export HASHWATCH_SERVICE=1
 export HASHWATCH_UPDATE_URL="$BASE/manifest.signed.json"
-export HASHWATCH_RESTART_CMD="$ROOT/kill-self.sh"
+# No HASHWATCH_RESTART_CMD: use the real default (exit and let the
+# Restart=always loop below start the new binary). systemctl is stubbed to
+# fail like polkit does for the unprivileged hashwatch user, and to leave a
+# marker, so the test fails if the updater ever calls it.
+unset HASHWATCH_RESTART_CMD
+mkdir -p "$ROOT/fakebin"
+printf '#!/bin/sh\ntouch "%s/systemctl-called"\necho "Failed to restart hashwatch.service: Interactive authentication required." >&2\nexit 1\n' "$ROOT" > "$ROOT/fakebin/systemctl"
+chmod 755 "$ROOT/fakebin/systemctl"
+export PATH="$ROOT/fakebin:$PATH"
 export HASHWATCH_HEALTH_TIMEOUT=12
 
 rm -f "$ROOT/stop"
@@ -153,7 +161,7 @@ echo "=== 2. update to ota-v2 ==="
 sign_manifest ota-v2 "$REL/hashwatch-v2" unused
 cp "$REL/hashwatch-v2" "$REL/hashwatch-linux-amd64"
 # The server closes the HTTP connection when it restarts; curl may fail even after a good apply.
-curl -sS -m 20 -X POST "http://127.0.0.1:$PORT/api/update" -H 'Content-Type: application/json' -d '{"apply":true}' >/tmp/hw-update-apply.json || true
+curl -sS -m 20 -X POST "http://127.0.0.1:$PORT/api/update" -H 'Content-Type: application/json' -H 'X-CSRF-Token: e2e' -b 'hw_csrf=e2e' -d '{"apply":true}' >/tmp/hw-update-apply.json || true
 wait_version ota-v2 50
 echo "update applied: now serving ota-v2"
 # Backup of v1 should exist or may have been kept as .bak until confirmed and left in place.
@@ -161,10 +169,15 @@ test -f "$ROOT/opt/hashwatch/hashwatch.bak" || test -f "$ROOT/opt/hashwatch/hash
 
 echo "=== 3. broken update rolls back ==="
 sign_manifest ota-bad "$REL/hashwatch-bad" unused
-curl -sf -X POST "http://127.0.0.1:$PORT/api/update" -H 'Content-Type: application/json' -d '{"apply":true}' >/tmp/hw-update-bad.json || true
-# The apply may return 502 (restart/process dying) or 200; either way we wait for v2 to come back.
+curl -sf -X POST "http://127.0.0.1:$PORT/api/update" -H 'Content-Type: application/json' -H 'X-CSRF-Token: e2e' -b 'hw_csrf=e2e' -d '{"apply":true}' >/tmp/hw-update-bad.json || true
+# The apply may return 502 (restart/process dying) or 200. The process exits
+# shortly after replying, so wait for the rollback markers first, then v2.
+for i in $(seq 1 160); do
+  grep -q '"rolled_back": *true' "$ROOT/var/lib/hashwatch/update-last.json" 2>/dev/null && break
+  sleep 0.25
+done
 wait_version ota-v2 60
-if grep -q '"rolled_back": true' "$ROOT/var/lib/hashwatch/update-last.json" 2>/dev/null \
+if grep -q '"rolled_back": *true' "$ROOT/var/lib/hashwatch/update-last.json" 2>/dev/null \
    || grep -q ota-bad "$ROOT/var/lib/hashwatch/update-skip" 2>/dev/null; then
   echo "broken update rolled back to ota-v2"
 else
@@ -172,6 +185,12 @@ else
   tail -n 80 "$ROOT/var/lib/hashwatch/supervise.log" >&2 || true
   exit 1
 fi
+
+if [[ -e "$ROOT/systemctl-called" ]]; then
+  echo "updater called systemctl (would fail under polkit on a real Pi)" >&2
+  exit 1
+fi
+echo "systemctl was never called"
 
 echo "=== 4. uninstall ==="
 touch "$ROOT/stop"

@@ -29,9 +29,19 @@ type Runner struct {
 	Service  bool
 	Interval time.Duration
 	Client   *http.Client
-	// Restart replaces this process (default: systemctl restart hashwatch,
-	// or HASHWATCH_RESTART_CMD if set).
+	// Restart replaces this process. Default: HASHWATCH_RESTART_CMD if set,
+	// otherwise exit this process (see Exit) so the supervisor brings up the
+	// new binary. On the Pi that is systemd (Restart=always) running the
+	// supervise script, which also health-checks and rolls back. The service
+	// runs as an unprivileged user, so it must never call systemctl itself:
+	// polkit refuses ("Interactive authentication required").
 	Restart func() error
+	// Exit ends this process cleanly after an update or a rollback
+	// (default os.Exit(0)). main wires the graceful shutdown here.
+	Exit func()
+	// ExitDelay lets the HTTP reply for "Update now" reach the browser before
+	// the process exits (default 750ms).
+	ExitDelay time.Duration
 	// PublicKey overrides the baked-in key; tests set this. Production uses PublicKey.
 	Key ed25519.PublicKey
 	Now func() time.Time
@@ -111,12 +121,26 @@ func (r *Runner) restart() error {
 		}
 		return nil
 	}
-	c := exec.Command("systemctl", "restart", "hashwatch")
-	out, err := c.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl restart hashwatch: %w (%s)", err, bytesPreview(out))
-	}
+	r.exitSoon()
 	return nil
+}
+
+// exitSoon ends the process shortly, so the supervisor (systemd Restart=always
+// + supervise) starts the binary now on disk. Needs no privileges.
+func (r *Runner) exitSoon() {
+	d := r.ExitDelay
+	if d <= 0 {
+		d = 750 * time.Millisecond
+	}
+	exit := r.Exit
+	if exit == nil {
+		exit = func() { os.Exit(0) }
+	}
+	log.Printf("update: exiting so the service manager starts the new binary")
+	go func() {
+		time.Sleep(d)
+		exit()
+	}()
 }
 
 func bytesPreview(b []byte) string {
@@ -295,7 +319,7 @@ func (r *Runner) ApplyNow(ctx context.Context) (Status, error) {
 	return r.Check(ctx, true)
 }
 
-// RestartNow triggers the configured restart hook (systemd by default).
+// RestartNow triggers the configured restart hook (process exit by default).
 func (r *Runner) RestartNow() error {
 	if r == nil {
 		return nil

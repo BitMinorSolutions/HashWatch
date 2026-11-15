@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewer(t *testing.T) {
@@ -356,5 +357,108 @@ func TestManifestURL(t *testing.T) {
 	}
 	if ManifestURL("") != "" {
 		t.Fatal("empty")
+	}
+}
+
+// The Pi service runs as the unprivileged hashwatch user, and polkit refuses
+// `systemctl restart` from it. The default restart must therefore not call
+// systemctl: it exits the process so systemd (Restart=always) + supervise
+// start the new binary, health-check it, and roll back if needed.
+func TestDefaultRestartExitsInsteadOfSystemctl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub")
+	}
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "hashwatch")
+	_ = os.WriteFile(exe, []byte("V1"), 0o755)
+	data := filepath.Join(dir, "data")
+	_ = os.MkdirAll(data, 0o700)
+
+	// A systemctl that fails like polkit does, and records that it was called.
+	bin := filepath.Join(dir, "bin")
+	_ = os.MkdirAll(bin, 0o755)
+	called := filepath.Join(dir, "systemctl-called")
+	stub := "#!/bin/sh\ntouch " + called + "\necho 'Failed to restart hashwatch.service: Interactive authentication required.' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HASHWATCH_RESTART_CMD", "")
+
+	v2 := []byte("V2-BINARY")
+	sum := sha256.Sum256(v2)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/hashwatch":
+			w.Write(v2)
+		case "/manifest.signed.json":
+			man, _ := json.Marshal(Manifest{Schema: 1, Channels: map[string]Release{
+				"stable": {Version: "0.7.2", Builds: map[string]Build{
+					Platform(runtime.GOOS, runtime.GOARCH): {URL: srv.URL + "/hashwatch", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(v2))},
+				}},
+			}})
+			env, _ := SignEnvelope(man, priv)
+			w.Write(env)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	exited := make(chan struct{}, 4)
+	r := &Runner{
+		Version: "0.7.1", Exe: exe, Dir: data, Service: true, Key: pub, Client: srv.Client(),
+		URL:       func() string { return srv.URL + "/manifest.signed.json" },
+		Channel:   func() string { return "stable" },
+		Exit:      func() { exited <- struct{}{} },
+		ExitDelay: 5 * time.Millisecond,
+	}
+	if _, err := r.Check(context.Background(), true); err != nil {
+		t.Fatalf("apply should succeed without systemctl: %v", err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("process did not exit for the supervisor to restart it")
+	}
+	if _, err := os.Stat(called); err == nil {
+		t.Fatal("updater called systemctl")
+	}
+	// Swap kept (not rolled back) and pending left for the next start to confirm.
+	if got, _ := os.ReadFile(exe); string(got) != "V2-BINARY" {
+		t.Fatalf("exe %q", got)
+	}
+	if bak, _ := os.ReadFile(backupPath(exe)); string(bak) != "V1" {
+		t.Fatalf("bak %q", bak)
+	}
+	p, err := ReadPending(data)
+	if err != nil || p.To != "0.7.2" || p.From != "0.7.1" {
+		t.Fatalf("pending %+v %v", p, err)
+	}
+
+	// Next start: the new version is unhealthy (here: wrong version answers)
+	// → roll back, skip it, and exit again so the old binary is started.
+	rolled, err := Confirm(data, exe, "0.7.1", true)
+	if err != nil || !rolled {
+		t.Fatalf("rollback: %v %v", rolled, err)
+	}
+	if err := r.RestartNow(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no exit after rollback")
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "V1" {
+		t.Fatalf("after rollback %q", got)
+	}
+	if SkippedVersion(data) != "0.7.2" {
+		t.Fatalf("skip %q", SkippedVersion(data))
+	}
+	if _, err := os.Stat(called); err == nil {
+		t.Fatal("rollback called systemctl")
 	}
 }
