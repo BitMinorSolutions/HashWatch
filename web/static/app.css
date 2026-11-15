@@ -349,6 +349,14 @@ input[type=range]:disabled { cursor: not-allowed; }
 .found button { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 0 16px; border-radius: 12px; background: var(--bg-3);
   border: 1px solid var(--line-2); cursor: pointer; text-align: left; transition: border-color .15s; }
 .found button:hover { border-color: rgba(245,165,36,.5); }
+.choice button { justify-content: flex-start; padding: 14px 16px; min-height: 72px; }
+.choice .grow { flex: 1; display: flex; flex-direction: column; gap: 3px; } .choice .grow span { color: var(--t3); font-size: 13px; line-height: 1.45; }
+.choice .ch-ic { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex: none; background: var(--bg-4); color: var(--accent); }
+.pi-acts { display: flex; gap: 10px; margin-top: 4px; } .pi-acts .btn { flex: 1; }
+.pi-ok { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--good-soft); color: var(--good); font-size: 13px; }
+.pi-ok[hidden] { display: none; }
+.pi-find .pi-ok { margin-top: 0; } .pi-find .err:empty { display: none; }
+.pi-look { display: flex; align-items: center; gap: 8px; color: var(--t3); font-size: 13.5px; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--t3); font-size: 12px; margin: 20px 0 4px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .fine { color: var(--t3); font-size: 12.5px; line-height: 1.55; margin: 16px 0 0; }

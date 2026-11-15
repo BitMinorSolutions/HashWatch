@@ -121,6 +121,25 @@ func (p *Poller) Stop(id string) {
 	}
 }
 
+// Halt stops reading a miner but keeps its history (the Mac switched to showing a Pi).
+func (p *Poller) Halt(id string) {
+	p.mu.Lock()
+	st := p.m[id]
+	delete(p.m, id)
+	p.mu.Unlock()
+	if st != nil {
+		close(st.stop)
+	}
+	p.saveHistory()
+}
+
+// Running reports how many miners are being read.
+func (p *Poller) Running() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.m)
+}
+
 // SetGentle turns Gentle mode on or off. On means poll every GentlePoll (or Base
 // if that is already slower). Backoff stays "never faster than the current interval".
 func (p *Poller) SetGentle(on bool) {

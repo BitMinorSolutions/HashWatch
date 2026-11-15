@@ -83,6 +83,9 @@ type ConfigData struct {
 	Ntfy NtfySettings `json:"ntfy,omitempty"`
 	// DailySummaryAt is the local time (HH:MM, default 09:00) for the last-24h briefing.
 	DailySummaryAt string `json:"daily_summary_at,omitempty"`
+	// PiMode: the Mac app shows the HashWatch at PiURL instead of reading miners itself.
+	PiMode bool   `json:"pi_mode,omitempty"`
+	PiURL  string `json:"pi_url,omitempty"`
 	// V2 placeholders (unused in v0.5.x, kept so the file format doesn't change later).
 	Locations   []Location   `json:"locations,omitempty"`
 	Plan        string       `json:"plan,omitempty"` // "" / "free"; V2 may add "pro"

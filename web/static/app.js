@@ -84,7 +84,10 @@ async function boot() {
   clearInterval(S.timer); await loadSprite();
   try { S.state = await api("/api/state"); if (S.state && S.state.csrf) S.csrf = S.state.csrf; }
   catch (e) { root.innerHTML = `<div class="center"><div class="auth"><h1>Can't reach ${esc(APP)}</h1><p class="lead">${esc(e.message)}</p></div></div>`; return; }
+  const pi = S.state.pi, view = new URLSearchParams(location.search).get("view");
+  if (pi && pi.mode && view !== "pi") return viewPiReconnect(); // this Mac shows the Pi: landing here means the Pi didn't answer
   if (S.state.auth_required && !S.state.authed) return viewLogin();
+  if (pi && view === "pi") return viewPi();
   if (S.state.setup_needed) return viewSetup();
   const ms = S.state.miners || [];
   S.miner = ms.find(m => m.id === localStorage.getItem("hw_miner")) || ms[0];
@@ -181,14 +184,113 @@ function wireMinerForm(id, done) {
     } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; } finally { b.disabled = false; b.innerHTML = ic("radar") + "Scan my network"; } };
 }
 function viewSetup() {
+  if (S.state.pi && !S.setupHere) return viewSetupChoice();
   root.innerHTML = `<div class="center"><div class="auth wide view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
     <form class="panel" id="s-form" autocomplete="off">${minerForm("s")}</form>
     ${tailscaleSetupHTML()}
     <p class="fine">The miner's API listens on port 4028. For another port, enter it like <span class="mono">192.168.1.50:4029</span>.</p>
-    <p class="fine">If another dashboard is already reading this miner, turn on Gentle mode in Settings after you connect.</p></div></div>`;
+    <p class="fine">If another dashboard is already reading this miner, turn on Gentle mode in Settings after you connect.</p>
+    ${S.state.pi ? `<p class="fine"><a href="#" id="s-back">← Back</a></p>` : ""}</div></div>`;
   wireMinerForm("s", async () => boot());
+  if ($("#s-back")) $("#s-back").onclick = (e) => { e.preventDefault(); S.setupHere = false; viewSetup(); };
+}
+
+/* ---------------- "Connect to my Pi" (macOS app only) ----------------
+   The Mac app can show the HashWatch on a Raspberry Pi instead of reading the miner itself. */
+const authHead = () => `<img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}`;
+const hostOf = (u) => String(u || "").replace(/^https?:\/\//, "");
+function setView(v) { const q = new URLSearchParams(location.search); v ? q.set("view", v) : q.delete("view"); const t = q.toString(); history.replaceState(null, "", location.pathname + (t ? "?" + t : "")); }
+const leavePiView = () => setView("");
+function viewSetupChoice() {
+  root.innerHTML = `<div class="center"><div class="auth wide view">${authHead()}
+    <h1>Where should ${esc(APP)} run?</h1><p class="lead">Read your miner from this Mac, or show the ${esc(APP)} that already runs on your Raspberry Pi.</p>
+    <div class="found choice">
+      <button type="button" id="c-here"><span class="ch-ic">${ic("laptop")}</span><span class="grow"><b>Run here on this Mac</b><span>This Mac reads your miner. Pick this if you don't have a Pi.</span></span>${ic("chevron-right", "sm")}</button>
+      <button type="button" id="c-pi"><span class="ch-ic">${ic("server")}</span><span class="grow"><b>Connect to my Pi</b><span>Show your Pi's dashboard here. Only the Pi reads your miner.</span></span>${ic("chevron-right", "sm")}</button>
+    </div></div></div>`;
+  $("#c-here").onclick = () => { S.setupHere = true; viewSetup(); };
+  $("#c-pi").onclick = () => viewPi(true);
+}
+function viewPi(fromSetup) {
+  const pi = S.state.pi || {};
+  root.innerHTML = `<div class="center"><div class="auth wide view">${authHead()}
+    <h1>${pi.mode ? "Change Pi address" : "Connect to my Pi"}</h1><p class="lead">Show the ${esc(APP)} that runs on your Raspberry Pi. Your Pi's own password applies.</p>
+    <div class="panel panel-pad pi-find" id="p-find"><div class="pi-look"><span class="spin"></span>Looking for your Pi…</div></div>
+    <div class="divider">or enter its address</div>
+    <form class="panel" id="p-form" autocomplete="off">
+      <label class="f" for="p-url" style="margin-top:0">Pi address</label>
+      <input class="input mono" style="font-size:16px" id="p-url" placeholder="http://hashwatch.local:48412" value="${esc(pi.url || "")}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="pi-ok" id="p-ok" hidden></div>
+      <div class="err" id="p-e"></div>
+      <div class="pi-acts"><button type="button" class="btn ghost lg" id="p-test">Test</button><button type="submit" class="btn accent lg" id="p-go" disabled>Connect</button></div>
+    </form>
+    <p class="fine">At home, use <span class="mono">http://hashwatch.local:48412</span> or the Pi's IP. Away from home, turn on Tailscale and use the Pi's Tailscale address.</p>
+    ${pi.mode ? `<div class="divider">or</div><button type="button" class="btn ghost lg block" id="p-local">${ic("laptop")}Switch to running on this Mac</button>
+      <p class="fine">This Mac reads your miner itself again. <a href="${esc(pi.url)}">Back to your Pi</a></p>`
+      : `<p class="fine"><a href="#" id="p-back">← Back</a></p>`}</div></div>`;
+  const inp = $("#p-url"), go = $("#p-go"), ok = $("#p-ok"), er = $("#p-e");
+  let tested = "";
+  const reset = () => { if (inp.value.trim() !== tested) { go.disabled = true; ok.hidden = true; } };
+  inp.oninput = reset;
+  $("#p-test").onclick = async () => { const b = $("#p-test"), u = inp.value.trim(); b.disabled = true; b.innerHTML = '<span class="spin"></span>Testing…'; er.textContent = ""; ok.hidden = true; go.disabled = true;
+    try { const r = await api("/api/pi/test", { method: "POST", body: { url: u } }); tested = u; inp.value = u;
+      ok.innerHTML = ic("circle-check", "sm") + `<span>Found ${esc(r.app)} ${esc(r.version)} at <span class="mono">${esc(hostOf(r.url))}</span></span>`; ok.hidden = false; go.disabled = false; }
+    catch (e) { er.textContent = e.message; } finally { b.disabled = false; b.textContent = "Test"; } };
+  $("#p-form").onsubmit = async (ev) => { ev.preventDefault(); if (go.disabled) return; go.disabled = true; go.textContent = "Connecting…"; er.textContent = "";
+    try { const r = await api("/api/pi/connect", { method: "POST", body: { url: inp.value.trim() } }); location.href = r.url; } // the app window also opens it
+    catch (e) { er.textContent = e.message; go.disabled = false; go.textContent = "Connect"; } };
+  findPi();
+  if ($("#p-back")) $("#p-back").onclick = (e) => { e.preventDefault(); leavePiView(); fromSetup ? viewSetup() : boot(); };
+  if ($("#p-local")) $("#p-local").onclick = async () => { const b = $("#p-local"); b.disabled = true;
+    try { await api("/api/pi/local", { method: "POST", body: {} }); leavePiView(); S.setupHere = true; boot(); } catch (e) { er.textContent = e.message; b.disabled = false; } };
+}
+// Find the Pi without typing: its home-network name, then its Tailscale address.
+async function findPi() {
+  const box = $("#p-find"), viaTxt = { lan: "on your home network", tailscale: "over Tailscale" };
+  let found = [];
+  try { found = (await api("/api/pi/find", { method: "POST", body: {} })).found || []; } catch (e) {}
+  if (!box || !document.body.contains(box)) return;
+  if (!found.length) { box.innerHTML = `<div class="pi-look">${ic("search", "sm")}<span>Couldn't find your Pi automatically. Enter its address below.</span></div>`; return; }
+  const f = found[0], alt = found[1];
+  box.innerHTML = `<div class="pi-ok">${ic("circle-check", "sm")}<span>Found your Pi at <span class="mono">${esc(hostOf(f.url))}</span> ${viaTxt[f.via] || ""}</span></div>
+    ${alt ? `<p class="fine" style="margin-top:8px">Also reachable ${viaTxt[alt.via] || ""} at <span class="mono">${esc(hostOf(alt.url))}</span>. ${esc(APP)} switches between them on its own.</p>` : ""}
+    <button type="button" class="btn accent lg block" id="p-found" style="margin-top:12px">Connect</button>
+    <div class="err" id="p-fe"></div>`;
+  $("#p-found").onclick = async () => { const b = $("#p-found"); b.disabled = true; b.textContent = "Connecting…"; $("#p-fe").textContent = "";
+    try { const r = await api("/api/pi/connect", { method: "POST", body: { url: f.url } }); location.href = r.url; }
+    catch (e) { $("#p-fe").textContent = e.message; b.disabled = false; b.textContent = "Connect"; } };
+}
+// Pi mode and the Pi didn't answer: try its other address (home network vs Tailscale) before showing an error.
+async function viewPiReconnect() {
+  root.innerHTML = `<div class="center"><div class="auth wide view">${authHead()}
+    <h1>Connecting to your Pi…</h1><p class="lead"><span class="spin"></span> Trying your Pi on your home network and over Tailscale.</p></div></div>`;
+  try {
+    const r = await api("/api/pi/resolve", { method: "POST", body: {} });
+    if (piAutoOpenedRecently(r.url)) return viewPiOffline();
+    location.href = r.url;
+  } catch (e) { viewPiOffline(); }
+}
+function piAutoOpenedRecently(url) { // never bounce forever between this page and a Pi the window can't open
+  let last = {}; try { last = JSON.parse(sessionStorage.getItem("hw_pi_auto") || "{}"); } catch (e) {}
+  const now = Date.now();
+  try { sessionStorage.setItem("hw_pi_auto", JSON.stringify({ url, t: now })); } catch (e) {}
+  return last.url === url && now - (last.t || 0) < 20000;
+}
+function viewPiOffline() {
+  const pi = S.state.pi || {};
+  root.innerHTML = `<div class="center"><div class="auth wide view">${authHead()}
+    <h1>Can't reach your Pi</h1><p class="lead">${esc(APP)} couldn't open <span class="mono">${esc(hostOf(pi.url))}</span>. Check that the Pi is plugged in and on your network. Away from home, make sure Tailscale is on.</p>
+    <div class="panel panel-pad">
+      <div class="pi-acts"><button type="button" class="btn accent lg" id="o-retry">${ic("refresh-cw")}Retry</button><button type="button" class="btn ghost lg" id="o-change">Change address</button></div>
+      <div class="err" id="o-e" role="alert"></div>
+    </div>
+    <p class="fine">Your miner isn't affected. While this Mac shows your Pi, it doesn't read the miner itself.</p></div></div>`;
+  $("#o-retry").onclick = async () => { const b = $("#o-retry"); b.disabled = true; b.innerHTML = '<span class="spin"></span>Retrying…'; $("#o-e").textContent = "";
+    try { const r = await api("/api/pi/resolve", { method: "POST", body: {} }); location.href = r.url; }
+    catch (e) { $("#o-e").textContent = e.message; b.disabled = false; b.innerHTML = ic("refresh-cw") + "Retry"; } };
+  $("#o-change").onclick = () => { setView("pi"); boot(); };
 }
 
 /* ---------------- shell: ONE scrolling page (v0.7.0) ----------------
