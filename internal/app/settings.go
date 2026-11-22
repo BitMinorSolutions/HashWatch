@@ -12,6 +12,23 @@ type MinerOpts struct {
 	Schedule ScheduleOpts `json:"schedule,omitempty"`
 	Failover FailoverOpts `json:"failover,omitempty"`
 	Light    LightOpts    `json:"light,omitempty"`
+	Fan      FanOpts      `json:"fan,omitempty"`
+}
+
+// FanOpts is the user's chosen fan mode. Mode is "auto" (default) or "cooler".
+// Percent is the fixed speed (40-100) when Cooler; 0 means the default 50%.
+type FanOpts struct {
+	Mode    string `json:"mode,omitempty"`
+	Percent int    `json:"percent,omitempty"`
+}
+
+func (f FanOpts) Cooler() bool { return f.Mode == "cooler" }
+
+func (f FanOpts) Speed() int {
+	if f.Percent >= 40 && f.Percent <= 100 {
+		return f.Percent
+	}
+	return 50
 }
 
 type ScheduleOpts struct {

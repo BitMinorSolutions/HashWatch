@@ -21,6 +21,7 @@ type Automations struct {
 	Cfg    *Config
 	Poll   *Poller
 	Alerts *Alerts
+	Fan    *FanSync // re-apply Cooler after a scheduled work-mode change
 	Locked bool
 	Now    func() time.Time
 	// Send runs a miner command (Poll.Command; replaceable in tests).
@@ -171,7 +172,13 @@ func (a *Automations) Observe(id, name string, snap *model.Snapshot) {
 	setLevel := func(kind string, l int, why string) job {
 		name := auto.LevelNames[l]
 		return job{kind: kind, alert: true, text: fmt.Sprintf("Work speed → %s (%s)", strings.ToUpper(name[:1])+name[1:], why),
-			do: func(c source.Controller) (cgminer.Result, error) { return c.SetWorkMode(l) }}
+			do: func(c source.Controller) (cgminer.Result, error) {
+				res, err := c.SetWorkMode(l)
+				if err == nil && res.OK && a.Fan != nil {
+					a.Fan.ApplyIfCooler(c, id)
+				}
+				return res, err
+			}}
 	}
 	if snap.OK {
 		// 1. schedule: the owner's chosen speeds

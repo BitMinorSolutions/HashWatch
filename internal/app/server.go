@@ -45,6 +45,7 @@ type Server struct {
 	Net    *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
 	Stats  *Stats           // lottery stats, badges, summaries
 	Auto   *Automations     // schedule, light effects
+	Fan    *FanSync         // re-applies a persisted Cooler fan speed
 	Update *update.Runner   // OTA for the Pi service; never talks to a miner
 
 	mu       sync.Mutex
@@ -122,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/ntfy/test", s.auth(s.admin(s.ntfyTest)))
 	mux.HandleFunc("POST /api/control/workmode", s.auth(s.mutating(s.ctlWorkmode)))
 	mux.HandleFunc("POST /api/control/led", s.auth(s.mutating(s.ctlLED)))
+	mux.HandleFunc("POST /api/control/fan", s.auth(s.mutating(s.ctlFan)))
 	mux.HandleFunc("POST /api/control/pool", s.auth(s.admin(s.ctlPool)))
 	mux.HandleFunc("POST /api/control/reboot", s.auth(s.admin(s.ctlReboot)))
 	s.handler = s.csrfWrap(secHeaders(mux))
@@ -348,6 +350,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	if s.role(r) == RoleAdmin {
 		out["remote"] = s.remoteBrief()
 	}
+	out["fan"] = s.fanView(id, v.Latest)
 	if s.Alerts != nil {
 		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
 		items, latest := s.Alerts.Since(a, 20)
@@ -516,7 +519,13 @@ func (s *Server) ctlWorkmode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
 		return
 	}
-	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) { return c.SetWorkMode(lvl) }, nil)
+	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) {
+		res, err := c.SetWorkMode(lvl)
+		if err == nil && res.OK && s.Fan != nil {
+			s.Fan.ApplyIfCooler(c, b.Miner)
+		}
+		return res, err
+	}, nil)
 	s.ctlReply(w, res, snap, err)
 }
 
@@ -561,6 +570,60 @@ func (s *Server) ctlLED(w http.ResponseWriter, r *http.Request) {
 		if s.Auto != nil {
 			s.Auto.LightChanged(b.Miner)
 		}
+	}
+	s.ctlReply(w, res, snap, err)
+}
+
+func (s *Server) ctlFan(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Miner, Mode, Password string
+		Percent               *int
+	}
+	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
+	mode := strings.ToLower(strings.TrimSpace(b.Mode))
+	speed := cgminer.FanAuto
+	pct := cgminer.FanDefault
+	switch mode {
+	case "auto":
+		speed = cgminer.FanAuto
+	case "cooler":
+		if b.Percent != nil {
+			pct = *b.Percent
+		}
+		speed = pct
+		if _, err := cgminer.FanSpdParam(speed); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+	default:
+		writeJSON(w, 400, map[string]string{"error": "mode must be auto or cooler"})
+		return
+	}
+	if !s.requireMinerPassword(w, b.Password) {
+		return
+	}
+	if !s.canControl(b.Miner) {
+		writeJSON(w, 403, map[string]string{"error": ErrNoControl.Error()})
+		return
+	}
+	ok := s.Cfg.updateMiner(b.Miner, func(m *Miner) {
+		m.Opts.Fan = FanOpts{Mode: mode, Percent: pct}
+	})
+	if !ok {
+		writeJSON(w, 404, map[string]string{"error": "unknown miner"})
+		return
+	}
+	s.Cfg.Save()
+	if mode == "auto" {
+		s.Fan.ClearPending(b.Miner)
+	} else {
+		s.Fan.MarkPending(b.Miner)
+	}
+	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) {
+		return c.SetFanSpd(speed)
+	}, nil)
+	if err == nil && res.OK && mode == "cooler" {
+		s.Fan.ClearPending(b.Miner)
 	}
 	s.ctlReply(w, res, snap, err)
 }

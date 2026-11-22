@@ -8,7 +8,7 @@ import (
 
 func TestOnlyDocumentedWrites(t *testing.T) {
 	ok := []string{"0,workmode,set,0", "0,workmode,set,1", "0,workmode,set,2", "0,ledset,1-100-50-255-106-0", "0,ledset,0-0-0-0-0-0"}
-	bad := []string{"0,workmode,set,3", "0,workmode,set,-1", "0,workmode,set,2;reboot", "0,reboot,0", "0,fan-spd,100", "0,ledset,5-100-50-1-2-3",
+	bad := []string{"0,workmode,set,3", "0,workmode,set,-1", "0,workmode,set,2;reboot", "0,reboot,0", "0,ledset,5-100-50-1-2-3",
 		"0,ledset,1-101-50-1-2-3", "0,ledset,1-100-50-256-0-0", "1,workmode,set,2", "0,voltage,set,1300", "0,freq,700", ""}
 	for _, p := range ok {
 		if !AllowedWrite(p) {
@@ -102,5 +102,58 @@ func TestSetPoolAndRebootAllowed(t *testing.T) {
 	}
 	if _, err := Reboot("127.0.0.1:1"); err == nil {
 		t.Fatal("reboot to a closed port should fail at the network, not be refused")
+	}
+}
+
+func TestFanSpdAllowList(t *testing.T) {
+	ok := []string{"0,fan-spd,-1", "0,fan-spd,40", "0,fan-spd,50", "0,fan-spd,99", "0,fan-spd,100"}
+	for _, p := range ok {
+		if !AllowedWrite(p) || !AllowedCommand("ascset", p) {
+			t.Errorf("should allow %q", p)
+		}
+		if _, err := ParseFanSpdParam(p); err != nil {
+			t.Errorf("ParseFanSpdParam(%q): %v", p, err)
+		}
+	}
+	if p, err := FanSpdParam(-1); err != nil || p != "0,fan-spd,-1" {
+		t.Errorf("FanSpdParam(-1) = %q %v", p, err)
+	}
+	if p, err := FanSpdParam(50); err != nil || p != "0,fan-spd,50" {
+		t.Errorf("FanSpdParam(50) = %q %v", p, err)
+	}
+	if p, err := FanSpdParam(40); err != nil || p != "0,fan-spd,40" {
+		t.Errorf("FanSpdParam(40) = %q %v", p, err)
+	}
+	if p, err := FanSpdParam(100); err != nil || p != "0,fan-spd,100" {
+		t.Errorf("FanSpdParam(100) = %q %v", p, err)
+	}
+
+	bad := []string{
+		"0,fan-spd,39", "0,fan-spd,101", "0,fan-spd,15", "0,fan-spd,0",
+		"0,fan-spd,1", "0,fan-spd,14", "0,fan-spd,200", "0,fan-spd,-2",
+		"0,fan-spd,040", "0,fan-spd,+50", "0,fan-spd,50 ", "0,fan-spd, 50",
+		"0,fan-spd,50.0", "0,fan-spd,50e0", "0,fan-spd,0x50", "0,fan-spd,",
+		"0,fan-spd", "0,fan-spd,auto", "0,fan-spd,fifty", "0,fan-spd,--1",
+		"0,fan-spd,-01", "0,fan-spd,-1 ", "0,fan-spd, -1", "fan-spd,50",
+		"0,fan-spd,50;reboot", "0,fan-spd,50,0,workmode,set,2",
+		"0,fan-spd,50|ascset", "0,fan-spd,-1,0", "0,fan-spd,50\n",
+		"0,fan-spd,50\r", "0,fan-spd,50\t", "1,fan-spd,50",
+		"0,fan-spd,50 ", "0,FAN-SPD,50",
+	}
+	for _, p := range bad {
+		if AllowedWrite(p) || AllowedCommand("ascset", p) {
+			t.Errorf("must refuse %q", p)
+		}
+		if _, err := writeCmd("127.0.0.1:1", "ascset", p, 0); err == nil || !strings.Contains(err.Error(), "refusing") {
+			t.Errorf("ascset sent %q (%v)", p, err)
+		}
+	}
+	for _, n := range []int{39, 101, 15, 0, 1, 14, 200, -2, 101} {
+		if _, err := FanSpdParam(n); err == nil {
+			t.Errorf("FanSpdParam(%d) accepted", n)
+		}
+		if _, err := SetFanSpd("127.0.0.1:1", n); err == nil {
+			t.Errorf("SetFanSpd(%d) accepted", n)
+		}
 	}
 }

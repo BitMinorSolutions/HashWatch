@@ -99,3 +99,17 @@ func TestTempToneUsesSafetyLimitForMaxChip(t *testing.T) {
 		t.Fatal("max chip color should follow the 95°C safety limit, not the average target")
 	}
 }
+
+func TestFanControlNote(t *testing.T) {
+	js := appJS(t)
+	const note = "Fixed speed. The miner won't speed the fan up on its own if the room gets hotter. The 95°C safety alarm still watches the hottest chip."
+	if !strings.Contains(js, note) {
+		t.Fatal("Fan Cooler control must show the fixed-speed safety note")
+	}
+	if !strings.Contains(js, `id="fanPanel"`) || !strings.Contains(js, `id="fanBack"`) || !strings.Contains(js, "Back to Auto") {
+		t.Fatal("Fan control should include the panel and a one-tap Back to Auto")
+	}
+	if !strings.Contains(js, "/api/control/fan") {
+		t.Fatal("Fan control should post to /api/control/fan")
+	}
+}

@@ -59,7 +59,7 @@ Go 1.22+ (this tree uses the version in `go.mod`):
 
 ```sh
 go test ./...
-go build -trimpath -ldflags "-s -w -X main.version=0.9.1" -o hashwatch ./cmd/hashwatch
+go build -trimpath -ldflags "-s -w -X main.version=0.9.2" -o hashwatch ./cmd/hashwatch
 ```
 
 The installer, Linux binaries and signed update manifest used by the Pi one-liner are attached to each [GitHub release](https://github.com/BitMinorSolutions/HashWatch/releases). Keep the ed25519 private signing key offline (never in the repo).

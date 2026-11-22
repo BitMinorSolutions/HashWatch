@@ -29,6 +29,7 @@ type Source interface {
 type Controller interface {
 	SetWorkMode(level int) (cgminer.Result, error)
 	SetLED(effect, bright, temper int, hex string) (cgminer.Result, error)
+	SetFanSpd(speed int) (cgminer.Result, error)
 	SwitchPool(n int) (cgminer.Result, error)
 	SetPool(webUser, webPass string, pool int, url, worker, workerPass string) (cgminer.Result, error)
 	Reboot() (cgminer.Result, error)
@@ -45,6 +46,10 @@ func (c CGMiner) SetWorkMode(level int) (cgminer.Result, error) {
 
 func (c CGMiner) SetLED(effect, bright, temper int, hex string) (cgminer.Result, error) {
 	return cgminer.SetLED(c.Addr, effect, bright, temper, hex)
+}
+
+func (c CGMiner) SetFanSpd(speed int) (cgminer.Result, error) {
+	return cgminer.SetFanSpd(c.Addr, speed)
 }
 
 func (c CGMiner) SwitchPool(n int) (cgminer.Result, error) {

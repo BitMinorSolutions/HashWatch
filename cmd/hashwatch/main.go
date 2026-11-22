@@ -213,7 +213,9 @@ func main() {
 	srv.Net, srv.Stats, srv.Now = netf, stats, time.Now
 	stats.Net = srv.NetForStats
 	autos := app.NewAutomations(cfg, poll, alerts, *remote != "")
-	srv.Auto = autos
+	fans := app.NewFanSync(cfg, poll)
+	srv.Auto, srv.Fan = autos, fans
+	autos.Fan = fans
 	stats.OnEvent = autos.Event
 	go netf.Run(context.Background())
 	go func() {
@@ -228,6 +230,7 @@ func main() {
 		at := cfg.DailySummaryAt
 		stats.MaybeDailySummary(id, name, snap, poll.HistorySince(id, cut), at)
 		autos.Observe(id, name, snap)
+		fans.Observe(id, snap)
 	}
 
 	if *remote != "" {

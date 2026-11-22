@@ -1,6 +1,7 @@
 package cgminer
 
 import (
+	"github.com/hashwatch/hashwatch/internal/model"
 	"testing"
 	"time"
 )
@@ -94,5 +95,41 @@ func TestPSPowerLayouts(t *testing.T) {
 	}
 	if _, _, ok := psPower([]float64{0, 0, 27482}, true); ok {
 		t.Error("short 3S PS should not parse")
+	}
+}
+
+func TestSupportsFanSpd(t *testing.T) {
+	s3s := Fetch(fakeMiner(t, nano3sReplies(nano3sVersion)), 2*time.Second)
+	if !s3s.OK || !SupportsFanSpd(s3s) {
+		t.Fatalf("Nano 3S should offer Fan control: ok=%v support=%v err=%v", s3s.OK, SupportsFanSpd(s3s), s3s.QueryErrors)
+	}
+	// Ver prefix alone (no version command) still counts as 3S.
+	sVer := Fetch(fakeMiner(t, nano3sReplies("")), 2*time.Second)
+	if !SupportsFanSpd(sVer) {
+		t.Fatal("Nano 3S Ver prefix should offer Fan control")
+	}
+
+	mmJSON := `"MM ID0":"` + nano3MM + `"`
+	s3 := Fetch(fakeMiner(t, map[string]string{
+		"summary": `{"STATUS":[{"STATUS":"S"}],"SUMMARY":[{"Elapsed":100}],"id":1}`,
+		"version": `{"STATUS":[{"STATUS":"S"}],"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalonnano","MODEL":"nano3","HWTYPE":"PMMv1_X1","SWTYPE":"MM318_X2","LVERSION":"25103101_0736b2e"}],"id":1}`,
+		"pools":   `{"STATUS":[{"STATUS":"S"}],"POOLS":[],"id":1}`,
+		"devs":    `{"STATUS":[{"STATUS":"S"}],"DEVS":[{"ASC":0,"Name":"AVANANO"}],"id":1}`,
+		"estats":  `{"STATUS":[{"STATUS":"S"}],"STATS":[{"STATS":0,"ID":"AVANANO0","Elapsed":100,` + mmJSON + `}],"id":1}`,
+	}), 2*time.Second)
+	if !s3.OK {
+		t.Fatalf("nano3 fixture: %v", s3.QueryErrors)
+	}
+	if SupportsFanSpd(s3) {
+		t.Fatal("original Nano 3 must hide Fan control")
+	}
+
+	mini := &model.Snapshot{Identity: model.Identity{Product: "Avalon Mini 3", Model: "Mini3"}}
+	q := &model.Snapshot{Identity: model.Identity{Product: "Avalon Q", Model: "Q"}}
+	if !SupportsFanSpd(mini) || !SupportsFanSpd(q) {
+		t.Fatal("Mini 3 and Avalon Q should offer Fan control")
+	}
+	if SupportsFanSpd(nil) || SupportsFanSpd(&model.Snapshot{}) {
+		t.Fatal("unknown/empty snapshot must hide Fan control")
 	}
 }

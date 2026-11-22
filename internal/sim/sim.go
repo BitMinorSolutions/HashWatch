@@ -47,6 +47,11 @@ type Miner struct {
 	Pools    [3]poolInfo
 	pending  [3]*poolInfo
 	Reboots  int
+	// Nano3S identifies as an Avalon Nano 3S so HashWatch offers Fan control.
+	Nano3S bool
+	// FanSpd is the last fan-spd value (-1 auto, or a fixed percent). FanSet is whether one was sent.
+	FanSpd int
+	FanSet bool
 }
 
 type poolInfo struct{ URL, User, Pass string }
@@ -169,6 +174,9 @@ func (m *Miner) reply(cmd, param string) string {
 	watts := []int{85, 105, 126}[m.WorkLevel]
 	switch cmd {
 	case "version":
+		if m.Nano3S {
+			return status("S", 22, "CGMiner versions") + `,"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalon Nano3s","MODEL":"Nano3s","HWTYPE":"N_MM1v1_X1","SWTYPE":"MM319","LVERSION":"25061101_97e23a6","MAC":"e0e1a9000000"}],"id":1}`
+		}
 		return status("S", 22, "CGMiner versions") + `,"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalonnano","MODEL":"nano3","HWTYPE":"PMMv1_X1","SWTYPE":"MM318_X2","LVERSION":"25103101_0736b2e","MAC":"e0e1a9000000"}],"id":1}`
 	case "summary":
 		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
@@ -183,8 +191,18 @@ func (m *Miner) reply(cmd, param string) string {
 		if m.ReportLED {
 			led = fmt.Sprintf(" LEDUser[%d-%d-%d-%d-%d-%d]", m.LED[0], m.LED[1], m.LED[2], m.LED[3], m.LED[4], m.LED[5])
 		}
-		mm := fmt.Sprintf(`Ver[nano3-25103101_0736b2e] HVer[25103101_b906c52_1733f44] HashStatus[1] NETFAIL[%d] Elapsed[%d] HW[385] DH[1.827%%] Temp[41] OTemp[36] TMax[%d] TAvg[%d] TarT[%d] Fan1[%d] FanR[%d%%] PS[0 0 0 4 2756 %d 328] GHSspd[%.2f] GHSmm[4241.60] GHSavg[3227.08] WU[45081.76] Led[%d]%s TA[10] Core[A3198S] PING[138] SoftOFF[0] ECHU[0] ECMM[0] PVT_T0[88  91  91  89  88  88  92  91  91  87] PVT_V0[318 309 313 316 316 316 315 309 314 314] MW0[13874 13534 14249 13947 14149 13732 13750 13753 13782 13715] CRC[0] WORKLEVEL[%d] MPO[125]`,
-			time.Now().Unix()-86400*4, el, 84+3*m.WorkLevel+heat, 82+3*m.WorkLevel+heat, cmp.Or(m.Target, 90), 2100+525*m.WorkLevel, 29+7*m.WorkLevel, watts, base*1000+j*100, m.LED[0], led, m.WorkLevel)
+		ver, hw, core, ps := "nano3-25103101_0736b2e", "25103101_b906c52_1733f44", "A3198S", fmt.Sprintf("0 0 0 4 2756 %d 328", watts)
+		if m.Nano3S {
+			ver, hw, core, ps = "Nano3s-25061101_97e23a6", "25061101_97e23a6", "A3197S", fmt.Sprintf("0 0 27482 3 0 3444 %d", watts)
+		}
+		fanR := 29 + 7*m.WorkLevel
+		fan1 := 2100 + 525*m.WorkLevel
+		if m.FanSet && m.FanSpd >= 40 {
+			fanR = m.FanSpd
+			fan1 = 16 * m.FanSpd
+		}
+		mm := fmt.Sprintf(`Ver[%s] HVer[%s] HashStatus[1] NETFAIL[%d] Elapsed[%d] HW[385] DH[1.827%%] Temp[41] OTemp[36] TMax[%d] TAvg[%d] TarT[%d] Fan1[%d] FanR[%d%%] PS[%s] GHSspd[%.2f] GHSmm[4241.60] GHSavg[3227.08] WU[45081.76] Led[%d]%s TA[10] Core[%s] PING[138] SoftOFF[0] ECHU[0] ECMM[0] PVT_T0[88  91  91  89  88  88  92  91  91  87] PVT_V0[318 309 313 316 316 316 315 309 314 314] MW0[13874 13534 14249 13947 14149 13732 13750 13753 13782 13715] CRC[0] WORKLEVEL[%d] MPO[125]`,
+			ver, hw, time.Now().Unix()-86400*4, el, 84+3*m.WorkLevel+heat, 82+3*m.WorkLevel+heat, cmp.Or(m.Target, 90), fan1, fanR, ps, base*1000+j*100, m.LED[0], led, core, m.WorkLevel)
 		return status("S", 70, "CGMiner stats") + `,"STATS":[{"STATS":0,"ID":"AVANANO0","Elapsed":` + strconv.Itoa(el) + `,"MM ID0":"` + mm + `"}],"id":1}`
 	case "ascset":
 		p := strings.Split(param, ",")
@@ -203,6 +221,14 @@ func (m *Miner) reply(cmd, param string) string {
 				}
 				m.LED = v
 				return status("I", 118, "ASC 0 set info: led set ok") + `,"id":1}`
+			}
+		}
+		if len(p) == 3 && p[0] == "0" && p[1] == "fan-spd" {
+			n, err := strconv.Atoi(p[2])
+			if err == nil && (n == -1 || (n >= 15 && n <= 100)) {
+				m.FanSpd = n
+				m.FanSet = true
+				return status("S", 119, "ASC 0 set OK") + `,"id":1}`
 			}
 		}
 		if len(p) == 3 && p[0] == "0" && p[1] == "reboot" && p[2] == "0" {
@@ -265,6 +291,14 @@ func (m *Miner) Log() []string {
 //	GET /heat?c=6     add degrees to the chip temperatures
 //	GET /spike?c=9&s=300  add degrees for s seconds (a temperature spike)
 //	GET /best?d=2.1e9 the miner reports a new best share of difficulty d
+//
+// SetElapsed pretends the miner has been up for sec seconds (tests: a reboot is a drop).
+func (m *Miner) SetElapsed(sec int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.start = time.Now().Add(-time.Duration(sec) * time.Second)
+}
+
 func (m *Miner) Admin(addr string) error {
 	mux := http.NewServeMux()
 	on := func(r *http.Request, k string) bool { return r.URL.Query().Get(k) != "0" }

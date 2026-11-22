@@ -278,6 +278,33 @@ func isNano3S(mm map[string]string, model string) bool {
 	return strings.EqualFold(model, "nano3s") || strings.HasPrefix(strings.ToLower(mm["Ver"]), "nano3s-")
 }
 
+// SupportsFanSpd is whether HashWatch should offer the Fan control.
+// Canaan documents fan-spd for the Mini 3 and Avalon Q (15-100, or -1 for auto).
+// The Nano 3S uses the same command family. The original Nano 3 fixtures and
+// Canaan's Nano 3 docs do not mention fan-spd, so the control is hidden there.
+func SupportsFanSpd(s *model.Snapshot) bool {
+	if s == nil {
+		return false
+	}
+	if isNano3S(s.MMFields, s.Identity.Model) {
+		return true
+	}
+	model := strings.ToLower(s.Identity.Model)
+	prod := strings.ToLower(s.Identity.Product)
+	ver := ""
+	if s.MMFields != nil {
+		ver = strings.ToLower(s.MMFields["Ver"])
+	}
+	blob := strings.ToLower(strings.Join([]string{model, prod, ver, s.Identity.HWType, s.Identity.SWType}, " "))
+	if strings.Contains(blob, "mini3") || strings.Contains(blob, "mini 3") || strings.Contains(blob, "mini-3") {
+		return true
+	}
+	if model == "q" || strings.Contains(prod, "avalon q") || strings.HasPrefix(ver, "q-") {
+		return true
+	}
+	return false
+}
+
 // psPower reads watts and input volts from PS[]. Both models report 7 fields,
 // laid out differently:
 //

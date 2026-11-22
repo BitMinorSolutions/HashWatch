@@ -88,6 +88,7 @@ func TestShareTunnelIsViewOnly(t *testing.T) {
 		{"POST", "/api/features", `{"miner":"m","fun":{"summary":"off"}}`},
 		{"POST", "/api/alerts/clear", `{}`},
 		{"POST", "/api/control/workmode", `{"miner":"m","mode":"low"}`},
+		{"POST", "/api/control/fan", `{"miner":"m","mode":"cooler","percent":50}`},
 	}
 	reads := []string{"/api/remote", "/api/security", "/api/debug", "/api/update", "/api/tailscale", "/api/ntfy", "/api/remote/qr.svg?u=x"}
 	for _, w := range writes {

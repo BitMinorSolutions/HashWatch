@@ -53,10 +53,11 @@ HashWatch is fully independent of any other dashboard on the same Mac or network
   2 °C allowance so normal regulation does not fire. A separate safety alarm
   fires if any chip stays at or above 95 °C. HashWatch never restarts the miner.
 - The only settings HashWatch can ever send are work speed Low/Medium/High, the
-  light colour, and — only if you turn on backup pool failover — switchpool among
-  pools already set on the miner (never changing addresses or passwords). Anything
-  else is refused before it leaves your computer. switchpool has not been tried
-  on a real Nano 3 yet.
+  light colour, a Fan setting of Auto or a fixed 40–100% (Nano 3S, Mini 3 and
+  Avalon Q; hidden on the original Nano 3), and — only if you turn on backup pool
+  failover — switchpool among pools already set on the miner (never changing
+  addresses or passwords). Anything else is refused before it leaves your
+  computer. switchpool has not been tried on a real Nano 3 yet.
 - Gentle on the miner: one connection at a time, short timeouts, a read every 5 s
   and slower (15 s, then 30 s) if the miner stops answering, so another dashboard
   can poll the same miner at the same time.

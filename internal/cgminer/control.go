@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,11 @@ import (
 //	                                     Takes effect only after a reboot. Untested on a real Nano 3.
 //	ascset|0,reboot,0                    Canaan's documented reboot for Nano 3S / Mini 3 / Avalon Q.
 //	                                     Untested on a real Nano 3.
+//	ascset|0,fan-spd,N                   N: -1 = automatic, or 40-100 for a fixed percent.
+//	                                     Canaan documents 15-100 and -1 for Mini 3 and Avalon Q.
+//	                                     HashWatch only sends -1 or 40-100. Offered on the Nano 3S
+//	                                     (and Mini 3 / Q). Hidden on the original Nano 3, where
+//	                                     the command is not in Canaan's docs or our fixtures.
 //
 // They are sent in cgminer's JSON form, e.g. {"command":"switchpool","parameter":"1"}.
 
@@ -63,12 +69,67 @@ func LEDParam(effect, bright, temper int, hex string) (string, error) {
 	return fmt.Sprintf("0,ledset,%d-%d-%d-%d-%d-%d", effect, bright, temper, r, g, b), nil
 }
 
-// The only write parameters HashWatch ever sends: the three documented work modes and
-// ledset. Checked again right before sending, whatever built the parameter.
+// Fan speed: Auto is -1; Cooler is a fixed percent. Canaan's API allows 15-100;
+// HashWatch only sends 40-100 (or -1).
+const (
+	FanAuto    = -1
+	FanMinPct  = 40
+	FanMaxPct  = 100
+	FanDefault = 50
+)
+
+// FanSpdParam builds the ascset parameter for a fan speed.
+func FanSpdParam(speed int) (string, error) {
+	if speed == FanAuto {
+		return "0,fan-spd,-1", nil
+	}
+	if speed < FanMinPct || speed > FanMaxPct {
+		return "", errors.New("fan speed must be auto (-1) or 40–100")
+	}
+	return fmt.Sprintf("0,fan-spd,%d", speed), nil
+}
+
+// ParseFanSpdParam accepts only "0,fan-spd,-1" or "0,fan-spd,N" with N 40-100
+// in canonical decimal form (no leading zeros, signs, spaces or extra fields).
+func ParseFanSpdParam(param string) (int, error) {
+	const pfx = "0,fan-spd,"
+	if param == pfx+"-1" {
+		return FanAuto, nil
+	}
+	if !strings.HasPrefix(param, pfx) {
+		return 0, errors.New("not a fan-spd parameter")
+	}
+	rest := param[len(pfx):]
+	if rest == "" || rest[0] < '1' || rest[0] > '9' {
+		return 0, errors.New("fan speed must be auto (-1) or 40–100")
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || strconv.Itoa(n) != rest {
+		return 0, errors.New("fan speed must be auto (-1) or 40–100")
+	}
+	if n < FanMinPct || n > FanMaxPct {
+		return 0, errors.New("fan speed must be auto (-1) or 40–100")
+	}
+	return n, nil
+}
+
+func SetFanSpd(addr string, speed int) (Result, error) {
+	p, err := FanSpdParam(speed)
+	if err != nil {
+		return Result{}, err
+	}
+	return writeCmd(addr, "ascset", p, 5*time.Second)
+}
+
+// The only write parameters HashWatch ever sends: the three documented work modes,
+// ledset, and fan-spd (-1 or 40-100). Checked again right before sending, whatever built the parameter.
 var allowedASC = regexp.MustCompile(`^0,(workmode,set,[012]|ledset,[0-4]-(100|[0-9]{1,2})-(100|[0-9]{1,2})-[0-9]{1,3}-[0-9]{1,3}-[0-9]{1,3})$`)
 
 // AllowedWrite reports whether an ascset parameter is on the allow-list (exported for tests).
 func AllowedWrite(param string) bool {
+	if _, err := ParseFanSpdParam(param); err == nil {
+		return true
+	}
 	if !allowedASC.MatchString(param) {
 		return false
 	}
@@ -90,7 +151,7 @@ var allowedSwitch = regexp.MustCompile(`^(1[0-5]|[0-9])$`)
 // RebootParam is the documented Canaan reboot (Nano 3S / Mini 3 / Avalon Q).
 const RebootParam = "0,reboot,0"
 
-// AllowedCommand is the write-command allow-list: workmode, ledset, switchpool,
+// AllowedCommand is the write-command allow-list: workmode, ledset, fan-spd, switchpool,
 // setpool and reboot (the last two are still rejected by the server unless
 // Advanced miner controls is on).
 func AllowedCommand(cmd, param string) bool {

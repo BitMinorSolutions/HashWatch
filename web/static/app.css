@@ -688,6 +688,9 @@ a.icon-btn { text-decoration: none; }
 .ctl-row .ctl-head b { font-size: 14px; font-weight: 600; }
 .ctl-row .ctl-head { margin-bottom: 12px; }
 .ctl-row .ctl-desc { margin: 10px 0 0; font-size: 12.5px; color: var(--t3); }
+.ctl-note { margin: 10px 0 0; font-size: 12.5px; color: var(--t2); line-height: 1.45; }
+#fanCooler { margin-top: 12px; }
+#fanCooler .apply-bar { margin-top: 10px; }
 .led-grid { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); gap: 20px; align-items: stretch; }
 #ledPanel .device { min-height: 180px; height: 100%; aspect-ratio: auto; border-radius: 16px; }
 .led-fields .ctl-field { padding: 12px 0; }

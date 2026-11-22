@@ -424,6 +424,7 @@ async function refresh(full) {
   try {
     const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}&a=${S.alertSeen || 0}`);
     S.err = null; S.can = !!r.can_control; if (r.remote) { S.remote = r.remote; S.state.local_viewer = r.local_viewer; }
+    if (r.fan) S.liveFan = r.fan;
     newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
@@ -718,6 +719,7 @@ VIEWS.controls = {
       const pw = await askMinerPassword(); if (pw == null) return;
       send("/api/control/workmode", { miner: S.miner.id, mode: l, password: pw }, `Work speed set to ${LEVEL[l]}`, "#wsMsg");
     };
+    wireFan();
     $("#chips").onclick = (e) => { const b = e.target.closest(".chip-c"); if (b) setLed({ color: b.dataset.hex }); };
     $("#cPick").oninput = (e) => setLed({ color: e.target.value });
     $("#br").oninput = (e) => setLed({ bright: +e.target.value });
@@ -741,10 +743,77 @@ VIEWS.controls = {
     $$("#ctlCols button, #ctlCols input").forEach(x => x.disabled = !S.can || x.id === "ledApply" && !S.ctl.dirty || x.id === "ledReset" && !S.ctl.dirty);
     $("#wsNow").textContent = c.work_name ? "Currently " + (LEVEL[c.work_name] || c.work_name) : "—";
     segSet($("#wsSeg"), "l", c.work_name || "");
+    fanUI();
     $("#ledNow").innerHTML = c.led_mode ? `Currently ${c.led_hex ? `<span class="sw-i" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(MODE[c.led_mode] || c.led_mode)}${isNum(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : "—";
     if (!S.ctl.init) ctlFromMiner();
   },
 };
+const FAN_NOTE = "Fixed speed. The miner won't speed the fan up on its own if the room gets hotter. The 95°C safety alarm still watches the hottest chip.";
+function clampFanPct(n) { n = Math.round(Number(n)); if (!Number.isFinite(n)) return 50; return Math.max(40, Math.min(100, n)); }
+function fanNowText() {
+  const f = (D().fan) || {};
+  const parts = [];
+  if (isNum(f.rpm)) parts.push(fmt(f.rpm) + " RPM");
+  if (isNum(f.percent)) parts.push(fmt(f.percent) + "%");
+  return parts.length ? "Currently " + parts.join(" · ") : "—";
+}
+function fanUI() {
+  const panel = $("#fanPanel"); if (!panel) return;
+  const fan = S.liveFan || {};
+  panel.hidden = !fan.supported || isView();
+  if (panel.hidden) return;
+  const mode = fan.mode === "cooler" ? "cooler" : "auto";
+  const pct = clampFanPct(fan.percent || 50);
+  const now = $("#fanNow"); if (now) now.textContent = fanNowText();
+  const seg = $("#fanSeg"); if (seg) segSet(seg, "m", mode);
+  const box = $("#fanCooler"); if (box) box.hidden = mode !== "cooler";
+  const sl = $("#fanPct"), lab = $("#fanPctVal");
+  if (sl && document.activeElement !== sl) { sl.value = pct; sl.style.setProperty("--p", ((pct - 40) / 60 * 100) + "%"); }
+  if (lab && document.activeElement !== sl) lab.textContent = (sl ? clampFanPct(sl.value) : pct) + "%";
+}
+async function sendFan(mode, percent) {
+  if (!S.can) return;
+  const body = { miner: S.miner.id, mode };
+  if (mode === "cooler") body.percent = clampFanPct(percent);
+  const pw = await askMinerPassword(); if (pw == null) return;
+  const okText = mode === "auto" ? "Fan set to Auto" : `Fan set to ${body.percent}%`;
+  send("/api/control/fan", { ...body, password: pw }, okText, "#fanMsg", () => {
+    S.liveFan = Object.assign({}, S.liveFan, { mode, percent: mode === "cooler" ? body.percent : (S.liveFan && S.liveFan.percent) || 50 });
+    fanUI();
+  });
+}
+function wireFan() {
+  const seg = $("#fanSeg"); if (!seg) return;
+  seg.onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b || !S.can) return;
+    const mode = b.dataset.m, cur = ((S.liveFan || {}).mode === "cooler") ? "cooler" : "auto";
+    if (mode === cur) return;
+    if (mode === "auto") {
+      if (!await confirmDialog("Return the fan to automatic speed?", "The miner will choose the fan speed again.", "Back to Auto")) return;
+      return sendFan("auto");
+    }
+    const n = clampFanPct($("#fanPct") ? $("#fanPct").value : ((S.liveFan || {}).percent || 50));
+    if (!await confirmDialog(`Set a fixed fan speed of ${n}%?`, `The miner will hold ${n}% and will not speed the fan up on its own if the room gets hotter. The 95°C safety alarm still watches the hottest chip.`, `Set ${n}%`)) return;
+    return sendFan("cooler", n);
+  };
+  const sl = $("#fanPct");
+  if (sl) {
+    sl.oninput = () => { const n = clampFanPct(sl.value); sl.style.setProperty("--p", ((n - 40) / 60 * 100) + "%"); const lab = $("#fanPctVal"); if (lab) lab.textContent = n + "%"; };
+    sl.onchange = async () => {
+      if (!S.can || ((S.liveFan || {}).mode !== "cooler")) return;
+      const n = clampFanPct(sl.value), cur = clampFanPct((S.liveFan || {}).percent || 50);
+      if (n === cur) return;
+      if (!await confirmDialog(`Set a fixed fan speed of ${n}%?`, `The miner will hold ${n}% and will not speed the fan up on its own if the room gets hotter. The 95°C safety alarm still watches the hottest chip.`, `Set ${n}%`)) { fanUI(); return; }
+      return sendFan("cooler", n);
+    };
+  }
+  const back = $("#fanBack");
+  if (back) back.onclick = async () => {
+    if (!S.can || ((S.liveFan || {}).mode !== "cooler")) return;
+    if (!await confirmDialog("Return the fan to automatic speed?", "The miner will choose the fan speed again.", "Back to Auto")) return;
+    return sendFan("auto");
+  };
+}
 function ctlFromMiner() {
   const c = D().control; if (!c) return;
   if (c.led_hex) S.ctl.color = c.led_hex; if (Number.isInteger(c.led_brightness)) S.ctl.bright = c.led_brightness; if (c.led_mode && MODE[c.led_mode]) S.ctl.mode = c.led_mode;
@@ -849,6 +918,16 @@ const DASH = {
             <div class="seg lg full" id="wsSeg"><button data-l="low">Low</button><button data-l="medium">Medium</button><button data-l="high">High</button></div>
             <p class="ctl-desc">Higher speed means more hashrate, power, heat and fan noise.</p>
             <div class="status-line" id="wsMsg"></div></div>
+          <div class="ctl-row" id="fanPanel" hidden>
+            <div class="ctl-head"><b>Fan</b><span class="t3" id="fanNow">—</span></div>
+            <div class="seg lg full" id="fanSeg"><button data-m="auto">Auto</button><button data-m="cooler">Cooler</button></div>
+            <div id="fanCooler" hidden>
+              <div class="ctl-field"><div class="lab">Fixed speed <span class="num" id="fanPctVal">50%</span></div>
+                <div class="slider">${ic("fan", "sm")}<input type="range" id="fanPct" min="40" max="100" value="50" aria-label="Fan speed"></div></div>
+              <p class="ctl-note" id="fanNote">Fixed speed. The miner won't speed the fan up on its own if the room gets hotter. The 95°C safety alarm still watches the hottest chip.</p>
+              <div class="apply-bar"><button class="btn ghost" id="fanBack">Back to Auto</button></div>
+            </div>
+            <div class="status-line" id="fanMsg"></div></div>
           <div class="ctl-row" id="ledPanel"><div class="ctl-head"><b>Light</b><span class="t3" id="ledNow">—</span></div>
             <div class="led-grid">
               <div class="device" id="dev"><div class="glow"></div><div class="unit"><div class="ring"></div></div><div class="cap" id="devCap"></div></div>
