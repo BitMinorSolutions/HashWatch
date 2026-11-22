@@ -1,4 +1,4 @@
-/* HashWatch v0.8.0 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.8.1 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -185,6 +185,7 @@ function wireMinerForm(id, done) {
 }
 function viewSetup() {
   if (S.state.pi && !S.setupHere) return viewSetupChoice();
+  if (S.state.password_first) return viewSetupPassword();
   root.innerHTML = `<div class="center"><div class="auth wide view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
     <h1>Connect your miner</h1><p class="lead">${esc(APP)} reads your Avalon directly over your local network. Nothing leaves your home.</p>
@@ -195,6 +196,29 @@ function viewSetup() {
     ${S.state.pi ? `<p class="fine"><a href="#" id="s-back">← Back</a></p>` : ""}</div></div>`;
   wireMinerForm("s", async () => boot());
   if ($("#s-back")) $("#s-back").onclick = (e) => { e.preventDefault(); S.setupHere = false; viewSetup(); };
+}
+
+// First step of setup from another device (phone, Mac app showing the Pi):
+// changes from other devices need an admin password, so set it before the miner.
+function viewSetupPassword() {
+  const ok = S.state.password_first_ok;
+  root.innerHTML = `<div class="center"><div class="auth view">
+    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
+    <h1>Set an admin password</h1><p class="lead">${ok ? `You'll use it to sign in to ${esc(APP)} and to change settings or your miner from this device. Next, you'll connect your miner.` : `Open ${esc(APP)} from your home network or Tailscale to set it up.`}</p>
+    ${ok ? `<form class="panel" id="sp-form" autocomplete="on">
+      <input type="text" name="username" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
+      <label class="f" for="sp-n" style="margin-top:0">Password</label><input class="input" id="sp-n" type="password" autocomplete="new-password" minlength="6" required autofocus>
+      <label class="f" for="sp-c">Confirm password</label><input class="input" id="sp-c" type="password" autocomplete="new-password" minlength="6" required>
+      <div class="err" id="sp-e"></div>
+      <button type="submit" class="btn accent lg block" id="sp-go">Save and continue</button>
+    </form><p class="fine">At least 6 characters.</p>` : ""}</div></div>`;
+  if (!ok) return;
+  $("#sp-form").onsubmit = async (ev) => { ev.preventDefault(); const n = $("#sp-n").value, e = $("#sp-e"), b = $("#sp-go"); e.textContent = "";
+    if (n.length < 6) { e.textContent = "Use at least 6 characters."; return; }
+    if (n !== $("#sp-c").value) { e.textContent = "The passwords don't match."; return; }
+    b.disabled = true;
+    try { await api("/api/password", { method: "POST", body: { current: "", new: n } }); toast("Password saved"); boot(); }
+    catch (er) { e.textContent = er.message; b.disabled = false; } };
 }
 
 /* ---------------- "Connect to my Pi" (macOS app only) ----------------

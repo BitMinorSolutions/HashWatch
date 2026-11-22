@@ -48,6 +48,7 @@ type Server struct {
 	Update *update.Runner   // OTA for the Pi service; never talks to a miner
 
 	mu       sync.Mutex
+	pwMu     sync.Mutex // serializes password changes so only one first-time set can win
 	sessions map[string]*session
 	lim      limiter
 	Now      func() time.Time
@@ -91,7 +92,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/miners", s.auth(s.admin(s.addMiner)))
 	mux.HandleFunc("DELETE /api/miners/{id}", s.auth(s.admin(s.delMiner)))
 	mux.HandleFunc("POST /api/discover", s.auth(s.admin(s.discover)))
-	mux.HandleFunc("POST /api/password", s.auth(s.admin(s.password)))
+	mux.HandleFunc("POST /api/password", s.auth(s.passwordGuard(s.password)))
 	mux.HandleFunc("GET /api/remote", s.auth(s.adminOnly(s.remoteGet)))
 	mux.HandleFunc("GET /api/remote/qr.svg", s.auth(s.adminOnly(s.remoteQR)))
 	mux.HandleFunc("GET /api/tailscale", s.auth(s.adminOnly(s.tailscaleGet)))
@@ -176,7 +177,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 // mutating guards settings changes: same-origin JSON only, and never in demo mode.
-func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc {
+func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc { return s.mutatingFirst(false, h) }
+
+// mutatingFirst is mutating; with firstPassword set, a home-network or
+// Tailscale device may also write while no password exists (only used for
+// setting the first admin password).
+func (s *Server) mutatingFirst(firstPassword bool, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Locked {
 			writeJSON(w, 403, map[string]string{"error": "Settings are locked in this preview."})
@@ -194,7 +200,7 @@ func (s *Server) mutating(h http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, 415, map[string]string{"error": "json required"})
 			return
 		}
-		if s.Cfg.PasswordHash == "" && !IsLoopback(r) {
+		if s.Cfg.PasswordHash == "" && !IsLoopback(r) && !(firstPassword && CanSetFirstPassword(r)) {
 			writeJSON(w, 403, map[string]string{"error": "Set an admin password in Settings first. Changes from other devices are blocked until you do."})
 			return
 		}
@@ -246,6 +252,37 @@ func IsLocal(r *http.Request) bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
 }
 
+var tailscaleCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
+// CanSetFirstPassword: this visitor may set the very first admin password.
+// Only this computer, the home network (private / link-local) or a Tailscale
+// address (100.64.0.0/10) — never the Cloudflare tunnel or a public address.
+func CanSetFirstPassword(r *http.Request) bool {
+	if viaTunnel(r) {
+		return false
+	}
+	ip := peerIP(r)
+	if ip == nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || tailscaleCGNAT.Contains(ip)
+}
+
+// passwordGuard is admin for /api/password, except that while no password
+// exists a Tailscale device may set the first one too.
+func (s *Server) passwordGuard(h http.HandlerFunc) http.HandlerFunc {
+	return s.mutatingFirst(true, func(w http.ResponseWriter, r *http.Request) {
+		if !IsLocal(r) && !(s.Cfg.PasswordHash == "" && CanSetFirstPassword(r)) {
+			writeJSON(w, 403, map[string]string{"error": "For safety, this can only be changed from your home network."})
+			return
+		}
+		h(w, r)
+	})
+}
+
 // admin guards settings that should only change from the home network
 // (miners, password, remote access, auto-start).
 func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
@@ -272,6 +309,12 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	wifi, gentle, advanced := s.Cfg.Prefs()
 	out["allow_wifi"], out["gentle"], out["advanced_controls"] = wifi, gentle, advanced
 	out["wifi_no_password"] = wifi && s.Cfg.PasswordHash == ""
+	// Another device with no password set yet: setup asks for one first,
+	// because writes from other devices are refused until it exists.
+	if s.Cfg.PasswordHash == "" && !s.Locked && !IsLoopback(r) {
+		out["password_first"] = true
+		out["password_first_ok"] = CanSetFirstPassword(r)
+	}
 	if role == RoleAdmin || (ok && !s.Locked && role != RoleView) {
 		out["update"] = s.updateBrief()
 	}
@@ -389,6 +432,18 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	var b struct{ Current, New string }
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b)
+	// Check-and-set under one lock: of two simultaneous first-time sets, the
+	// second sees the new password and must know it.
+	s.pwMu.Lock()
+	defer s.pwMu.Unlock()
+	if s.Cfg.PasswordHash == "" && b.New == "" {
+		writeJSON(w, 400, map[string]string{"error": "Enter a password."})
+		return
+	}
+	if s.Cfg.PasswordHash != "" && !IsLocal(r) {
+		writeJSON(w, 403, map[string]string{"error": "For safety, this can only be changed from your home network."})
+		return
+	}
 	if s.Cfg.PasswordHash != "" && !s.Cfg.CheckPassword(b.Current) {
 		writeJSON(w, 401, map[string]string{"error": "Current password is incorrect."})
 		return
