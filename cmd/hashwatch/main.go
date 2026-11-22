@@ -196,7 +196,9 @@ func main() {
 		exe = self
 	}
 	srv.Update = app.NewUpdateRunner(cfg, version, exe, *dir)
-	if srv.Update.Snapshot().URLSet {
+	// Only the always-on Pi service installs updates (the release has no Mac or
+	// Windows OTA build), so nothing else polls the manifest.
+	if srv.Update.Snapshot().URLSet && app.ServiceMode() {
 		go srv.Update.Loop(context.Background())
 	}
 	alerts := app.NewAlerts(*dir)
@@ -264,6 +266,9 @@ func main() {
 	alerts.Push = srv.NtfyPush
 	if native && runtime.GOOS == "darwin" && *remote == "" {
 		srv.Pi = &app.PiLink{} // "Connect to my Pi": the window fills in Open
+	}
+	if runtime.GOOS == "windows" && *remote == "" && !app.ServiceMode() {
+		srv.Pi = &app.PiLink{} // "Connect to my Pi" in the browser: the page navigates to the Pi itself
 	}
 	srv.StartMiners() // none when the Mac app is showing a Pi (the miner is read only once)
 
@@ -407,6 +412,9 @@ func main() {
 			openBrowser(local)
 		}
 		select {}
+	}
+	if u, on := srv.PiActive(); on {
+		fmt.Printf("\n  Showing your Pi: %s (this computer doesn't read the miner).\n  To change the Pi address or run here instead, open %s/?view=pi\n", u, local)
 	}
 	if inAppBundle() {
 		fmt.Printf("\n  Settings: %s\n  Running in the background. Quit from Settings → Quit %s.\n\n", *dir, app.AppName)

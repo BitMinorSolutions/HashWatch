@@ -1,6 +1,6 @@
 # HashWatch
 
-HashWatch is a local dashboard for a Canaan Avalon Nano 3 (and Nano 3S / Mini 3 / Avalon Q) Bitcoin miner. It runs on your Mac or a Raspberry Pi, reads the miner over its LAN API (port 4028), and shows hashrate, temperature, pool status, lottery-style odds, and alerts. Optional remote access uses Tailscale (if you already have it) or a Cloudflare quick tunnel. Phone alerts can go to the [ntfy](https://ntfy.sh) app on an iPhone or Apple Watch.
+HashWatch is a local dashboard for a Canaan Avalon Nano 3 (and Nano 3S / Mini 3 / Avalon Q) Bitcoin miner. It runs on your Mac, Windows PC or a Raspberry Pi, reads the miner over its LAN API (port 4028), and shows hashrate, temperature, pool status, lottery-style odds, and alerts. Optional remote access uses Tailscale (if you already have it) or a Cloudflare quick tunnel. Phone alerts can go to the [ntfy](https://ntfy.sh) app on an iPhone or Apple Watch.
 
 It never ports-forward your miner, and it never talks to the miner unless you confirm a change in the dashboard.
 
@@ -16,6 +16,16 @@ Download [HashWatch.dmg](https://github.com/BitMinorSolutions/HashWatch/releases
 When macOS asks to allow local network access, click Allow so HashWatch can reach the miner.
 
 A zip of the same app is attached to the [latest release](https://github.com/BitMinorSolutions/HashWatch/releases/latest) if you prefer not to use a disk image.
+
+## Windows
+
+Download [HashWatch-windows-amd64.zip](https://github.com/BitMinorSolutions/HashWatch/releases/latest/download/HashWatch-windows-amd64.zip) (Windows 10 or 11, x64). For ARM PCs (Surface Pro X, Snapdragon laptops) use [HashWatch-windows-arm64.zip](https://github.com/BitMinorSolutions/HashWatch/releases/latest/download/HashWatch-windows-arm64.zip).
+
+1. Unzip it somewhere you'll keep it (not inside the zip), then double-click **HashWatch.exe**.
+2. **First launch.** It isn't code-signed yet, so SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**. You only need to do this once.
+3. A small console window opens (keep it open; closing it stops HashWatch) and your browser shows the dashboard. Choose **Connect to my Pi** to show your Raspberry Pi's HashWatch (found at `hashwatch.local`, or over Tailscale if the Tailscale app is installed), or **Run here on this PC** to read the miner from this PC.
+
+Opening HashWatch.exe again opens your browser to the running copy (or straight to your Pi). On Windows the dashboard opens in your browser; there is no separate app window or tray icon.
 
 ## Raspberry Pi
 
@@ -49,7 +59,7 @@ Go 1.22+ (this tree uses the version in `go.mod`):
 
 ```sh
 go test ./...
-go build -trimpath -ldflags "-s -w -X main.version=0.8.3" -o hashwatch ./cmd/hashwatch
+go build -trimpath -ldflags "-s -w -X main.version=0.8.4" -o hashwatch ./cmd/hashwatch
 ```
 
 The installer, Linux binaries and signed update manifest used by the Pi one-liner are attached to each [GitHub release](https://github.com/BitMinorSolutions/HashWatch/releases). Keep the ed25519 private signing key offline (never in the repo).

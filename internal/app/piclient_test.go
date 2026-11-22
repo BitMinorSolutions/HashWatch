@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -249,4 +250,39 @@ func TestPiSwitchNeedsSignIn(t *testing.T) {
 			t.Errorf("%s without sign-in: %d", p, r.StatusCode)
 		}
 	}
+}
+
+// Windows: no app window (PiLink.Open is nil). The browser page navigates to
+// the Pi itself, so connect / switch back must work without a window.
+func TestPiBrowserModeWithoutWindow(t *testing.T) {
+	m, _ := connCounter(t)
+	dir := t.TempDir()
+	cfg, _ := LoadConfig(dir)
+	cfg.Miners = []Miner{m}
+	s := &Server{Cfg: cfg, Poll: NewPoller(t.TempDir(), time.Hour), Static: web.FS, Pi: &PiLink{}}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	pi := fakePi(t)
+	var st struct {
+		Pi map[string]any `json:"pi"`
+	}
+	r, _ := http.Get(ts.URL + "/api/state")
+	json.NewDecoder(r.Body).Decode(&st)
+	r.Body.Close()
+	if st.Pi == nil || st.Pi["os"] != runtime.GOOS {
+		t.Fatalf("state.pi = %v", st.Pi)
+	}
+	if r := post(t, ts, "/api/pi/connect", `{"url":"`+pi+`"}`, nil); r.StatusCode != 200 {
+		t.Fatalf("connect: %d", r.StatusCode)
+	}
+	if u, on := s.PiActive(); !on || u != pi || s.Poll.Running() != 0 {
+		t.Fatalf("pi mode %v %q, pollers %d", on, u, s.Poll.Running())
+	}
+	if r := post(t, ts, "/api/pi/local", `{}`, nil); r.StatusCode != 200 {
+		t.Fatalf("local: %d", r.StatusCode)
+	}
+	if _, on := s.PiActive(); on || s.Poll.Running() != 1 {
+		t.Fatalf("after local: pi %v pollers %d", on, s.Poll.Running())
+	}
+	s.Poll.Halt(m.ID)
 }

@@ -12,15 +12,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
 
-// PiLink is set only by the macOS app window. Nil means the feature is off
-// (Pi service, browser, Windows): the endpoints answer 404 and nothing changes.
+// PiLink is set by the macOS app window and by HashWatch.exe on Windows (where
+// the browser tab navigates to the Pi itself). Nil means the feature is off
+// (Pi service, Linux): the endpoints answer 404 and nothing changes.
 type PiLink struct {
 	// Open shows url in the app window; "" means this Mac's own dashboard.
+	// Nil on Windows: the dashboard page in the browser navigates by itself.
 	Open func(url string)
 	// Candidates replaces the addresses tried when finding the Pi (tests, previews).
 	Candidates func(ctx context.Context) []PiCandidate
@@ -173,7 +176,7 @@ func (s *Server) piBrief(r *http.Request) map[string]any {
 		u = s.Cfg.PiURL
 		s.Cfg.mu.Unlock()
 	}
-	return map[string]any{"mode": on, "url": u, "current": s.PiCurrent()}
+	return map[string]any{"mode": on, "url": u, "current": s.PiCurrent(), "os": runtime.GOOS}
 }
 
 // piOnly: the Mac's own window only (loopback, same-origin JSON).

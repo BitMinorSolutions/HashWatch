@@ -8,8 +8,23 @@ VERSION="${1:-dev}"
 rm -rf dist && mkdir -p dist
 LDFLAGS="-s -w -X main.version=$VERSION"
 
+# ---- Windows: icon + version info baked into HashWatch.exe (needs go-winres; set GO_WINRES) ----
+winres="${GO_WINRES:-go-winres}"
+rm -f cmd/hashwatch/rsrc_windows_*.syso
+if command -v "$winres" >/dev/null; then
+  nv="${VERSION#v}"; nv="${nv%%-*}"; [[ "$nv" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || nv="0.0.0"
+  sed -e "s/__NUMVER__/$nv.0/g" -e "s/__VERSION__/${VERSION#v}/g" -e "s/__TAGLINE__/Powered by Bitminor/g" \
+    packaging/windows/winres.json > packaging/windows/winres.build.json
+  "$winres" make --in packaging/windows/winres.build.json --arch amd64,arm64 --out cmd/hashwatch/rsrc
+  rm -f packaging/windows/winres.build.json
+else
+  echo "note: $winres not found; HashWatch.exe gets no icon or version info"
+fi
+trap 'rm -f cmd/hashwatch/rsrc_windows_*.syso' EXIT
+
 targets=(
-  "windows amd64 ''   windows-x64     HashWatch.exe"
+  "windows amd64 ''   windows-amd64   HashWatch.exe"
+  "windows arm64 ''   windows-arm64   HashWatch.exe"
   "linux   amd64 ''   linux-x64       hashwatch"
   "linux   arm64 ''   linux-arm64     hashwatch"
   "linux   arm   7    linux-armv7     hashwatch"
@@ -20,8 +35,13 @@ for t in "${targets[@]}"; do
   GOOS=$os GOARCH=$arch GOARM=$arm CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$dir/$bin" ./cmd/hashwatch
   chmod 755 "$dir/$bin"
   cp README.md LICENSE "$dir/" && chmod 644 "$dir/README.md" "$dir/LICENSE"
-  python3 packaging/zipdir.py "dist/hashwatch-$name.zip" "dist/stage-$name"
-  echo "built dist/hashwatch-$name.zip"
+  zipname="hashwatch-$name"
+  if [[ $os == windows ]]; then
+    cp "packaging/windows/Read me first.txt" "$dir/" && chmod 644 "$dir/Read me first.txt"
+    zipname="HashWatch-$name"
+  fi
+  python3 packaging/zipdir.py "dist/$zipname.zip" "dist/stage-$name"
+  echo "built dist/$zipname.zip"
 done
 
 # ---- macOS: HashWatch.app (universal, native window + menu bar via purego; no cgo) ----

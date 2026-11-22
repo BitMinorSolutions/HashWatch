@@ -1,4 +1,4 @@
-/* HashWatch v0.8.3 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.8.4 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -225,13 +225,14 @@ function viewSetupPassword() {
    The Mac app can show the HashWatch on a Raspberry Pi instead of reading the miner itself. */
 const authHead = () => `<img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}`;
 const hostOf = (u) => String(u || "").replace(/^https?:\/\//, "");
+const thisPC = (cap) => { const w = (S.state.pi && S.state.pi.os === "windows") ? "this PC" : "this Mac"; return cap ? w[0].toUpperCase() + w.slice(1) : w; };
 function setView(v) { const q = new URLSearchParams(location.search); v ? q.set("view", v) : q.delete("view"); const t = q.toString(); history.replaceState(null, "", location.pathname + (t ? "?" + t : "")); }
 const leavePiView = () => setView("");
 function viewSetupChoice() {
   root.innerHTML = `<div class="center"><div class="auth wide view">${authHead()}
-    <h1>Where should ${esc(APP)} run?</h1><p class="lead">Read your miner from this Mac, or show the ${esc(APP)} that already runs on your Raspberry Pi.</p>
+    <h1>Where should ${esc(APP)} run?</h1><p class="lead">Read your miner from ${thisPC()}, or show the ${esc(APP)} that already runs on your Raspberry Pi.</p>
     <div class="found choice">
-      <button type="button" id="c-here"><span class="ch-ic">${ic("laptop")}</span><span class="grow"><b>Run here on this Mac</b><span>This Mac reads your miner. Pick this if you don't have a Pi.</span></span>${ic("chevron-right", "sm")}</button>
+      <button type="button" id="c-here"><span class="ch-ic">${ic("laptop")}</span><span class="grow"><b>Run here on ${thisPC()}</b><span>${thisPC(1)} reads your miner. Pick this if you don't have a Pi.</span></span>${ic("chevron-right", "sm")}</button>
       <button type="button" id="c-pi"><span class="ch-ic">${ic("server")}</span><span class="grow"><b>Connect to my Pi</b><span>Show your Pi's dashboard here. Only the Pi reads your miner.</span></span>${ic("chevron-right", "sm")}</button>
     </div></div></div>`;
   $("#c-here").onclick = () => { S.setupHere = true; viewSetup(); };
@@ -251,8 +252,8 @@ function viewPi(fromSetup) {
       <div class="pi-acts"><button type="button" class="btn ghost lg" id="p-test">Test</button><button type="submit" class="btn accent lg" id="p-go" disabled>Connect</button></div>
     </form>
     <p class="fine">At home, use <span class="mono">http://hashwatch.local:48412</span> or the Pi's IP. Away from home, turn on Tailscale and use the Pi's Tailscale address.</p>
-    ${pi.mode ? `<div class="divider">or</div><button type="button" class="btn ghost lg block" id="p-local">${ic("laptop")}Switch to running on this Mac</button>
-      <p class="fine">This Mac reads your miner itself again. <a href="${esc(pi.url)}">Back to your Pi</a></p>`
+    ${pi.mode ? `<div class="divider">or</div><button type="button" class="btn ghost lg block" id="p-local">${ic("laptop")}Switch to running on ${thisPC()}</button>
+      <p class="fine">${thisPC(1)} reads your miner itself again. <a href="${esc(pi.url)}">Back to your Pi</a></p>`
       : `<p class="fine"><a href="#" id="p-back">← Back</a></p>`}</div></div>`;
   const inp = $("#p-url"), go = $("#p-go"), ok = $("#p-ok"), er = $("#p-e");
   let tested = "";
@@ -310,7 +311,7 @@ function viewPiOffline() {
       <div class="pi-acts"><button type="button" class="btn accent lg" id="o-retry">${ic("refresh-cw")}Retry</button><button type="button" class="btn ghost lg" id="o-change">Change address</button></div>
       <div class="err" id="o-e" role="alert"></div>
     </div>
-    <p class="fine">Your miner isn't affected. While this Mac shows your Pi, it doesn't read the miner itself.</p></div></div>`;
+    <p class="fine">Your miner isn't affected. While ${thisPC()} shows your Pi, it doesn't read the miner itself.</p></div></div>`;
   $("#o-retry").onclick = async () => { const b = $("#o-retry"); b.disabled = true; b.innerHTML = '<span class="spin"></span>Retrying…'; $("#o-e").textContent = "";
     try { const r = await api("/api/pi/resolve", { method: "POST", body: {} }); location.href = r.url; }
     catch (e) { $("#o-e").textContent = e.message; b.disabled = false; b.innerHTML = ic("refresh-cw") + "Retry"; } };
@@ -1652,7 +1653,7 @@ function accessUI() {
 function updateSetUI() {
   const el = $("#updateSet"); if (!el) return;
   const st = S.state, u = st.update, locked = st.locked || isView();
-  const show = !!(st.service || (u && (u.url_set || u.enabled || u.service)));
+  const show = !!(st.service || (u && u.service)); // only the Pi service installs updates
   el.hidden = !show;
   if (!show) { el.innerHTML = ""; return; }
   const ch = (u && u.channel) || "stable";

@@ -35,14 +35,17 @@ type PiFound struct {
 // piFindTimeout bounds each probe (a missing .local name can take a few seconds to fail on macOS).
 var piFindTimeout = 4 * time.Second
 
-// tailscaleCLIs are where the Tailscale command line lives on a Mac. Apps opened
+// tailscaleCLIs are where the Tailscale command line lives on a Mac or Windows PC. Apps opened
 // from Finder don't get the shell's PATH, so the usual spots are listed explicitly.
 var tailscaleCLIs = []string{
 	"tailscale",
 	"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 	"/usr/local/bin/tailscale",
 	"/opt/homebrew/bin/tailscale",
+	windowsTailscale, // Windows ("tailscale" above also finds tailscale.exe on PATH)
 }
+
+const windowsTailscale = `C:\Program Files\Tailscale\tailscale.exe`
 
 // tailscaleStatus returns `tailscale status --json` from the first CLI that works (nil if none).
 var tailscaleStatus = func(ctx context.Context) []byte {

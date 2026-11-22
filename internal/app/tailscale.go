@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,11 @@ func tailscaleBin() string {
 	}
 	if p, err := exec.LookPath("tailscale"); err == nil {
 		return p
+	}
+	if runtime.GOOS == "windows" { // the installer doesn't always put it on PATH
+		if p, err := exec.LookPath(windowsTailscale); err == nil {
+			return p
+		}
 	}
 	return ""
 }

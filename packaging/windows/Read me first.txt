@@ -1,0 +1,25 @@
+HashWatch for Windows · Powered by Bitminor
+===========================================
+
+1. Unzip this folder somewhere you'll keep it (for example Documents\HashWatch).
+   Don't run it from inside the zip.
+
+2. Double-click HashWatch.exe.
+   Windows SmartScreen may say "Windows protected your PC" because HashWatch
+   isn't code-signed yet. Click "More info", then "Run anyway". You only do
+   this once.
+
+3. A small console window opens (leave it open; closing it stops HashWatch)
+   and your web browser opens the dashboard.
+
+4. Pick one:
+   - Connect to my Pi: shows the HashWatch that runs on your Raspberry Pi.
+     It finds the Pi at hashwatch.local, or over Tailscale if the Tailscale
+     app is installed and signed in. Only the Pi reads your miner.
+   - Run here on this PC: this PC reads your miner itself.
+
+Opening HashWatch.exe again just opens your browser to the copy that's
+already running (or straight to your Pi).
+
+To change the Pi address or switch to running here, open the
+"/?view=pi" link printed in the console window.
