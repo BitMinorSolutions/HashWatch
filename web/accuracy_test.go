@@ -30,8 +30,15 @@ func TestHardwareErrorRowUsesMatchingPercent(t *testing.T) {
 
 // PROD "Avalon Nano3s" + MODEL "Nano3s" was shown as "Avalon Nano3s Nano3s".
 func TestModelNotDoubled(t *testing.T) {
-	if !strings.Contains(appJS(t), `id.product.toLowerCase().includes(id.model.toLowerCase()) ? id.product`) {
-		t.Fatal("Model should not repeat the model name already in the product name")
+	js := appJS(t)
+	if !strings.Contains(js, "function modelName(") {
+		t.Fatal("shared modelName() is missing")
+	}
+	if !strings.Contains(js, "function minerTitle()") {
+		t.Fatal("header should use minerTitle() so a stored 'Avalon Nano3s Nano3s' name is not shown doubled")
+	}
+	if !strings.Contains(js, `id="minerTitle"`) {
+		t.Fatal("header miner name needs id=minerTitle")
 	}
 }
 
@@ -152,15 +159,56 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	if !strings.Contains(js, "MINING.draw()") {
 		t.Fatal("lottery load must redraw the share-hits chart so network difficulty is not left blank")
 	}
+	for _, s := range []string{
+		"timeWindow(",
+		"bucketHits(",
+		"shareAxis(",
+		"wireTip()",
+		"fmtAxisTime(",
+		`id="mineTip"`,
+		`fillText("×`,
+	} {
+		if s == `fillText("×` {
+			if strings.Contains(js, s) {
+				t.Fatal("share-hits chart must not paint overlapping ×N labels on the canvas")
+			}
+			continue
+		}
+		if !strings.Contains(js, s) {
+			t.Errorf("share-hits chart missing %q", s)
+		}
+	}
+	if strings.Contains(js, "for (let i = 0; i < hits.length; i++) if (hits[i].diff > b) b = hits[i].diff") {
+		t.Fatal("best share must not be raised by last-share hit difficulties")
+	}
+}
+
+func TestOfflineHidesHashrateUnit(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, "unit.hidden = !d.ok") {
+		t.Fatal("the TH/s unit next to the headline must be hidden when the miner is offline")
+	}
+}
+
+func TestShareHitsChartUsesDataWindow(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, "minWindow: 45 * 60") {
+		t.Fatal("time axis should fit the data with a 45-minute minimum window")
+	}
+	if strings.Contains(js, "now - (S.range || 3600)") {
+		t.Fatal("share-hits x-axis must not be locked to the hashrate 1H/6H/24H selector")
+	}
 }
 
 func TestNoNewLookbehindInAppJS(t *testing.T) {
 	js := appJS(t)
-	// The notices() split is a long-standing lookbehind (iOS < 16.4). New Mining / hero
-	// code must not add another.
+	// notices() used to split on a lookbehind, which Safari older than 16.4 rejects.
 	n := strings.Count(js, "?<=") + strings.Count(js, "?<!")
-	if n != 1 {
-		t.Fatalf("app.js has %d regex lookbehinds; want only the pre-existing notices() one", n)
+	if n != 0 {
+		t.Fatalf("app.js has %d regex lookbehinds; want none (notices() must use indexOf)", n)
+	}
+	if !strings.Contains(js, `x.indexOf(". ")`) {
+		t.Fatal("notices() should take the first sentence with indexOf, not a lookbehind")
 	}
 	for _, s := range []string{"toSorted(", "toReversed(", "structuredClone(", ".findLast(", "Object.hasOwn("} {
 		if strings.Contains(js, s) {

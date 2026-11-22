@@ -343,7 +343,7 @@ function shell() {
     <header class="hdr" id="topbar">
       <div class="hdr-brand">${logo}<span class="brand-t"><b>${esc(APP)}</b>${TAG ? `<small>${esc(TAG)}</small>` : ""}</span></div>
       <span class="hdr-div"></span>
-      <div class="hdr-miner miner-pick"><div class="btnish"><span class="m-txt"><b>${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
+      <div class="hdr-miner miner-pick"><div class="btnish"><span class="m-txt"><b id="minerTitle">${esc(S.miner.name)}</b><span id="mpSub">${S.miner.kind === "remote" ? "Preview" : esc(S.miner.host + ":" + (S.miner.port || 4028))}</span></span>${ms.length > 1 ? ic("chevron-down", "sm t3") : ""}</div>
         ${ms.length > 1 ? `<select id="msel" aria-label="Miner">${ms.map(m => `<option value="${esc(m.id)}"${m.id === S.miner.id ? " selected" : ""}>${esc(m.name)}</option>`).join("")}</select>` : ""}</div>
       ${isView() ? `<span class="pill view-pill">${ic("eye", "sm")}View only</span>` : ""}
       <span class="hdr-live" id="hdrLive"><span class="dot warn"></span><span>Connecting…</span></span>
@@ -515,6 +515,21 @@ const recent = (k, secs = 3600) => { const c = Date.now() / 1000 - secs; return 
 
 /* ---------------- shared bits ---------------- */
 const D = () => S.data || {};
+function modelName(product, model) {
+  const p = String(product || "").trim(), m = String(model || "").trim();
+  if (!p) return m;
+  if (!m) return p;
+  if (p.toLowerCase().indexOf(m.toLowerCase()) >= 0) return p;
+  return p + " " + m;
+}
+function minerTitle() {
+  const id = (D() && D().identity) || {};
+  const n = (S.miner && S.miner.name) || "";
+  const clean = modelName(id.product, id.model);
+  const doubled = [id.product, id.model].filter(Boolean).join(" ");
+  if (clean && (!n || n === doubled)) return clean;
+  return n || clean || "Miner";
+}
 function heroVal() { const hr = D().hashrate || {}; return isNum(hr.ths_hero) ? +hr.ths_hero : isNum(hr.ghs_spd) ? hr.ghs_spd / 1000 : isNum(hr.ths_1m) ? +hr.ths_1m : isNum(hr.ths_5m) ? +hr.ths_5m : null; }
 function activePool() { const ps = D().pools || []; return ps.find(p => p.stratum_active) || ps.find(p => (p.status || "").toLowerCase() === "alive"); }
 const kv = (rows) => rows.map(([k, v, i]) => `<div class="row-kv"><span>${i ? ic(i, "sm t3") : ""}${esc(k)}</span><b>${v}</b></div>`).join("");
@@ -530,7 +545,8 @@ function notices() {
       : x.includes("temperature") ? "The average chip temperature is above the miner's target. Check airflow or lower the work speed."
       : x.includes("error rate") ? "A chip error rate under 5% is normal on these miners; watch it if it keeps rising."
       : "";
-    return `<div class="notice ${cls}"><div class="ic">${ic(icon, "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${sub}</span></div></div>`;
+    const dot = x.indexOf(". "); const head = dot >= 0 ? x.slice(0, dot + 1) : x;
+    return `<div class="notice ${cls}"><div class="ic">${ic(icon, "sm")}</div><div><b>${esc(head)}</b><span>${sub}</span></div></div>`;
   }).join("");
 }
 function sharesBlock() {
@@ -569,6 +585,7 @@ VIEWS.overview = {
   update: () => {
     const d = D(), hr = d.hashrate || {}, tp = d.temps || {}, pw = d.power || {}, fan = d.fan || {}, up = d.uptime || {}, er = d.errors || {};
     const hv = unsk($("#heroV")); if (d.ok) tween(hv, heroVal(), 3); else { hv.textContent = "Offline"; hv.dataset.v = ""; }
+    const unit = hv && hv.parentElement && hv.parentElement.querySelector(":scope > .unit"); if (unit) unit.hidden = !d.ok;
     const ha = $("#heroAvgs"); if (ha) ha.innerHTML = d.ok ? `<span>5-minute average <b class="num">${fmt(hr.ths_5m, 3)}</b> TH/s</span><span class="sep"></span><span>Since boot <b class="num">${fmt(hr.ths_avg, 3)}</b> TH/s</span>` : "";
     const h1 = S.hist.find(h => h.t >= Date.now() / 1000 - 3600 && isNum(h.hhero || h.h5m)); let delta = '<span class="delta">collecting history</span>';
     if (h1 && heroVal() && S.hist.length > 20) { const base = h1.hhero || h1.h5m, p = (heroVal() - base) / base * 100; delta = `<span class="delta ${p >= .05 ? "up" : p <= -.05 ? "down" : ""}">${p >= 0 ? "↑" : "↓"} ${Math.abs(p).toFixed(1)}% <span style="opacity:.7;font-weight:500">1h</span></span>`; }
@@ -662,7 +679,7 @@ VIEWS.hardware = {
         <div><div class="m"><span>${isNum(cv[i]) ? fmt(cv[i]) + " mV" : ""}</span><span class="v2">${isNum(cn[i]) ? si(cn[i], 1) + " MW" : ""}</span></div><div class="mw"><i style="width:${isNum(cn[i]) ? cn[i] / mwMax * 100 : 0}%"></i></div></div></div>`).join("");
     } else { $("#heat").innerHTML = '<div class="t3">No per-chip data in this reply.</div>'; }
     const c = d.control || {};
-    $("#devList").innerHTML = kv([["Model", esc((id.product && id.model && id.product.toLowerCase().includes(id.model.toLowerCase()) ? id.product : [id.product, id.model].filter(Boolean).join(" ")) || "—")], ["Core", esc(id.core ? `${id.core} · ${id.chips || "?"} chips` : "—")],
+    $("#devList").innerHTML = kv([["Model", esc(modelName(id.product, id.model) || "—")], ["Core", esc(id.core ? `${id.core} · ${id.chips || "?"} chips` : "—")],
       ["Firmware", `<span class="mono">${esc(id.firmware || "—")}</span>`], ["Hardware", `<span class="mono">${esc(id.hardware || "—")}</span>`],
       ["Type", `<span class="mono">${esc([id.hwtype, id.swtype].filter(Boolean).join(" / ") || "—")}</span>`], ["cgminer · API", `${esc(id.cgminer || "—")} · ${esc(id.api || "—")}`],
       ["Device", esc([dev.name, dev.status].filter(Boolean).join(" · ") || "—")], ["Work speed", c.work_name ? cap(c.work_name) : "—"],
@@ -929,7 +946,7 @@ const DASH = {
       <div class="mine-grid">
         <div class="mine-chart-wrap">
           <div class="mine-k">Share hits</div>
-          <div class="mine-chart" id="mineChart"><canvas id="mineCv" aria-label="Accepted share difficulties over time"></canvas><div class="chart-empty" id="mineEmpty">Shares will appear here as the miner finds them.</div></div>
+          <div class="mine-chart" id="mineChart"><canvas id="mineCv" aria-label="Accepted share difficulties over time"></canvas><div class="tip" id="mineTip"></div><div class="chart-empty" id="mineEmpty">Shares will appear here as the miner finds them.</div></div>
           <div class="legend mine-leg" id="mineLeg"></div>
           <p class="mine-note" id="mineNote">If several shares land between readings, the latest is shown with a count. Other difficulties are not invented.</p>
           <p class="mine-best" id="mineBest"></p>
@@ -1049,6 +1066,7 @@ const DASH = {
     if (!$("#heroV")) return;
     [VIEWS.overview, VIEWS.performance, VIEWS.hardware, VIEWS.pools, VIEWS.controls].forEach(v => v.update(first));
     if ($("#secRaw").open) VIEWS.raw.update();
+    const mt = $("#minerTitle"); if (mt) mt.textContent = minerTitle();
     MINING.update();
   },
 };
@@ -1103,64 +1121,190 @@ const MINING = {
     this.draw();
     this.startAnim();
   },
-  hitsInRange() {
-    const cut = Date.now() / 1000 - (S.range || 3600);
+  // Same rules as internal/mining TimeWindow / BucketHits / ShareAxis.
+  minWindow: 45 * 60,
+  maxWindow: 24 * 3600,
+  timeWindow(hits, now) {
+    const minW = this.minWindow, maxW = this.maxWindow;
+    let t1 = now, first = 0, last = 0, n = 0;
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i];
+      if (!h || !(h.t > 0) || !(h.diff > 0)) continue;
+      if (!n || h.t < first) first = h.t;
+      if (!n || h.t > last) last = h.t;
+      n++;
+    }
+    if (!n) return { t0: t1 - minW, t1 };
+    if (last > t1) t1 = last;
+    let t0 = first - 30;
+    if (t1 - t0 < minW) t0 = t1 - minW;
+    if (t1 - t0 > maxW) t0 = t1 - maxW;
+    return { t0, t1 };
+  },
+  bucketSeconds(window) {
+    if (window >= 12 * 3600) return 300;
+    if (window >= 3 * 3600) return 120;
+    return 60;
+  },
+  bucketHits(hits, bucket) {
+    if (!hits.length) return [];
+    if (!(bucket >= 1)) bucket = 60;
+    const order = [], by = {};
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i];
+      if (!h || !(h.diff > 0) || !(h.t > 0)) continue;
+      const k = Math.floor(h.t / bucket);
+      if (!by[k]) { by[k] = []; order.push(k); }
+      by[k].push({ t: h.t, diff: h.diff, n: h.n >= 1 ? h.n : 1 });
+    }
+    const out = [];
+    for (let i = 0; i < order.length; i++) {
+      const g = this.clusterDiffs(by[order[i]]);
+      for (let j = 0; j < g.length; j++) out.push(g[j]);
+    }
+    return out;
+  },
+  clusterDiffs(sIn) {
+    const s = sIn.slice();
+    s.sort((a, b) => a.diff - b.diff);
+    const groups = [];
+    for (let i = 0; i < s.length; i++) {
+      const h = s[i];
+      if (!groups.length) { groups.push([h]); continue; }
+      const g = groups[groups.length - 1];
+      let lo = g[0].diff, hi = g[0].diff;
+      for (let j = 0; j < g.length; j++) {
+        if (g[j].diff < lo) lo = g[j].diff;
+        if (g[j].diff > hi) hi = g[j].diff;
+      }
+      if (h.diff > hi * 2 || lo > h.diff * 2) groups.push([h]);
+      else g.push(h);
+    }
+    const out = [];
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i];
+      let latest = g[0], n = 0;
+      for (let j = 0; j < g.length; j++) {
+        n += g[j].n;
+        if (g[j].t >= latest.t) latest = g[j];
+      }
+      out.push({ t: latest.t, diff: latest.diff, n: n < 1 ? 1 : n });
+    }
+    return out;
+  },
+  shareAxis(pool, best, net, hits) {
+    const vs = [];
+    if (pool > 0) vs.push(pool);
+    if (best > 0) vs.push(best);
+    for (let i = 0; i < hits.length; i++) if (hits[i].diff > 0) vs.push(hits[i].diff);
+    if (!vs.length) return net > 0 ? { ymin: 1, ymax: net, netSeparate: false } : { ymin: 1, ymax: 10, netSeparate: false };
+    let lo = vs[0], hi = vs[0];
+    for (let i = 0; i < vs.length; i++) { if (vs[i] < lo) lo = vs[i]; if (vs[i] > hi) hi = vs[i]; }
+    let ymin = lo / 2; if (ymin < 1) ymin = 1;
+    let ymax = hi * 3; if (ymax <= ymin) ymax = ymin * 10;
+    const netSeparate = net > 0 && net > ymax * 1.5;
+    if (net > 0 && !netSeparate) ymax = net * 1.05;
+    return { ymin, ymax, netSeparate };
+  },
+  hitsInRange(t0, t1) {
     const out = [];
     const hits = S.hits || [];
     for (let i = 0; i < hits.length; i++) {
       const h = hits[i];
-      if (h && h.t >= cut && h.diff > 0) out.push(h);
+      if (h && h.t >= t0 && h.t <= t1 && h.diff > 0) out.push(h);
     }
     return out;
   },
   best() {
-    let b = 0;
     const sh = (D() || {}).shares || {};
-    if (isNum(sh.best_share) && +sh.best_share > b) b = +sh.best_share;
-    if (S.mining && isNum(S.mining.best_share) && +S.mining.best_share > b) b = +S.mining.best_share;
+    const miner = isNum(sh.best_share) ? +sh.best_share : 0;
+    const stored = S.mining && isNum(S.mining.best_share) ? +S.mining.best_share : 0;
     const o = S.lot && S.lot.odds;
-    if (o && isNum(o.best_share) && +o.best_share > b) b = +o.best_share;
-    const hits = S.hits || [];
-    for (let i = 0; i < hits.length; i++) if (hits[i].diff > b) b = hits[i].diff;
+    const lottery = o && isNum(o.best_share) ? +o.best_share : 0;
+    let b = miner;
+    if (stored > b) b = stored;
+    if (lottery > b) b = lottery;
     return b > 0 ? b : 0;
   },
   netDiff() { const L = S.lot; return L && isNum(L.difficulty) && L.difficulty > 0 ? +L.difficulty : 0; },
   poolDiff() { const m = S.mining; return m && m.work_diff > 0 ? +m.work_diff : 0; },
+  wireTip() {
+    if (this._tipWired) return;
+    const cv = $("#mineCv"); if (!cv) return;
+    this._tipWired = true;
+    cv.addEventListener("pointermove", ev => {
+      if (ev.pointerType === "touch") return;
+      this.showTip(ev);
+    });
+    cv.addEventListener("pointerdown", ev => this.showTip(ev));
+    cv.addEventListener("pointerleave", ev => { if (ev.pointerType !== "touch") this.hideTip(); });
+    document.addEventListener("pointerdown", ev => {
+      const tip = $("#mineTip");
+      if (ev.target !== cv && !(tip && tip.contains(ev.target))) this.hideTip();
+    });
+  },
+  hideTip() { const tip = $("#mineTip"); if (tip) tip.classList.remove("on"); },
+  showTip(ev) {
+    const tip = $("#mineTip"), cv = $("#mineCv"), pts = this._pts || [];
+    if (!tip || !cv || !pts.length) return;
+    const r = cv.getBoundingClientRect();
+    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+    let bestI = -1, bestD = 18;
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - x, pts[i].y - y);
+      if (d < bestD) { bestD = d; bestI = i; }
+    }
+    if (bestI < 0) { this.hideTip(); return; }
+    const p = pts[bestI];
+    const when = new Date(p.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const rows = [`<div class="tt">${esc(when)}</div>`, `<div class="tr"><span>Difficulty</span><b class="num">${esc(big(p.diff, 2))}</b></div>`];
+    if (p.n > 1) rows.push(`<div class="tr"><span>Shares in this minute</span><b class="num">${p.n}</b></div>`);
+    tip.innerHTML = rows.join("");
+    tip.classList.add("on");
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = p.x + 12, top = p.y - th - 8;
+    if (left + tw > r.width - 4) left = p.x - tw - 12;
+    if (left < 4) left = 4;
+    if (top < 4) top = p.y + 12;
+    if (top + th > r.height - 4) top = Math.max(4, r.height - th - 4);
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  },
+  fmtAxisTime(t, span) {
+    return new Date(t * 1000).toLocaleTimeString(undefined, span < 900
+      ? { hour: "numeric", minute: "2-digit", second: "2-digit" }
+      : { hour: "numeric", minute: "2-digit" });
+  },
   draw() {
     const wrap = $("#mineChart"), cv = $("#mineCv"), empty = $("#mineEmpty");
     if (!cv || !wrap) return;
-    const hits = this.hitsInRange();
+    this.wireTip();
+    const now = Date.now() / 1000;
+    const all = S.hits || [];
+    const win = this.timeWindow(all, now);
+    const raw = this.hitsInRange(win.t0, win.t1);
+    const pts0 = this.bucketHits(raw, this.bucketSeconds(win.t1 - win.t0));
     const netD = this.netDiff(), poolD = this.poolDiff(), best = this.best();
-    if (empty) empty.style.display = hits.length ? "none" : "";
+    if (empty) empty.style.display = pts0.length ? "none" : "";
     const w = Math.max(120, wrap.clientWidth), h = Math.max(160, wrap.clientHeight || 220);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
     const ctx = cv.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const padL = 52, padR = 12, padT = 16, padB = 28;
-    const now = Date.now() / 1000, t0 = now - (S.range || 3600);
-    let ymin = 1, ymax = 10;
-    const consider = [];
-    if (poolD) consider.push(poolD);
-    if (best) consider.push(best);
-    if (netD) consider.push(netD);
-    for (let i = 0; i < hits.length; i++) consider.push(hits[i].diff);
-    if (consider.length) {
-      ymin = consider[0]; ymax = consider[0];
-      for (let i = 0; i < consider.length; i++) { if (consider[i] < ymin) ymin = consider[i]; if (consider[i] > ymax) ymax = consider[i]; }
-      ymin = ymin / 4; ymax = ymax * 2;
-      if (ymin < 1) ymin = 1;
-      if (netD && ymax < netD) ymax = netD * 1.05;
-      if (ymax <= ymin) ymax = ymin * 10;
-    } else if (netD) { ymax = netD * 1.05; ymin = Math.max(1, (poolD || netD / 1e9) / 4); }
-    const xOf = (t) => padL + (Math.max(t0, Math.min(now, t)) - t0) / (now - t0) * (w - padL - padR);
+    const axis = this.shareAxis(poolD, best, netD, pts0);
+    const ymin = axis.ymin, ymax = axis.ymax, netSep = axis.netSeparate && netD > 0;
+    const padL = 52, padR = 14, padB = 32;
+    const netBand = netSep ? 36 : 0;
+    const padT = 14 + netBand;
+    const t0 = win.t0, t1 = win.t1;
+    const span = Math.max(1, t1 - t0);
+    const xOf = (t) => padL + (Math.max(t0, Math.min(t1, t)) - t0) / span * (w - padL - padR);
     const yOf = (d) => {
       const a = Math.log(ymin) / Math.LN10, b = Math.log(ymax) / Math.LN10, v = Math.log(Math.max(ymin, d)) / Math.LN10;
       return padT + (1 - (v - a) / (b - a)) * (h - padT - padB);
     };
     ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
-    // log grid lines at 10^n
     const e0 = Math.floor(Math.log(ymin) / Math.LN10), e1 = Math.ceil(Math.log(ymax) / Math.LN10);
     ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#5f656e"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
     for (let e = e0; e <= e1; e++) {
@@ -1169,30 +1313,54 @@ const MINING = {
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
       ctx.fillText(e >= 3 ? big(d, 0) : String(d), padL - 6, y);
     }
+    if (netSep) {
+      const yMid = 16;
+      ctx.save();
+      ctx.strokeStyle = "rgba(245,165,36,.85)"; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(padL, yMid); ctx.lineTo(w - padR, yMid); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#f5a524"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText("Network " + big(netD, 1), w - padR, yMid + 12);
+      ctx.strokeStyle = "#8b9098"; ctx.lineWidth = 1.4;
+      const yb = padT - 6;
+      const slash = (x) => { ctx.beginPath(); ctx.moveTo(x - 5, yb + 5); ctx.lineTo(x + 5, yb - 3); ctx.stroke(); ctx.beginPath(); ctx.moveTo(x - 5, yb + 9); ctx.lineTo(x + 5, yb + 1); ctx.stroke(); };
+      slash(padL); slash(w - padR);
+      ctx.restore();
+    }
     const line = (d, color, dash) => {
       if (!d || d <= 0) return;
       const y = yOf(d);
       ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1; if (dash) ctx.setLineDash(dash);
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.restore();
     };
-    if (netD) line(netD, "rgba(245,165,36,.85)", [5, 4]);
+    if (netD && !netSep) line(netD, "rgba(245,165,36,.85)", [5, 4]);
     if (poolD) line(poolD, "rgba(110,168,254,.8)", [3, 4]);
     if (best) {
       const y = yOf(best);
-      ctx.fillStyle = "var(--good)";
       ctx.fillStyle = "#3ccf8e";
       ctx.beginPath();
       ctx.moveTo(w - padR - 1, y); ctx.lineTo(w - padR - 9, y - 5); ctx.lineTo(w - padR - 9, y + 5); ctx.closePath(); ctx.fill();
       ctx.strokeStyle = "#3ccf8e"; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR - 10, y); ctx.stroke();
     }
-    for (let i = 0; i < hits.length; i++) {
-      const pt = hits[i], x = xOf(pt.t), y = yOf(pt.diff);
-      const r = pt.n > 1 ? 5 : 3.2;
+    this._pts = [];
+    for (let i = 0; i < pts0.length; i++) {
+      const pt = pts0[i], x = xOf(pt.t), y = yOf(pt.diff);
+      const r = 3.2 + Math.min(5, Math.sqrt(pt.n) - 1);
       ctx.beginPath(); ctx.fillStyle = "rgba(245,165,36,.95)"; ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      if (pt.n > 1) {
-        ctx.fillStyle = "#f3f4f6"; ctx.font = "600 10px Geist, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
-        ctx.fillText("×" + pt.n, x + 6, y - 4);
-      }
+      this._pts.push({ x, y, t: pt.t, diff: pt.diff, n: pt.n, r });
+    }
+    // Time axis
+    ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#5f656e"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const ticks = 5;
+    let last = "";
+    for (let i = 0; i < ticks; i++) {
+      const t = t0 + span * (i / (ticks - 1));
+      const s = this.fmtAxisTime(t, span);
+      if (s === last) continue;
+      last = s;
+      const x = xOf(t);
+      ctx.textAlign = i === 0 ? "left" : (i === ticks - 1 ? "right" : "center");
+      ctx.fillText(s, x, h - padB + 8);
     }
     const leg = $("#mineLeg");
     if (leg) {
@@ -1210,6 +1378,7 @@ const MINING = {
       else mb.textContent = "";
     }
   },
+
   fitAnim() {
     const cv = $("#hashAnim"); if (!cv || !cv.parentElement) return;
     const w = Math.max(120, cv.parentElement.clientWidth), h = 88;

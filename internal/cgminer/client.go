@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/hashwatch/hashwatch/internal/model"
 )
 
 // ReadOnly is the allow-list of commands this package will send.
@@ -97,11 +99,8 @@ func Probe(addr string, timeout time.Duration) (string, bool) {
 	if v == nil {
 		return "CGMiner API", true
 	}
-	prod, model := str(v["PROD"]), str(v["MODEL"])
-	desc := prod
-	if model != "" {
-		desc = prod + " " + model
-	}
+	prod, mod := str(v["PROD"]), str(v["MODEL"])
+	desc := model.DisplayModel(prod, mod)
 	if desc == "" {
 		desc = "CGMiner " + str(v["CGMiner"])
 	}

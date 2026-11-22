@@ -58,6 +58,7 @@ type Miner struct {
 	BlockHeight   int64
 	extraAccept   int
 	lastShareAt   int64
+	pinBest       bool // test control: /best pins the value so advance() won't raise it
 }
 
 type poolInfo struct{ URL, User, Pass string }
@@ -131,8 +132,10 @@ func (m *Miner) hs() float64 { return []float64{3.4, 3.7, 3.95}[m.WorkLevel] * m
 
 func (m *Miner) advance() {
 	now := time.Now()
-	if b := m.bestOf(now.Sub(m.lastBest).Seconds()); b > m.Best {
-		m.Best = b
+	if !m.pinBest {
+		if b := m.bestOf(now.Sub(m.lastBest).Seconds()); b > m.Best {
+			m.Best = b
+		}
 	}
 	m.lastBest = now
 }
@@ -411,8 +414,19 @@ func (m *Miner) Admin(addr string) error {
 	mux.HandleFunc("/best", func(w http.ResponseWriter, r *http.Request) {
 		d, err := strconv.ParseFloat(r.URL.Query().Get("d"), 64)
 		m.mu.Lock()
-		if err == nil && d > m.Best {
+		if err == nil && d > 0 {
 			m.Best = d
+			m.pinBest = true
+		}
+		m.mu.Unlock()
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/work", func(w http.ResponseWriter, r *http.Request) {
+		d, err := strconv.ParseFloat(r.URL.Query().Get("d"), 64)
+		m.mu.Lock()
+		if err == nil && d > 0 {
+			m.WorkDiff = d
+			m.LastShareDiff = d
 		}
 		m.mu.Unlock()
 		fmt.Fprintln(w, "ok")

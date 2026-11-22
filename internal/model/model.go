@@ -3,6 +3,8 @@
 // the direct CGMiner (port 4028) source and the remote/demo source map 1:1.
 package model
 
+import "strings"
+
 type Snapshot struct {
 	OK          bool              `json:"ok"`
 	FetchedAt   int64             `json:"fetched_at_unix"`
@@ -182,3 +184,23 @@ func (s *Snapshot) Sample() Sample {
 		TMax: s.Temps.Max, TAvg: s.Temps.Avg, TAmb: s.Temps.Ambient, TOut: s.Temps.Outlet, RPM: s.Fan.RPM, W: s.Power.Watts,
 		Acc: s.Shares.Accepted, Rej: s.Shares.Rejected, HW: s.Shares.HWErrors}
 }
+
+// DisplayModel is the miner's model name for the UI and the default miner
+// name. If the product already contains the model (PROD "Avalon Nano3s" and
+// MODEL "Nano3s"), the model is not repeated.
+func DisplayModel(product, model string) string {
+	p, m := strings.TrimSpace(product), strings.TrimSpace(model)
+	if p == "" {
+		return m
+	}
+	if m == "" {
+		return p
+	}
+	if strings.Contains(strings.ToLower(p), strings.ToLower(m)) {
+		return p
+	}
+	return p + " " + m
+}
+
+// DisplayModel returns the deduplicated product/model name.
+func (id Identity) DisplayModel() string { return DisplayModel(id.Product, id.Model) }

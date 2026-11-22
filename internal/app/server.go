@@ -285,6 +285,24 @@ func (s *Server) admin(h http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+// displayMinerName is the name shown in the header and miner list. If the
+// saved name is the doubled "Product Model" default (e.g. "Avalon Nano3s Nano3s"),
+// the deduplicated model is shown instead. The saved config is not rewritten.
+func displayMinerName(m Miner, snap *model.Snapshot) string {
+	if snap != nil {
+		clean := snap.Identity.DisplayModel()
+		prod, mod := strings.TrimSpace(snap.Identity.Product), strings.TrimSpace(snap.Identity.Model)
+		doubled := strings.TrimSpace(prod + " " + mod)
+		if clean != "" && (m.Name == "" || m.Name == doubled) {
+			return clean
+		}
+	}
+	if m.Name != "" {
+		return m.Name
+	}
+	return "Miner"
+}
+
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	role := s.role(r)
 	ok := role != ""
@@ -314,7 +332,11 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		var ms []map[string]any
 		for _, m := range s.Cfg.Miners {
-			ms = append(ms, map[string]any{"id": m.ID, "name": m.Name, "host": m.Host, "port": m.Port, "kind": m.Kind})
+			var snap *model.Snapshot
+			if s.Poll != nil {
+				snap = s.Poll.Latest(m.ID)
+			}
+			ms = append(ms, map[string]any{"id": m.ID, "name": displayMinerName(m, snap), "host": m.Host, "port": m.Port, "kind": m.Kind})
 		}
 		out["miners"] = ms
 		out["setup_needed"] = len(ms) == 0

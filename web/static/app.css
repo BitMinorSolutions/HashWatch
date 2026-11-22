@@ -880,9 +880,12 @@ body.sheet-open { overflow: hidden; }
 .mining-sec { margin-top: var(--gap); }
 .mine-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .8fr); gap: 28px; align-items: stretch; }
 .mine-k { font-size: 12px; font-weight: 550; color: var(--t3); letter-spacing: .02em; text-transform: uppercase; margin-bottom: 10px; }
-.mine-chart { position: relative; height: 240px; margin: 0 -4px; }
+.mine-chart { position: relative; height: 240px; margin: 0 -4px; overflow: visible; }
 .mine-chart canvas { display: block; width: 100%; height: 100%; }
-.mine-leg { margin-top: 10px; }
+#mineTip { max-width: calc(100% - 16px); }
+.mine-leg { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--t2); }
+.mine-leg span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.mine-leg i { display: inline-block; width: 16px; border-radius: 1px; flex-shrink: 0; }
 .mine-note { margin: 10px 0 0; font-size: 12.5px; color: var(--t3); line-height: 1.45; max-width: 72ch; }
 .mine-best { margin: 8px 0 0; font-size: 13.5px; color: var(--t1); font-weight: 550; }
 .mine-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
