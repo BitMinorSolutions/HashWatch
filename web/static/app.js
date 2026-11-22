@@ -1,4 +1,4 @@
-/* HashWatch v0.8.1 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.8.2 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";

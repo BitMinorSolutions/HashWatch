@@ -243,39 +243,24 @@ func IsLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// IsLocal: the visitor is on this computer or the home network, not the tunnel.
+// IsLocal: the visitor is on this computer or the home network (or the
+// owner's Tailscale), not the Cloudflare tunnel. See IsHomeIP.
 func IsLocal(r *http.Request) bool {
 	if viaTunnel(r) {
 		return false
 	}
-	ip := peerIP(r)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+	return IsHomeIP(peerIP(r))
 }
-
-var tailscaleCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
 
 // CanSetFirstPassword: this visitor may set the very first admin password.
-// Only this computer, the home network (private / link-local) or a Tailscale
-// address (100.64.0.0/10) — never the Cloudflare tunnel or a public address.
-func CanSetFirstPassword(r *http.Request) bool {
-	if viaTunnel(r) {
-		return false
-	}
-	ip := peerIP(r)
-	if ip == nil {
-		return false
-	}
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || tailscaleCGNAT.Contains(ip)
-}
+// Same rule as every other "home network only" setting.
+func CanSetFirstPassword(r *http.Request) bool { return IsLocal(r) }
 
 // passwordGuard is admin for /api/password, except that while no password
-// exists a Tailscale device may set the first one too.
+// exists a home-network device (not only this computer) may set the first one.
 func (s *Server) passwordGuard(h http.HandlerFunc) http.HandlerFunc {
 	return s.mutatingFirst(true, func(w http.ResponseWriter, r *http.Request) {
-		if !IsLocal(r) && !(s.Cfg.PasswordHash == "" && CanSetFirstPassword(r)) {
+		if !IsLocal(r) {
 			writeJSON(w, 403, map[string]string{"error": "For safety, this can only be changed from your home network."})
 			return
 		}
