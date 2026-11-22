@@ -31,9 +31,9 @@ func TestIsHomeIP(t *testing.T) {
 		"192.168.1.50": true, "10.1.2.3": true, "172.20.0.1": true, "::ffff:192.168.1.50": true,
 		"169.254.1.1": true, "fe80::1": true,
 		"fd12:3456::1": true, "fd7a:115c:a1e0::1": true, // ULA, Tailscale IPv6
-		"100.121.124.114": true, // Tailscale
-		"2600:1700:2534:c9b0:883:604f:e1cf:fd45": true, // same /64 as the Pi (the user's Mac at home)
-		"203.0.113.77": true,                          // public IPv4, but on the Pi's own subnet
+		"100.121.124.114":                        true,  // Tailscale
+		"2600:1700:2534:c9b0:883:604f:e1cf:fd45": true,  // same /64 as the Pi (the user's Mac at home)
+		"203.0.113.77":                           true,  // public IPv4, but on the Pi's own subnet
 		"2600:1700:2534:c9b1::5":                 false, // neighbouring /64: not on-link
 		"2600:1700:9999:1::1":                    false,
 		"8.8.8.8":                                false, "100.128.0.1": false, "198.51.100.1": false,

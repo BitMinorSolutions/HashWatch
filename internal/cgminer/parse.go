@@ -226,10 +226,9 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	s.Fan = model.Fan{RPM: f("Fan1"), Percent: f("FanR")}
 	ps := nums(mm["PS"])
 	s.Power.PSRaw = ps
-	if len(ps) >= 6 {
-		w, v := ps[5], ps[4]/100
-		ok := ps[0] == 0
-		s.Power.Watts, s.Power.VoltageV, s.Power.PSOK = &w, &v, &ok
+	if w, v, ok := psPower(ps, isNano3S(mm, s.Identity.Model)); ok {
+		okPS := ps[0] == 0
+		s.Power.Watts, s.Power.VoltageV, s.Power.PSOK = &w, &v, &okPS
 	}
 	s.Power.MPOW = f("MPO")
 	s.Power.WorkLevel = intp(f("WORKLEVEL"))
@@ -271,6 +270,28 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	}
 	s.Control = ControlState(mm)
 	s.Warnings = Warnings(s)
+}
+
+// isNano3S: the miner is an Avalon Nano 3S (MODEL "Nano3s", Ver[Nano3s-…]).
+func isNano3S(mm map[string]string, model string) bool {
+	return strings.EqualFold(model, "nano3s") || strings.HasPrefix(strings.ToLower(mm["Ver"]), "nano3s-")
+}
+
+// psPower reads watts and input volts from PS[]. Both models report 7 fields,
+// laid out differently:
+//
+//	Nano 3:  PS[0 0 0 4 2756 126 328]   -> volts = [4]/100 (27.56 V), watts = [5] (126 W)
+//	Nano 3S: PS[0 0 27482 3 0 3444 94]  -> volts = [2]/1000 (27.48 V), watts = [6] (94 W)
+//
+// When the model is unknown, the 3S layout is recognized by [2] set and [4] zero.
+func psPower(ps []float64, nano3s bool) (watts, volts float64, ok bool) {
+	if len(ps) >= 7 && (nano3s || (ps[2] > 0 && ps[4] == 0)) {
+		return ps[6], ps[2] / 1000, true
+	}
+	if len(ps) >= 6 && !nano3s {
+		return ps[5], ps[4] / 100, true
+	}
+	return 0, 0, false
 }
 
 func WorkName(l int) string {
