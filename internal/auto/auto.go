@@ -236,17 +236,49 @@ func (f *Failover) Step(c FailoverCfg, now time.Time, pools []PoolView) (to Pool
 
 // ---------------- heat ----------------
 
-// HotPoint is the temperature above which a miner counts as running hot: its own
-// reported target (TarT in estats) when it gives one, since every Nano and room
-// differs, else a conservative fallback. Used for the "running hot" alert only:
-// HashWatch never changes the work speed for heat; the Nano has its own overheat protection.
-const FallbackHotC = 90.0
+// Heat thresholds for dashboard warnings, the "running hot" alert, and the
+// status lamp. HashWatch never changes the work speed for heat; the Nano has
+// its own overheat protection.
+const (
+	// FallbackHotC is used when the miner does not report a usable target.
+	FallbackHotC = 90.0
+	// AvgOverTargetC is how far the average chip temperature must exceed the
+	// miner's target before the yellow "running hot" warning fires. This matches
+	// normal regulation (84–85 °C vs an 85 °C target, or 90 vs 90) so those
+	// stay quiet, and is the same allowance the status lamp already used.
+	AvgOverTargetC = 2.0
+	// ChipSafetyC is the red safety-alarm threshold on the hottest chip
+	// (TMax / MTmax). Canaan publishes no per-chip limit; owner reports treat
+	// around 95 °C as the top of the normal range on a Nano 3S.
+	ChipSafetyC = 95.0
+	// DHWarnPct is the chip error rate (DH) warning threshold. About 2.5% is
+	// normal on these miners.
+	DHWarnPct = 5.0
+)
 
+// HotPoint is the temperature the yellow "running hot" warning is measured
+// against: the miner's own target (TarT) when it gives one, else FallbackHotC.
 func HotPoint(target float64) (hotC float64, fromMiner bool) {
 	if target >= 40 && target <= 110 {
 		return target, true
 	}
 	return FallbackHotC, false
+}
+
+// AvgRunningHot is true when average chip temperature is more than
+// AvgOverTargetC above the given target.
+func AvgRunningHot(avg, target float64) bool {
+	return avg > target+AvgOverTargetC
+}
+
+// ChipUnsafe is true when the hottest chip is at or above ChipSafetyC.
+func ChipUnsafe(max float64) bool {
+	return max >= ChipSafetyC
+}
+
+// DHHigh is true when the chip error rate is at or above DHWarnPct.
+func DHHigh(pct float64) bool {
+	return pct >= DHWarnPct
 }
 
 func short(d time.Duration) string {

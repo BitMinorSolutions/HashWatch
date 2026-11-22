@@ -48,9 +48,10 @@ HashWatch is fully independent of any other dashboard on the same Mac or network
   pool failover and the light effects (block-found gold flash, status lamp,
   best-share flash) are all OFF until you turn each one on in Settings.
 - HashWatch never changes the work speed because of heat (the Nano has its own
-  overheat protection). "Running hot" is an alert only, measured against the
-  miner's own target temperature (90 °C if it reports none). HashWatch never
-  restarts the miner.
+  overheat protection). "Running hot" is an alert only: it compares the average
+  chip temperature to the miner's own target (90 °C if it reports none), with a
+  2 °C allowance so normal regulation does not fire. A separate safety alarm
+  fires if any chip stays at or above 95 °C. HashWatch never restarts the miner.
 - The only settings HashWatch can ever send are work speed Low/Medium/High, the
   light colour, and — only if you turn on backup pool failover — switchpool among
   pools already set on the miner (never changing addresses or passwords). Anything

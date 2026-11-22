@@ -294,8 +294,11 @@ func problemOf(snap *model.Snapshot) string {
 			return "no pool"
 		}
 	}
-	if t, ok := fnum(snap.Temps.Max); ok {
-		if tg, ok := fnum(snap.Temps.Target); ok && t > tg+2 {
+	if t, ok := fnum(snap.Temps.Max); ok && auto.ChipUnsafe(t) {
+		return "hot"
+	}
+	if t, ok := fnum(snap.Temps.Avg); ok {
+		if tg, ok := fnum(snap.Temps.Target); ok && auto.AvgRunningHot(t, tg) {
 			return "hot"
 		}
 	}

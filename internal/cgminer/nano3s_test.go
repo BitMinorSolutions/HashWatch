@@ -1,7 +1,6 @@
 package cgminer
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -70,10 +69,8 @@ func TestFetchNano3S(t *testing.T) {
 		if len(s.Errors.NetFail) != 0 || s.Uptime.Seconds != 6056 {
 			t.Errorf("netfail/uptime %+v %+v", s.Errors.NetFail, s.Uptime)
 		}
-		for _, w := range s.Warnings {
-			if strings.Contains(w, "Power supply") || strings.Contains(w, "Fan") {
-				t.Errorf("unexpected warning %q", w)
-			}
+		if len(s.Warnings) != 0 {
+			t.Errorf("Nano 3S fixture should stay green, got %v", s.Warnings)
 		}
 	}
 }

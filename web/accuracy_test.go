@@ -75,3 +75,27 @@ func TestLoginSendsCSRFToken(t *testing.T) {
 		t.Fatal("the sign-in request must carry the CSRF token")
 	}
 }
+
+// v0.9.1: the hottest-chip safety alarm is a red/critical notice, not the yellow warning.
+func TestSafetyAlarmUsesCriticalNotice(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, "const safety = /hottest chip|safety limit/i.test(x);") {
+		t.Fatal("safety alarm should be classified from the warning text")
+	}
+	if !strings.Contains(js, `const cls = safety ? "bad" : "warn";`) {
+		t.Fatal("safety alarm should use the existing red notice.bad style")
+	}
+	if !strings.Contains(js, "One chip is at or above 95°C.") {
+		t.Fatal("safety alarm wording should mention the 95°C limit")
+	}
+}
+
+func TestTempToneUsesSafetyLimitForMaxChip(t *testing.T) {
+	js := appJS(t)
+	if !strings.Contains(js, "const CHIP_SAFETY_C = 95, AVG_OVER_TARGET_C = 2;") {
+		t.Fatal("front-end heat colors should use the same 95°C / 2°C defaults")
+	}
+	if !strings.Contains(js, `tempTone(tp.max, "max")`) {
+		t.Fatal("max chip color should follow the 95°C safety limit, not the average target")
+	}
+}

@@ -150,11 +150,9 @@ func TestLiveNano3SAccuracy(t *testing.T) {
 		}
 		eq("pool1 difficulty (no work yet)", p1.Difficulty, 0)
 		eq("pool2 difficulty (work diff)", p2.Difficulty, 100000)
-		// status notices
-		for _, w := range s.Warnings {
-			if strings.Contains(w, "Power supply") || strings.Contains(w, "Fan") || strings.Contains(w, "pool") || strings.Contains(w, "Hash board") {
-				t.Errorf("unexpected warning %q", w)
-			}
+		// live 3S (TAvg 84, TarT 85, TMax 92, DH 2.542%) must stay green
+		if len(s.Warnings) != 0 {
+			t.Errorf("%s: live 3S should stay green, got %v", statsCmd, s.Warnings)
 		}
 	}
 }

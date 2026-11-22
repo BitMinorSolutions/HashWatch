@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashwatch/hashwatch/internal/auto"
 	"github.com/hashwatch/hashwatch/internal/model"
 )
 
@@ -306,16 +307,19 @@ func WorkName(l int) string {
 	return fmt.Sprintf("level %d", l)
 }
 
-// Warnings derives the same health notices the original dashboard showed.
+// Warnings derives the dashboard health notices.
 func Warnings(s *model.Snapshot) []string {
 	var w []string
 	if !s.OK {
 		return w
 	}
-	if s.Temps.Max != nil && s.Temps.Target != nil && *s.Temps.Max > *s.Temps.Target {
-		w = append(w, fmt.Sprintf("Max chip temperature %.0f°C is above the %.0f°C target.", *s.Temps.Max, *s.Temps.Target))
+	if s.Temps.Max != nil && auto.ChipUnsafe(*s.Temps.Max) {
+		w = append(w, fmt.Sprintf("Hottest chip is %.0f°C (safety limit is %.0f°C).", *s.Temps.Max, auto.ChipSafetyC))
 	}
-	if s.Shares.DHPct != nil && *s.Shares.DHPct >= 1 {
+	if s.Temps.Avg != nil && s.Temps.Target != nil && auto.AvgRunningHot(*s.Temps.Avg, *s.Temps.Target) {
+		w = append(w, fmt.Sprintf("Average chip temperature %.0f°C is above the %.0f°C target.", *s.Temps.Avg, *s.Temps.Target))
+	}
+	if s.Shares.DHPct != nil && auto.DHHigh(*s.Shares.DHPct) {
 		w = append(w, fmt.Sprintf("Chip error rate (DH) is %.3f%%.", *s.Shares.DHPct))
 	}
 	if s.Errors.HashStatus != nil && *s.Errors.HashStatus != 1 {

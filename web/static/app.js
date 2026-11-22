@@ -54,7 +54,13 @@ function tween(el, to, d, suffix = "") {
 }
 function unsk(el) { if (el && el.classList.contains("sk")) el.classList.remove("sk"); return el; }
 const tgtOf = () => (S.data && S.data.temps && isNum(S.data.temps.target)) ? +S.data.temps.target : 90;
-function tempTone(t) { if (!isNum(t)) return "var(--t2)"; const g = tgtOf(); return t > g ? "var(--bad)" : t >= g - 5 ? "var(--warn)" : "var(--t1)"; }
+const CHIP_SAFETY_C = 95, AVG_OVER_TARGET_C = 2;
+function tempTone(t, kind) {
+  if (!isNum(t)) return "var(--t2)";
+  if (kind === "max") return t >= CHIP_SAFETY_C ? "var(--bad)" : t >= CHIP_SAFETY_C - 5 ? "var(--warn)" : "var(--t1)";
+  const g = tgtOf();
+  return t > g + AVG_OVER_TARGET_C ? "var(--bad)" : t > g ? "var(--warn)" : "var(--t1)";
+}
 function heat(t, lo, hi) {
   if (!isNum(t)) return "#5f656e";
   const x = Math.max(0, Math.min(1, (t - lo) / Math.max(1, hi - lo)));
@@ -502,7 +508,16 @@ function notices() {
   const d = D(), w = d.warnings || [];
   if (!d.ok) return `<div class="notice bad"><div class="ic">${ic("wifi-off", "sm")}</div><div><b>Can't read the miner</b><span>${esc((d.query_errors || []).join("; ") || "No reply.")}</span></div></div>`;
   if (!w.length) return `<div class="notice good"><div class="ic">${ic("circle-check", "sm")}</div><div><b>All systems normal</b><span>No errors or warnings reported by the miner.</span></div></div>`;
-  return w.map(x => `<div class="notice warn"><div class="ic">${ic("triangle-alert", "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${x.includes("temperature") ? "Chips are running hot. Check airflow or lower the work speed." : x.includes("error rate") ? "A small chip error rate is normal; watch it if it keeps rising." : ""}</span></div></div>`).join("");
+  return w.map(x => {
+    const safety = /hottest chip|safety limit/i.test(x);
+    const cls = safety ? "bad" : "warn";
+    const icon = safety ? "circle-alert" : "triangle-alert";
+    const sub = safety ? "One chip is at or above 95°C. Check airflow or lower the work speed."
+      : x.includes("temperature") ? "The average chip temperature is above the miner's target. Check airflow or lower the work speed."
+      : x.includes("error rate") ? "A chip error rate under 5% is normal on these miners; watch it if it keeps rising."
+      : "";
+    return `<div class="notice ${cls}"><div class="ic">${ic(icon, "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${sub}</span></div></div>`;
+  }).join("");
 }
 function sharesBlock() {
   const sh = D().shares || {}, er = D().errors || {}, tot = (+sh.accepted || 0) + (+sh.rejected || 0) + (+sh.stale || 0);
@@ -548,7 +563,7 @@ VIEWS.overview = {
     const hv5 = heroVal(), eff = isNum(pw.watts) && hv5 ? pw.watts / hv5 : null, tg = tgtOf(), sh = d.shares || {};
     const M = (icn, label, val, unit, sub, extra, color) => `<div class="metric"><div class="label">${ic(icn)}${label}</div><div class="val num"${color ? ` style="color:${color}"` : ""}>${val}<small>${unit}</small></div><div class="sub">${sub}</div>${extra || ""}</div>`;
     $("#strip").innerHTML =
-      M("thermometer", "Max chip temp", fmt(tp.max), "°C", `avg <b>${fmt(tp.avg)}°</b> · target <b>${fmt(tp.target)}°</b>`, `<div class="bar"><i style="width:${isNum(tp.max) ? Math.min(100, tp.max / 110 * 100) : 0}%;background:${tempTone(tp.max)}"></i><em style="left:${tg / 110 * 100}%"></em></div>`, tempTone(tp.max)) +
+      M("thermometer", "Max chip temp", fmt(tp.max), "°C", `avg <b>${fmt(tp.avg)}°</b> · target <b>${fmt(tp.target)}°</b>`, `<div class="bar"><i style="width:${isNum(tp.max) ? Math.min(100, tp.max / 110 * 100) : 0}%;background:${tempTone(tp.max, "max")}"></i><em style="left:${tg / 110 * 100}%"></em></div>`, tempTone(tp.max, "max")) +
       M("plug", "Power", fmt(pw.watts), "W", `<b>${fmt(pw.voltage_v, 2)}</b> V · MPO <b>${fmt(pw.mpo_w)}</b> W`, `<div class="spark">${spark(recent("w"), "#9aa0a9", "p")}</div>`) +
       M("leaf", "Efficiency", fmt(eff, 1), "J/TH", `<b>${hv5 && pw.watts ? fmt(hv5 * 1000 / pw.watts, 1) : "—"}</b> GH/W`, `<div class="spark">${spark(recent(h => isNum(h.w) && h.h5m ? h.w / h.h5m : null), "#9aa0a9", "e")}</div>`) +
       M("fan", "Fan", fmt(fan.rpm), "RPM", `<b>${fmt(fan.percent)}%</b> of max speed`, `<div class="bar"><i style="width:${isNum(fan.percent) ? fan.percent : 0}%"></i></div>`) +
@@ -621,7 +636,7 @@ VIEWS.hardware = {
   update: () => {
     const d = D(), tp = d.temps || {}, fan = d.fan || {}, id = d.identity || {}, ch = d.chips || {}, er = d.errors || {}, dev = d.device || {}, pw = d.power || {};
     $("#tLegend").innerHTML = [["Max", tp.max, "#f06363"], ["Avg", tp.avg, "#f5a524"], ["Board", tp.ambient, "#3ccf8e"], ["Outlet", tp.outlet, "#6ea8fe"]].map(([k, v, c]) => `<span><i style="background:${c}"></i>${k} <b class="num">${fmt(v)}°</b></span>`).join("") + `<span><i style="background:rgba(255,255,255,.35)"></i>Target <b class="num">${fmt(tp.target)}°</b></span>`;
-    $("#thermList").innerHTML = kv([["Max chip", `<span style="color:${tempTone(tp.max)}">${fmt(tp.max)}°C</span>`, "flame"], ["Average", fmt(tp.avg) + "°C", "thermometer"], ["Target", fmt(tp.target) + "°C", "gauge"],
+    $("#thermList").innerHTML = kv([["Max chip", `<span style="color:${tempTone(tp.max, "max")}">${fmt(tp.max)}°C</span>`, "flame"], ["Average", fmt(tp.avg) + "°C", "thermometer"], ["Target", fmt(tp.target) + "°C", "gauge"],
       ["Board", fmt(tp.ambient) + "°C", "circuit-board"], ["Outlet", fmt(tp.outlet) + "°C", "waypoints"], ["Fan", `${fmt(fan.rpm)} RPM <span class="t3">· ${fmt(fan.percent)}%</span>`, "fan"]]);
     const ct = ch.temps || [], cv = ch.volts_mv || [], cn = ch.nonces || [], n = Math.max(ct.length, cv.length, cn.length);
     if (n) { const v = ct.filter(isNum), lo = Math.min(...v), hi = Math.max(...v), tg = tgtOf(), mwMax = Math.max(...cn.filter(isNum), 1);

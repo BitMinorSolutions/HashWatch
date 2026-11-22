@@ -27,7 +27,7 @@ func TestAlertRules(t *testing.T) {
 	a.Now = func() time.Time { return now }
 	snap := func(h5m, tmax float64, blocks float64, pool bool) *model.Snapshot {
 		s := &model.Snapshot{OK: true}
-		s.Hashrate.THs5m, s.Temps.Max, s.Temps.Target, s.Shares.FoundBlocks = fp(h5m), fp(tmax), fp(90), fp(blocks)
+		s.Hashrate.THs5m, s.Temps.Avg, s.Temps.Max, s.Temps.Target, s.Shares.FoundBlocks = fp(h5m), fp(tmax), fp(tmax), fp(90), fp(blocks)
 		s.Pools = []model.Pool{{Status: "Alive", StratumActive: pool}}
 		return s
 	}

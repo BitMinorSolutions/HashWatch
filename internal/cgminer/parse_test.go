@@ -92,8 +92,8 @@ func TestFetchNano3(t *testing.T) {
 	if len(s.Errors.NetFail) != 3 || s.Uptime.Human != "6d 8h 44m" {
 		t.Errorf("netfail/uptime %+v %+v", s.Errors.NetFail, s.Uptime)
 	}
-	if len(s.Warnings) != 2 {
-		t.Errorf("warnings %v", s.Warnings)
+	if len(s.Warnings) != 0 {
+		t.Errorf("Nano 3 fixture should stay green, got %v", s.Warnings)
 	}
 	if s.Control == nil || s.Control.WorkName != "high" {
 		t.Errorf("control %+v", s.Control)

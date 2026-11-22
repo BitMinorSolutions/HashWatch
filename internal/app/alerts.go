@@ -35,7 +35,7 @@ var AlertKinds = []AlertKind{
 	{"block", "Block found", "When the miner's Found Blocks count goes up."},
 	{"offline", "Offline / back online", "When " + AppName + " can't reach a miner for 30 seconds, and when it's back."},
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
-	{"temp", "Running hot", "Max chip temperature above the miner's own target (or 90 °C if it reports none) for 5 minutes."},
+	{"temp", "Running hot", "Average chip temperature more than 2°C above the miner's own target (or 90°C if it reports none) for 5 minutes. A separate alarm fires when any chip stays at or above 95°C for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
 	{"link", "Share link changed", "When your share link changes, so you can send the new one."},
 	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
@@ -64,6 +64,8 @@ type alertState struct {
 	lowFired            bool
 	hotSince            time.Time
 	hotFired            bool
+	critSince           time.Time
+	critFired           bool
 	poolDownN           int
 	poolDown, poolKnown bool
 }
@@ -188,7 +190,7 @@ func (a *Alerts) Observe(id, name string, snap *model.Snapshot, hist []model.Sam
 			s.offline = true
 			fire("offline", "bad", name+" is offline", AppName+" can't reach the miner. Check its power and network.")
 		}
-		s.lowSince, s.hotSince = time.Time{}, time.Time{}
+		s.lowSince, s.hotSince, s.critSince = time.Time{}, time.Time{}, time.Time{}
 		return
 	}
 	if s.offline {
@@ -236,10 +238,11 @@ func (a *Alerts) Observe(id, name string, snap *model.Snapshot, hist []model.Sam
 		}
 	}
 
-	// Temperature over target.
-	if t, ok := fnum(snap.Temps.Max); ok {
+	// Yellow "running hot": average chip temp more than 2°C above the miner's target.
+	if t, ok := fnum(snap.Temps.Avg); ok {
 		tgRaw, _ := fnum(snap.Temps.Target)
-		if tg, fromMiner := auto.HotPoint(tgRaw); t > tg {
+		tg, fromMiner := auto.HotPoint(tgRaw)
+		if auto.AvgRunningHot(t, tg) {
 			what := "target"
 			if !fromMiner {
 				what = "safe limit"
@@ -249,11 +252,28 @@ func (a *Alerts) Observe(id, name string, snap *model.Snapshot, hist []model.Sam
 			}
 			if !s.hotFired && now.Sub(s.hotSince) >= hotFor {
 				s.hotFired = true
-				fire("temp", "warn", name+" is running hot", fmt.Sprintf("Max chip %.0f°C has been above the %.0f°C %s for %d minutes. Check airflow or lower the work speed.",
+				fire("temp", "warn", name+" is running hot", fmt.Sprintf("Average chip %.0f°C has been more than 2°C above the %.0f°C %s for %d minutes. Check airflow or lower the work speed.",
 					t, tg, what, int(now.Sub(s.hotSince).Minutes())))
 			}
 		} else {
 			s.hotSince, s.hotFired = time.Time{}, false
+		}
+	}
+
+	// Red safety alarm: hottest chip at or above 95°C.
+	if t, ok := fnum(snap.Temps.Max); ok {
+		if auto.ChipUnsafe(t) {
+			if s.critSince.IsZero() {
+				s.critSince = now
+			}
+			if !s.critFired && now.Sub(s.critSince) >= hotFor {
+				s.critFired = true
+				fire("temp", "bad", name+" has a chip at "+fmt.Sprintf("%.0f°C", t),
+					fmt.Sprintf("Hottest chip %.0f°C has been at or above the 95°C safety limit for %d minutes. Check airflow or lower the work speed.",
+						t, int(now.Sub(s.critSince).Minutes())))
+			}
+		} else {
+			s.critSince, s.critFired = time.Time{}, false
 		}
 	}
 
