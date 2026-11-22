@@ -113,3 +113,58 @@ func TestFanControlNote(t *testing.T) {
 		t.Fatal("Fan control should post to /api/control/fan")
 	}
 }
+
+func appCSS(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestMiningViewAndHeroLabel(t *testing.T) {
+	js := appJS(t)
+	css := appCSS(t)
+	for _, s := range []string{
+		"Live (chip-reported)",
+		`id="secMining"`,
+		`id="mineCv"`,
+		`id="hashAnim"`,
+		"Illustration — not individual hashes",
+		"If several shares land between readings, the latest is shown with a count. Other difficulties are not invented.",
+		"New block found by the network",
+		"Best share is ",
+		"of the way to a block",
+		"prefers-reduced-motion",
+		"visibilitychange",
+	} {
+		if !strings.Contains(js, s) && !strings.Contains(css, s) {
+			t.Errorf("Mining / hero UI missing %q", s)
+		}
+	}
+	if strings.Count(js, "5-minute average") < 1 {
+		t.Fatal("headline should still show the 5-minute average underneath the live hashrate")
+	}
+	if strings.Contains(js, "· 5-minute average") {
+		t.Fatal("headline must not still call the main number a 5-minute average")
+	}
+	if !strings.Contains(js, "MINING.draw()") {
+		t.Fatal("lottery load must redraw the share-hits chart so network difficulty is not left blank")
+	}
+}
+
+func TestNoNewLookbehindInAppJS(t *testing.T) {
+	js := appJS(t)
+	// The notices() split is a long-standing lookbehind (iOS < 16.4). New Mining / hero
+	// code must not add another.
+	n := strings.Count(js, "?<=") + strings.Count(js, "?<!")
+	if n != 1 {
+		t.Fatalf("app.js has %d regex lookbehinds; want only the pre-existing notices() one", n)
+	}
+	for _, s := range []string{"toSorted(", "toReversed(", "structuredClone(", ".findLast(", "Object.hasOwn("} {
+		if strings.Contains(js, s) {
+			t.Errorf("app.js uses %s, which needs a newer Safari than we support", s)
+		}
+	}
+}

@@ -1,9 +1,12 @@
 package cgminer
 
 import (
+	"math"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/hashwatch/hashwatch/internal/model"
 )
 
 // MM ID0 string reconstructed from a live Avalon Nano 3 (fw 25103101) via its stock dashboard.
@@ -68,6 +71,7 @@ func TestFetchNano3(t *testing.T) {
 		}
 	}
 	eq("ths_5m", s.Hashrate.THs5m, 3.93907337)
+	eq("ths_hero", s.Hashrate.THsHero, 4.16465) // GHSspd 4164.65
 	eq("ghs_spd", s.Hashrate.GHsSpd, 4164.65)
 	eq("temp max", s.Temps.Max, 92)
 	eq("temp ambient", s.Temps.Ambient, 41)
@@ -88,6 +92,9 @@ func TestFetchNano3(t *testing.T) {
 	}
 	if len(s.Pools) != 2 || !s.Pools[0].StratumActive || s.Pools[0].BlockHeight != 975731 || s.Pools[1].Status != "Dead" {
 		t.Errorf("pools %+v", s.Pools)
+	}
+	if s.Pools[0].WorkDifficulty == nil || *s.Pools[0].WorkDifficulty != 3997 || s.Pools[0].LastShareDiff == nil || *s.Pools[0].LastShareDiff != 3997 {
+		t.Errorf("pool diffs %+v", s.Pools[0])
 	}
 	if len(s.Errors.NetFail) != 3 || s.Uptime.Human != "6d 8h 44m" {
 		t.Errorf("netfail/uptime %+v %+v", s.Errors.NetFail, s.Uptime)
@@ -110,5 +117,31 @@ func TestDecodeQuirks(t *testing.T) {
 func TestRejectsWrites(t *testing.T) {
 	if _, err := Query("127.0.0.1:1", "ascset", time.Second); err == nil {
 		t.Fatal("write command must be refused")
+	}
+}
+
+func TestHeroRate(t *testing.T) {
+	spd, m1, m5 := 5023.0, 5.13, 4.51
+	h := model.Hashrate{GHsSpd: &spd, THs1m: &m1, THs5m: &m5}
+	got := heroRate(h)
+	if got == nil || math.Abs(*got-5.023) > 1e-9 {
+		t.Fatalf("prefer GHSspd: %v", deref(got))
+	}
+	h.GHsSpd = nil
+	got = heroRate(h)
+	if got == nil || *got != 5.13 {
+		t.Fatalf("fallback MHS 1m: %v", deref(got))
+	}
+	h.THs1m = nil
+	got = heroRate(h)
+	if got == nil || *got != 4.51 {
+		t.Fatalf("fallback MHS 5m: %v", deref(got))
+	}
+	// GHSspd present as zero is still the live chip reading, not a reason to invent an average.
+	z := 0.0
+	h = model.Hashrate{GHsSpd: &z, THs1m: &m1, THs5m: &m5}
+	got = heroRate(h)
+	if got == nil || *got != 0 {
+		t.Fatalf("zero GHSspd: %v", deref(got))
 	}
 }

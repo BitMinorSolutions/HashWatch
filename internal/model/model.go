@@ -112,6 +112,8 @@ type Pool struct {
 	RejectPct      *float64 `json:"reject_pct"`
 	StalePct       *float64 `json:"stale_pct"`
 	Difficulty     *float64 `json:"difficulty"`
+	LastShareDiff  *float64 `json:"last_share_diff,omitempty"`
+	WorkDifficulty *float64 `json:"work_difficulty,omitempty"`
 	LastShareUnix  int64    `json:"last_share_unix"`
 	BestShare      *float64 `json:"best_share"`
 	BlockHeight    int64    `json:"block_height"`
@@ -158,24 +160,25 @@ type Control struct {
 
 // Sample is one point of the in-app history used by the charts.
 type Sample struct {
-	T    int64    `json:"t"`
-	H5s  *float64 `json:"h5s"`
-	H1m  *float64 `json:"h1m"`
-	H5m  *float64 `json:"h5m"`
-	H15m *float64 `json:"h15m"`
-	TMax *float64 `json:"tmax"`
-	TAvg *float64 `json:"tavg"`
-	TAmb *float64 `json:"tamb"`
-	TOut *float64 `json:"tout"`
-	RPM  *float64 `json:"rpm"`
-	W    *float64 `json:"w"`
-	Acc  *float64 `json:"acc"`
-	Rej  *float64 `json:"rej"`
-	HW   *float64 `json:"hw"`
+	T     int64    `json:"t"`
+	H5s   *float64 `json:"h5s"`
+	H1m   *float64 `json:"h1m"`
+	H5m   *float64 `json:"h5m"`
+	H15m  *float64 `json:"h15m"`
+	HHero *float64 `json:"hhero,omitempty"`
+	TMax  *float64 `json:"tmax"`
+	TAvg  *float64 `json:"tavg"`
+	TAmb  *float64 `json:"tamb"`
+	TOut  *float64 `json:"tout"`
+	RPM   *float64 `json:"rpm"`
+	W     *float64 `json:"w"`
+	Acc   *float64 `json:"acc"`
+	Rej   *float64 `json:"rej"`
+	HW    *float64 `json:"hw"`
 }
 
 func (s *Snapshot) Sample() Sample {
-	return Sample{T: s.FetchedAt, H5s: s.Hashrate.THs5s, H1m: s.Hashrate.THs1m, H5m: s.Hashrate.THs5m, H15m: s.Hashrate.THs15m,
+	return Sample{T: s.FetchedAt, H5s: s.Hashrate.THs5s, H1m: s.Hashrate.THs1m, H5m: s.Hashrate.THs5m, H15m: s.Hashrate.THs15m, HHero: s.Hashrate.THsHero,
 		TMax: s.Temps.Max, TAvg: s.Temps.Avg, TAmb: s.Temps.Ambient, TOut: s.Temps.Outlet, RPM: s.Fan.RPM, W: s.Power.Watts,
 		Acc: s.Shares.Accepted, Rej: s.Shares.Rejected, HW: s.Shares.HWErrors}
 }

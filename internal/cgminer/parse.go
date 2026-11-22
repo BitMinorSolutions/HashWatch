@@ -208,10 +208,7 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	m := func(k string) *float64 { return num(sm[k]) }
 	s.Hashrate = model.Hashrate{THs5s: scale(m("MHS 5s"), 1e-6), THs1m: scale(m("MHS 1m"), 1e-6), THs5m: scale(m("MHS 5m"), 1e-6),
 		THs15m: scale(m("MHS 15m"), 1e-6), THsAvg: scale(m("MHS av"), 1e-6), GHsMM: f("GHSmm"), GHsAvg: f("GHSavg"), GHsSpd: f("GHSspd"), WU: f("WU")}
-	s.Hashrate.THsHero = s.Hashrate.THs5m
-	if s.Hashrate.THsHero == nil {
-		s.Hashrate.THsHero = scale(s.Hashrate.GHsSpd, 1e-3)
-	}
+	s.Hashrate.THsHero = heroRate(s.Hashrate)
 	if el := m("Elapsed"); el != nil {
 		s.Uptime = model.Uptime{Seconds: int64(*el), Human: Human(int64(*el))}
 	}
@@ -244,13 +241,16 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	}
 
 	for _, p := range list(pools, "POOLS") {
-		diff := num(p["Last Share Difficulty"])
+		last := num(p["Last Share Difficulty"])
+		work := num(p["Work Difficulty"])
+		diff := last
 		if diff == nil || *diff == 0 {
-			diff = num(p["Work Difficulty"])
+			diff = work
 		}
 		pl := model.Pool{URL: str(p["URL"]), StratumURL: str(p["Stratum URL"]), Status: str(p["Status"]), User: str(p["User"]),
 			StratumActive: str(p["Stratum Active"]) == "true", Accepted: num(p["Accepted"]), Rejected: num(p["Rejected"]),
 			Stale: num(p["Stale"]), RejectPct: num(p["Pool Rejected%"]), StalePct: num(p["Pool Stale%"]), Difficulty: diff,
+			LastShareDiff: nilIfZero(last), WorkDifficulty: work,
 			BestShare: num(p["Best Share"]), GetFailures: num(p["Get Failures"]), RemoteFailures: num(p["Remote Failures"])}
 		if x := num(p["POOL"]); x != nil {
 			pl.ID = int(*x)
@@ -271,6 +271,25 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	}
 	s.Control = ControlState(mm)
 	s.Warnings = Warnings(s)
+}
+
+// heroRate is the headline hashrate in TH/s: the chips' live GHSspd when the
+// miner reports it, otherwise the share-based 1-minute then 5-minute average.
+func heroRate(h model.Hashrate) *float64 {
+	if h.GHsSpd != nil {
+		return scale(h.GHsSpd, 1e-3)
+	}
+	if h.THs1m != nil {
+		return h.THs1m
+	}
+	return h.THs5m
+}
+
+func nilIfZero(p *float64) *float64 {
+	if p == nil || *p == 0 {
+		return nil
+	}
+	return p
 }
 
 // isNano3S: the miner is an Avalon Nano 3S (MODEL "Nano3s", Ver[Nano3s-…]).

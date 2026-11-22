@@ -336,7 +336,7 @@ function viewPiOffline() {
    Everything about the miner lives on the dashboard. Settings (incl. Share and its QR) and alert history open as a sheet. */
 const PAGES = [["dashboard", "Dashboard"], ["settings", "Settings"], ["alerts", "Alerts"]];
 // Old multi-page links (#/pools, #/controls, …) now scroll to that card on the single page.
-const ANCHOR = { overview: "top", performance: "secShares", hardware: "secTemps", pools: "secPools", controls: "secControls", raw: "secRaw" };
+const ANCHOR = { overview: "top", performance: "secShares", hardware: "secTemps", pools: "secPools", controls: "secControls", raw: "secRaw", mining: "secMining" };
 function shell() {
   const ms = S.state.miners || [];
   root.innerHTML = `<div class="shell one">
@@ -356,7 +356,7 @@ function shell() {
     <main class="content" id="view"></main>
   </div>`;
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
-  S.data = null; S.hist = []; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {};
+  S.data = null; S.hist = []; S.hits = []; S.mining = null; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {}; if (typeof MINING !== "undefined") MINING.stop();
   S.charts.forEach(c => c.destroy()); S.charts = [];
   const warn = (S.state.wifi_no_password && !isView()) ? `<div class="banner" style="margin:0 0 16px">${ic("triangle-alert")}<div><b>No password, and phones can reach this dashboard.</b> Set a password in Settings. Until you do, only this computer can change settings or the miner.</div></div>` : "";
   const v = $("#view"); v.innerHTML = `<div class="view one-page">${warn}<div id="celebrate"></div>${DASH.build()}</div>`;
@@ -425,6 +425,18 @@ async function refresh(full) {
     const r = await api(`/api/live?miner=${encodeURIComponent(S.miner.id)}&since=${since}&a=${S.alertSeen || 0}`);
     S.err = null; S.can = !!r.can_control; if (r.remote) { S.remote = r.remote; S.state.local_viewer = r.local_viewer; }
     if (r.fan) S.liveFan = r.fan;
+    if (r.mining) {
+      const hits = r.mining.hits || [];
+      if (full || !S.hits) S.hits = hits.slice();
+      else {
+        for (let i = 0; i < hits.length; i++) {
+          const h = hits[i]; let seen = false;
+          for (let j = 0; j < S.hits.length; j++) { const x = S.hits[j]; if (x.t === h.t && x.diff === h.diff && x.n === h.n) { seen = true; break; } }
+          if (!seen) S.hits.push(h);
+        }
+      }
+      S.mining = r.mining;
+    }
     newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
@@ -480,6 +492,7 @@ const HASH_SERIES = () => [
   { k: "h5m", label: "5m avg", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.h5m } ];
 const hashRange = (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.2, (hi - lo) * .3); return [Math.max(0, lo - p), hi + p]; };
 function drawCharts() {
+  if (typeof MINING !== "undefined") MINING.draw();
   const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = Math.max(90, (S.pollS || (S.state && S.state.poll_seconds) || 5) * 8), h = [];
   S.hist.filter(x => x.t >= c).forEach((x, i, a) => { if (i && x.t - a[i - 1].t > gap) h.push({ t: a[i - 1].t + 1 }); h.push(x); });
   S.charts.forEach(u => {
@@ -502,7 +515,7 @@ const recent = (k, secs = 3600) => { const c = Date.now() / 1000 - secs; return 
 
 /* ---------------- shared bits ---------------- */
 const D = () => S.data || {};
-function heroVal() { const hr = D().hashrate || {}; return isNum(hr.ths_hero) ? +hr.ths_hero : isNum(hr.ths_5m) ? +hr.ths_5m : isNum(hr.ghs_spd) ? hr.ghs_spd / 1000 : null; }
+function heroVal() { const hr = D().hashrate || {}; return isNum(hr.ths_hero) ? +hr.ths_hero : isNum(hr.ghs_spd) ? hr.ghs_spd / 1000 : isNum(hr.ths_1m) ? +hr.ths_1m : isNum(hr.ths_5m) ? +hr.ths_5m : null; }
 function activePool() { const ps = D().pools || []; return ps.find(p => p.stratum_active) || ps.find(p => (p.status || "").toLowerCase() === "alive"); }
 const kv = (rows) => rows.map(([k, v, i]) => `<div class="row-kv"><span>${i ? ic(i, "sm t3") : ""}${esc(k)}</span><b>${v}</b></div>`).join("");
 function notices() {
@@ -534,8 +547,9 @@ VIEWS.overview = {
   build: () => `
     <section class="hero">
       <div class="hero-top">
-        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· 5-minute average</span></div>
+        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· Live (chip-reported)</span></div>
           <div class="hero-num num"><span id="heroV" class="sk">0.000</span><span class="unit">TH/s</span></div>
+          <div class="hero-avgs t3" id="heroAvgs"></div>
           <div class="hero-meta" id="heroMeta"><span class="sk" style="width:280px;height:20px"></span></div></div>
         ${rangeSeg()}
       </div>
@@ -555,8 +569,9 @@ VIEWS.overview = {
   update: () => {
     const d = D(), hr = d.hashrate || {}, tp = d.temps || {}, pw = d.power || {}, fan = d.fan || {}, up = d.uptime || {}, er = d.errors || {};
     const hv = unsk($("#heroV")); if (d.ok) tween(hv, heroVal(), 3); else { hv.textContent = "Offline"; hv.dataset.v = ""; }
-    const h1 = S.hist.find(h => h.t >= Date.now() / 1000 - 3600 && isNum(h.h5m)); let delta = '<span class="delta">collecting history</span>';
-    if (h1 && heroVal() && S.hist.length > 20) { const p = (heroVal() - h1.h5m) / h1.h5m * 100; delta = `<span class="delta ${p >= .05 ? "up" : p <= -.05 ? "down" : ""}">${p >= 0 ? "↑" : "↓"} ${Math.abs(p).toFixed(1)}% <span style="opacity:.7;font-weight:500">1h</span></span>`; }
+    const ha = $("#heroAvgs"); if (ha) ha.innerHTML = d.ok ? `<span>5-minute average <b class="num">${fmt(hr.ths_5m, 3)}</b> TH/s</span><span class="sep"></span><span>Since boot <b class="num">${fmt(hr.ths_avg, 3)}</b> TH/s</span>` : "";
+    const h1 = S.hist.find(h => h.t >= Date.now() / 1000 - 3600 && isNum(h.hhero || h.h5m)); let delta = '<span class="delta">collecting history</span>';
+    if (h1 && heroVal() && S.hist.length > 20) { const base = h1.hhero || h1.h5m, p = (heroVal() - base) / base * 100; delta = `<span class="delta ${p >= .05 ? "up" : p <= -.05 ? "down" : ""}">${p >= 0 ? "↑" : "↓"} ${Math.abs(p).toFixed(1)}% <span style="opacity:.7;font-weight:500">1h</span></span>`; }
     const hashing = er.hash_status == 1 || (er.hash_status == null && d.ok), ap = activePool();
     $("#heroMeta").innerHTML = `${delta}<span class="pill ${d.ok ? (hashing ? "good" : "bad") : "bad"}"><span class="dot"></span>${d.ok ? (hashing ? "Hashing" : "Not hashing") : "Offline"}</span>` +
       (ap ? `<span class="sep"></span><span>${esc((ap.stratum_url || ap.url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, ""))}</span>` : "") +
@@ -566,7 +581,7 @@ VIEWS.overview = {
     $("#strip").innerHTML =
       M("thermometer", "Max chip temp", fmt(tp.max), "°C", `avg <b>${fmt(tp.avg)}°</b> · target <b>${fmt(tp.target)}°</b>`, `<div class="bar"><i style="width:${isNum(tp.max) ? Math.min(100, tp.max / 110 * 100) : 0}%;background:${tempTone(tp.max, "max")}"></i><em style="left:${tg / 110 * 100}%"></em></div>`, tempTone(tp.max, "max")) +
       M("plug", "Power", fmt(pw.watts), "W", `<b>${fmt(pw.voltage_v, 2)}</b> V · MPO <b>${fmt(pw.mpo_w)}</b> W`, `<div class="spark">${spark(recent("w"), "#9aa0a9", "p")}</div>`) +
-      M("leaf", "Efficiency", fmt(eff, 1), "J/TH", `<b>${hv5 && pw.watts ? fmt(hv5 * 1000 / pw.watts, 1) : "—"}</b> GH/W`, `<div class="spark">${spark(recent(h => isNum(h.w) && h.h5m ? h.w / h.h5m : null), "#9aa0a9", "e")}</div>`) +
+      M("leaf", "Efficiency", fmt(eff, 1), "J/TH", `<b>${hv5 && pw.watts ? fmt(hv5 * 1000 / pw.watts, 1) : "—"}</b> GH/W`, `<div class="spark">${spark(recent(h => isNum(h.w) && (h.hhero || h.h5m) ? h.w / (h.hhero || h.h5m) : null), "#9aa0a9", "e")}</div>`) +
       M("fan", "Fan", fmt(fan.rpm), "RPM", `<b>${fmt(fan.percent)}%</b> of max speed`, `<div class="bar"><i style="width:${isNum(fan.percent) ? fan.percent : 0}%"></i></div>`) +
       M("clock", "Uptime", esc(up.human || "—"), "", `since <b>${up.seconds ? esc(absTime(Math.floor(Date.now() / 1000) - up.seconds)) : "—"}</b>`);
     $("#stUpd").innerHTML = `Updated <span data-rel="${d.fetched_at_unix || 0}">${rel(d.fetched_at_unix)}</span>`;
@@ -600,8 +615,8 @@ VIEWS.performance = {
   update: () => {
     const d = D(), hr = d.hashrate || {}, sh = d.shares || {}, er = d.errors || {}, pw = d.power || {}, c = d.control || {};
     const M = (l, v, u, s) => `<div class="metric"><div class="label">${l}</div><div class="val num">${v}<small>${u}</small></div>${s ? `<div class="sub">${s}</div>` : ""}</div>`;
-    $("#hrList").innerHTML = kv([["5 seconds", `${fmt(hr.ths_5s, 2)} <span class="t3">· short-term</span>`], ["1 minute", fmt(hr.ths_1m, 2)], ["5 minutes", `<span style="color:var(--accent)">${fmt(hr.ths_5m, 2)}</span>`],
-      ["15 minutes", fmt(hr.ths_15m, 2)], ["Lifetime average", fmt(hr.ths_avg, 2)], ["GHS spd · mm", `${fmt(hr.ghs_spd, 0)} · ${fmt(hr.ghs_mm, 0)}`]]);
+    $("#hrList").innerHTML = kv([["Live (chip-reported)", `<span style="color:var(--accent)">${fmt(heroVal(), 3)}</span> <span class="t3">TH/s</span>`], ["5 seconds", `${fmt(hr.ths_5s, 2)} <span class="t3">· share-based</span>`], ["1 minute", fmt(hr.ths_1m, 2)], ["5 minutes", fmt(hr.ths_5m, 2)],
+      ["15 minutes", fmt(hr.ths_15m, 2)], ["Since boot", fmt(hr.ths_avg, 2)], ["GHS spd · mm", `${fmt(hr.ghs_spd, 0)} · ${fmt(hr.ghs_mm, 0)}`]]);
     const ap = activePool();
     const echu = (er.echu && er.echu.length) ? er.echu.join(" ") : "0";
     $("#shares").innerHTML = sharesBlock().html + `<div class="list two">${kv([
@@ -898,8 +913,9 @@ const DASH = {
   build: () => `
     <section class="hero" id="secHash">
       <div class="hero-top">
-        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· 5-minute average</span></div>
+        <div><div class="hero-label">${ic("zap", "sm")}Hashrate <span class="t3">· Live (chip-reported)</span></div>
           <div class="hero-num num"><span id="heroV" class="sk">0.000</span><span class="unit">TH/s</span></div>
+          <div class="hero-avgs t3" id="heroAvgs"></div>
           <div class="hero-meta" id="heroMeta"><span class="sk" style="width:280px;height:20px"></span></div></div>
         <div class="hero-side"><div class="legend" id="hsLegend"></div>${rangeSeg()}</div>
       </div>
@@ -908,6 +924,31 @@ const DASH = {
     </section>
     <div id="linkCard"></div>
     <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
+    <section class="panel panel-pad mining-sec" id="secMining">
+      <div class="sec-h"><h2>Mining</h2><span class="t3" id="mineLive"></span></div>
+      <div class="mine-grid">
+        <div class="mine-chart-wrap">
+          <div class="mine-k">Share hits</div>
+          <div class="mine-chart" id="mineChart"><canvas id="mineCv" aria-label="Accepted share difficulties over time"></canvas><div class="chart-empty" id="mineEmpty">Shares will appear here as the miner finds them.</div></div>
+          <div class="legend mine-leg" id="mineLeg"></div>
+          <p class="mine-note" id="mineNote">If several shares land between readings, the latest is shown with a count. Other difficulties are not invented.</p>
+          <p class="mine-best" id="mineBest"></p>
+        </div>
+        <div class="mine-side">
+          <div class="blk-view" id="blkView">
+            <div class="mine-k">Live block</div>
+            <div class="blk-num num" id="blkH">—</div>
+            <div class="blk-pool t2" id="blkPool"></div>
+            <div class="blk-ago t3" id="blkAgo"></div>
+          </div>
+          <div class="mine-anim">
+            <div class="mine-k">Hashing</div>
+            <canvas id="hashAnim" width="600" height="88" aria-hidden="true"></canvas>
+            <p class="mine-note">Illustration — not individual hashes. Speed follows the live chip-reported hashrate; flashes are real accepted shares.</p>
+          </div>
+        </div>
+      </div>
+    </section>
     <div class="cols dash">
       ${LOTTO.build()}
       <section class="panel panel-pad span-7" id="secControls"${isView() ? ' hidden' : ''}>
@@ -1002,13 +1043,226 @@ const DASH = {
     VIEWS.controls.wire();
     VIEWS.raw.wire();
     $("#secRaw").addEventListener("toggle", () => VIEWS.raw.update());
+    MINING.wire();
   },
   update: (first) => {
     if (!$("#heroV")) return;
     [VIEWS.overview, VIEWS.performance, VIEWS.hardware, VIEWS.pools, VIEWS.controls].forEach(v => v.update(first));
     if ($("#secRaw").open) VIEWS.raw.update();
+    MINING.update();
   },
 };
+
+/* ---------------- mining view ---------------- */
+const MINING = {
+  _io: null, _raf: 0, _last: 0, _parts: null, _flash: 0, _on: false, _seenH: 0,
+  wire() {
+    const cv = $("#mineCv"), anim = $("#hashAnim");
+    if (!cv) return;
+    this.draw();
+    this.startAnim();
+    if (!this._io && typeof IntersectionObserver === "function") {
+      this._io = new IntersectionObserver(() => this.startAnim(), { threshold: 0.05 });
+      const sec = $("#secMining"); if (sec) this._io.observe(sec);
+    }
+    window.addEventListener("resize", () => { this.draw(); this.fitAnim(); }, { passive: true });
+    document.addEventListener("visibilitychange", () => this.startAnim());
+  },
+  stop() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = 0; this._on = false; this._parts = null; },
+  update() {
+    if (!$("#secMining")) return;
+    const d = D(), hr = d.hashrate || {}, hv = heroVal();
+    const live = $("#mineLive");
+    if (live) live.innerHTML = d.ok && isNum(hv) ? `Live (chip-reported) <b class="num">${fmt(hv, 3)}</b> TH/s` : "";
+    const m = S.mining || {}, h = m.height || {};
+    const blkH = $("#blkH"), blkP = $("#blkPool"), blkA = $("#blkAgo"), box = $("#blkView");
+    if (blkH) {
+      if (h.has_height && h.height) {
+        blkH.textContent = "Block " + fmt(h.height);
+        if (blkP) blkP.textContent = h.pool || (activePool() ? (activePool().stratum_url || activePool().url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, "") : "");
+        if (blkA) {
+          if (h.changed_at) blkA.innerHTML = `New block found by the network <span data-rel="${h.changed_at}">${rel(h.changed_at)}</span>`;
+          else blkA.textContent = "Waiting to see the next network block";
+        }
+        if (box && this._seenH && h.height !== this._seenH) {
+          box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash");
+          setTimeout(() => box.classList.remove("flash"), 1200);
+        }
+        this._seenH = h.height;
+      } else {
+        blkH.textContent = "—";
+        if (blkP) blkP.textContent = "";
+        if (blkA) blkA.textContent = "The pool isn't reporting a block height.";
+      }
+    }
+    const last = m.last_hit;
+    if (last && last.t && last.t !== this._lastHitT) {
+      if (this._lastHitT) this._flash = 1;
+      this._lastHitT = last.t;
+    }
+    this.draw();
+    this.startAnim();
+  },
+  hitsInRange() {
+    const cut = Date.now() / 1000 - (S.range || 3600);
+    const out = [];
+    const hits = S.hits || [];
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i];
+      if (h && h.t >= cut && h.diff > 0) out.push(h);
+    }
+    return out;
+  },
+  best() {
+    let b = 0;
+    const sh = (D() || {}).shares || {};
+    if (isNum(sh.best_share) && +sh.best_share > b) b = +sh.best_share;
+    if (S.mining && isNum(S.mining.best_share) && +S.mining.best_share > b) b = +S.mining.best_share;
+    const o = S.lot && S.lot.odds;
+    if (o && isNum(o.best_share) && +o.best_share > b) b = +o.best_share;
+    const hits = S.hits || [];
+    for (let i = 0; i < hits.length; i++) if (hits[i].diff > b) b = hits[i].diff;
+    return b > 0 ? b : 0;
+  },
+  netDiff() { const L = S.lot; return L && isNum(L.difficulty) && L.difficulty > 0 ? +L.difficulty : 0; },
+  poolDiff() { const m = S.mining; return m && m.work_diff > 0 ? +m.work_diff : 0; },
+  draw() {
+    const wrap = $("#mineChart"), cv = $("#mineCv"), empty = $("#mineEmpty");
+    if (!cv || !wrap) return;
+    const hits = this.hitsInRange();
+    const netD = this.netDiff(), poolD = this.poolDiff(), best = this.best();
+    if (empty) empty.style.display = hits.length ? "none" : "";
+    const w = Math.max(120, wrap.clientWidth), h = Math.max(160, wrap.clientHeight || 220);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const padL = 52, padR = 12, padT = 16, padB = 28;
+    const now = Date.now() / 1000, t0 = now - (S.range || 3600);
+    let ymin = 1, ymax = 10;
+    const consider = [];
+    if (poolD) consider.push(poolD);
+    if (best) consider.push(best);
+    if (netD) consider.push(netD);
+    for (let i = 0; i < hits.length; i++) consider.push(hits[i].diff);
+    if (consider.length) {
+      ymin = consider[0]; ymax = consider[0];
+      for (let i = 0; i < consider.length; i++) { if (consider[i] < ymin) ymin = consider[i]; if (consider[i] > ymax) ymax = consider[i]; }
+      ymin = ymin / 4; ymax = ymax * 2;
+      if (ymin < 1) ymin = 1;
+      if (netD && ymax < netD) ymax = netD * 1.05;
+      if (ymax <= ymin) ymax = ymin * 10;
+    } else if (netD) { ymax = netD * 1.05; ymin = Math.max(1, (poolD || netD / 1e9) / 4); }
+    const xOf = (t) => padL + (Math.max(t0, Math.min(now, t)) - t0) / (now - t0) * (w - padL - padR);
+    const yOf = (d) => {
+      const a = Math.log(ymin) / Math.LN10, b = Math.log(ymax) / Math.LN10, v = Math.log(Math.max(ymin, d)) / Math.LN10;
+      return padT + (1 - (v - a) / (b - a)) * (h - padT - padB);
+    };
+    ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
+    // log grid lines at 10^n
+    const e0 = Math.floor(Math.log(ymin) / Math.LN10), e1 = Math.ceil(Math.log(ymax) / Math.LN10);
+    ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#5f656e"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let e = e0; e <= e1; e++) {
+      const d = Math.pow(10, e); if (d < ymin || d > ymax) continue;
+      const y = yOf(d);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+      ctx.fillText(e >= 3 ? big(d, 0) : String(d), padL - 6, y);
+    }
+    const line = (d, color, dash) => {
+      if (!d || d <= 0) return;
+      const y = yOf(d);
+      ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1; if (dash) ctx.setLineDash(dash);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.restore();
+    };
+    if (netD) line(netD, "rgba(245,165,36,.85)", [5, 4]);
+    if (poolD) line(poolD, "rgba(110,168,254,.8)", [3, 4]);
+    if (best) {
+      const y = yOf(best);
+      ctx.fillStyle = "var(--good)";
+      ctx.fillStyle = "#3ccf8e";
+      ctx.beginPath();
+      ctx.moveTo(w - padR - 1, y); ctx.lineTo(w - padR - 9, y - 5); ctx.lineTo(w - padR - 9, y + 5); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "#3ccf8e"; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR - 10, y); ctx.stroke();
+    }
+    for (let i = 0; i < hits.length; i++) {
+      const pt = hits[i], x = xOf(pt.t), y = yOf(pt.diff);
+      const r = pt.n > 1 ? 5 : 3.2;
+      ctx.beginPath(); ctx.fillStyle = "rgba(245,165,36,.95)"; ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      if (pt.n > 1) {
+        ctx.fillStyle = "#f3f4f6"; ctx.font = "600 10px Geist, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+        ctx.fillText("×" + pt.n, x + 6, y - 4);
+      }
+    }
+    const leg = $("#mineLeg");
+    if (leg) {
+      const bits = [];
+      if (netD) bits.push(`<span><i style="background:var(--accent);height:2px"></i>Network difficulty <b class="num">${big(netD, 1)}</b></span>`);
+      else bits.push(`<span class="t3">Network difficulty isn't shown — network data is off</span>`);
+      if (poolD) bits.push(`<span><i style="background:var(--info);height:2px"></i>Pool difficulty <b class="num">${big(poolD, 1)}</b></span>`);
+      if (best) bits.push(`<span><i style="background:var(--good);height:2px"></i>Best share <b class="num">${big(best, 2)}</b></span>`);
+      leg.innerHTML = bits.join("");
+    }
+    const mb = $("#mineBest");
+    if (mb) {
+      if (best && netD) mb.textContent = "Best share is " + pct(best / netD) + " of the way to a block";
+      else if (best) mb.textContent = "Best share " + big(best, 2);
+      else mb.textContent = "";
+    }
+  },
+  fitAnim() {
+    const cv = $("#hashAnim"); if (!cv || !cv.parentElement) return;
+    const w = Math.max(120, cv.parentElement.clientWidth), h = 88;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
+    return { cv, w, h, dpr };
+  },
+  visible() {
+    if (document.hidden) return false;
+    const sec = $("#secMining"); if (!sec) return false;
+    const r = sec.getBoundingClientRect();
+    return r.bottom > 0 && r.top < (window.innerHeight || 800);
+  },
+  startAnim() {
+    const still = typeof reducedMotion === "function" && reducedMotion();
+    if (still || !this.visible() || !$("#hashAnim")) { if (this._raf) cancelAnimationFrame(this._raf); this._raf = 0; this._on = false; this.paintAnim(true); return; }
+    if (this._on) return;
+    this._on = true; this._last = 0;
+    const tick = (ts) => {
+      if (!this._on) return;
+      if ((typeof reducedMotion === "function" && reducedMotion()) || !this.visible()) { this._on = false; this._raf = 0; this.paintAnim(true); return; }
+      if (!this._last || ts - this._last >= 50) { this._last = ts; this.paintAnim(false); }
+      this._raf = requestAnimationFrame(tick);
+    };
+    this._raf = requestAnimationFrame(tick);
+  },
+  paintAnim(still) {
+    const sz = this.fitAnim(); if (!sz) return;
+    const { cv, w, h, dpr } = sz, ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!this._parts) {
+      this._parts = [];
+      for (let i = 0; i < 28; i++) this._parts.push({ x: Math.random() * w, y: 12 + Math.random() * (h - 24), r: 0.8 + Math.random() * 1.4, a: 0.18 + Math.random() * 0.28 });
+    }
+    const hv = heroVal() || 0;
+    const spd = still ? 0 : (0.35 + Math.min(4, hv) * 0.55);
+    const parts = this._parts;
+    if (this._flash > 0) this._flash = Math.max(0, this._flash - (still ? 1 : 0.12));
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (!still) { p.x += spd * (0.6 + p.r); if (p.x > w + 4) p.x = -4; }
+      ctx.beginPath(); ctx.fillStyle = "rgba(245,165,36," + p.a + ")"; ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    if (this._flash > 0) {
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(245,165,36," + (0.22 * this._flash) + ")";
+      ctx.arc(w * 0.72, h * 0.5, 10 + (1 - this._flash) * 22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+};
+
 
 /* ---------------- raw ---------------- */
 VIEWS.raw = {
@@ -1424,7 +1678,7 @@ const opt = (k) => !(S.state && S.state.optional && S.state.optional[k] === fals
 
 async function loadLotto() {
   if (!S.miner || !$("#secLotto")) return;
-  try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); } catch (e) {}
+  try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); if (typeof MINING !== "undefined") MINING.draw(); } catch (e) {}
 }
 async function loadFeatures() {
   clearTimeout(S.featT);

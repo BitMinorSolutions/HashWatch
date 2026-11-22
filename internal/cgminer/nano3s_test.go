@@ -47,6 +47,7 @@ func TestFetchNano3S(t *testing.T) {
 		eq("fan pct", s.Fan.Percent, 26)
 		eq("dh", s.Shares.DHPct, 2.525)
 		eq("ghs spd", s.Hashrate.GHsSpd, 5016.36)
+		eq("ths_hero", s.Hashrate.THsHero, 5.01636)
 		eq("ths 5m (no pool work yet)", s.Hashrate.THs5m, 0)
 		if s.Temps.Ambient != nil {
 			t.Errorf("ambient should be absent, got %v", *s.Temps.Ambient)

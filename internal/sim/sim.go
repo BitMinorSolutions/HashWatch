@@ -52,6 +52,12 @@ type Miner struct {
 	// FanSpd is the last fan-spd value (-1 auto, or a fixed percent). FanSet is whether one was sent.
 	FanSpd int
 	FanSet bool
+	// Share / block knobs for the Mining view (tests and screenshots).
+	LastShareDiff float64
+	WorkDiff      float64
+	BlockHeight   int64
+	extraAccept   int
+	lastShareAt   int64
 }
 
 type poolInfo struct{ URL, User, Pass string }
@@ -65,10 +71,47 @@ func defaultPools() [3]poolInfo {
 }
 
 func New() *Miner {
-	m := &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second), Pools: defaultPools()}
+	m := &Miner{HashFactor: 1, WorkLevel: 2, LED: [6]int{3, 82, 50, 255, 106, 0}, start: time.Now().Add(-549866 * time.Second), Pools: defaultPools(),
+		WorkDiff: 3997, LastShareDiff: 3997, BlockHeight: 975731}
 	m.Best = m.bestOf(549866)
 	m.lastBest = time.Now()
 	return m
+}
+
+func (m *Miner) acceptedLocked() int {
+	el := int(time.Since(m.start).Seconds())
+	return 134043 + el/4 + m.extraAccept
+}
+
+func (m *Miner) lastShareUnixLocked() int64 {
+	if m.lastShareAt > 0 {
+		return m.lastShareAt
+	}
+	return time.Now().Unix() - 3
+}
+
+// AddShares pretends n accepted shares arrived, the latest at difficulty diff.
+func (m *Miner) AddShares(n int, diff float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
+	m.extraAccept += n
+	if diff > 0 {
+		m.LastShareDiff = diff
+		if diff > m.Best {
+			m.Best = diff
+		}
+	}
+	m.lastShareAt = time.Now().Unix()
+}
+
+// SetBlockHeight sets the pool's Current Block Height.
+func (m *Miner) SetBlockHeight(h int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.BlockHeight = h
 }
 
 // bestOf samples the best share of secs seconds of hashing.
@@ -180,10 +223,20 @@ func (m *Miner) reply(cmd, param string) string {
 		return status("S", 22, "CGMiner versions") + `,"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalonnano","MODEL":"nano3","HWTYPE":"PMMv1_X1","SWTYPE":"MM318_X2","LVERSION":"25103101_0736b2e","MAC":"e0e1a9000000"}],"id":1}`
 	case "summary":
 		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
-			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, 134043+el/4, m.Best)
+			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, m.acceptedLocked(), m.Best)
 	case "pools":
-		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"%s","Status":"%s","Priority":0,"Quota":1,"User":"%s","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"%s","Best Share":%.0f,"Pool Rejected%%":%.4f,"Pool Stale%%":0.5190,"Work Difficulty":3997.0,"Last Share Difficulty":3997.0,"Current Block Height":975731,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"%s","Status":"Alive","Priority":1,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"%s","Status":"Alive","Priority":2,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0}],"id":1}`,
-			m.Pools[0].URL, alive0, m.Pools[0].User, 134043+el/4, time.Now().Unix()-3, act(0), poolHost(m.Pools[0].URL), m.Best, rej0, m.Pools[1].URL, m.Pools[1].User, act(1), m.Pools[2].URL, m.Pools[2].User, act(2))
+		wd, ld, bh := m.WorkDiff, m.LastShareDiff, m.BlockHeight
+		if wd <= 0 {
+			wd = 3997
+		}
+		if ld <= 0 {
+			ld = wd
+		}
+		if bh <= 0 {
+			bh = 975731
+		}
+		return status("S", 7, "3 Pool(s)") + fmt.Sprintf(`,"POOLS":[{"POOL":0,"URL":"%s","Status":"%s","Priority":0,"Quota":1,"User":"%s","Accepted":%d,"Rejected":233,"Stale":2627,"Last Share Time":%d,"Stratum Active":%s,"Stratum URL":"%s","Best Share":%.0f,"Pool Rejected%%":%.4f,"Pool Stale%%":0.5190,"Work Difficulty":%.1f,"Last Share Difficulty":%.4f,"Current Block Height":%d,"Get Failures":32,"Remote Failures":24},{"POOL":1,"URL":"%s","Status":"Alive","Priority":1,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0,"Work Difficulty":1024.0},{"POOL":2,"URL":"%s","Status":"Alive","Priority":2,"Quota":1,"User":"%s","Stratum Active":%s,"Accepted":0}],"id":1}`,
+			m.Pools[0].URL, alive0, m.Pools[0].User, m.acceptedLocked(), m.lastShareUnixLocked(), act(0), poolHost(m.Pools[0].URL), m.Best, rej0, wd, ld, bh, m.Pools[1].URL, m.Pools[1].User, act(1), m.Pools[2].URL, m.Pools[2].User, act(2))
 	case "devs":
 		return status("S", 9, "1 ASC(s)") + `,"DEVS":[{"ASC":0,"Name":"AVANANO","ID":0,"Enabled":"Y","Status":"Alive"}],"id":1}`
 	case "estats", "stats":
@@ -291,6 +344,8 @@ func (m *Miner) Log() []string {
 //	GET /heat?c=6     add degrees to the chip temperatures
 //	GET /spike?c=9&s=300  add degrees for s seconds (a temperature spike)
 //	GET /best?d=2.1e9 the miner reports a new best share of difficulty d
+//	GET /share?n=1&d=12000  n new accepted shares, latest difficulty d
+//	GET /height?h=977086    set Current Block Height (or add=1 to increment)
 //
 // SetElapsed pretends the miner has been up for sec seconds (tests: a reboot is a drop).
 func (m *Miner) SetElapsed(sec int) {
@@ -360,6 +415,27 @@ func (m *Miner) Admin(addr string) error {
 			m.Best = d
 		}
 		m.mu.Unlock()
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/share", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		d, _ := strconv.ParseFloat(r.URL.Query().Get("d"), 64)
+		m.AddShares(n, d)
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/height", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("h") {
+			h, _ := strconv.ParseInt(r.URL.Query().Get("h"), 10, 64)
+			m.SetBlockHeight(h)
+		} else if r.URL.Query().Get("add") != "" {
+			add, _ := strconv.ParseInt(r.URL.Query().Get("add"), 10, 64)
+			if add == 0 {
+				add = 1
+			}
+			m.mu.Lock()
+			m.BlockHeight += add
+			m.mu.Unlock()
+		}
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashwatch/hashwatch/internal/cgminer"
+	"github.com/hashwatch/hashwatch/internal/mining"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/source"
 )
@@ -56,13 +57,15 @@ type Poller struct {
 	Base time.Duration
 	// OnPoll is called after every poll (outside the lock) with the last hour of history.
 	OnPoll func(id, name string, snap *model.Snapshot, lastHour []model.Sample)
+	// Mining is the rolling accepted-share log and block-height clock.
+	Mining *mining.Log
 	dir    string
 	mu     sync.RWMutex
 	m      map[string]*minerState
 }
 
 func NewPoller(dir string, every time.Duration) *Poller {
-	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}}
+	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}, Mining: mining.NewLog(dir)}
 	go func() {
 		for range time.Tick(time.Minute) {
 			p.saveHistory()
@@ -119,6 +122,9 @@ func (p *Poller) Stop(id string) {
 		delete(p.m, id)
 		os.Remove(p.histFile(id))
 	}
+	if p.Mining != nil {
+		p.Mining.Remove(id)
+	}
 }
 
 // Halt stops reading a miner but keeps its history (the Mac switched to showing a Pi).
@@ -165,6 +171,9 @@ func (p *Poller) pollOnce(id string, st *minerState) time.Duration {
 	snapStart := time.Now()
 	snap := st.src.Fetch()
 	p.record(id, st, snap)
+	if p.Mining != nil {
+		p.Mining.Observe(id, snap, time.Now().Unix())
+	}
 	p.mu.Lock()
 	if snap.OK {
 		st.fails = 0
@@ -280,6 +289,13 @@ func (p *Poller) HistorySince(id string, since int64) []model.Sample {
 	return out
 }
 
+func (p *Poller) MiningView(id string, since int64) mining.View {
+	if p == nil || p.Mining == nil {
+		return mining.View{}
+	}
+	return p.Mining.View(id, since)
+}
+
 // SaveNow writes history to disk (used on shutdown).
 func (p *Poller) SaveNow() { p.saveHistory() }
 
@@ -289,6 +305,9 @@ func (p *Poller) saveHistory() {
 	for id, st := range p.m {
 		b, _ := json.Marshal(st.History)
 		_ = os.WriteFile(p.histFile(id), b, 0o600)
+	}
+	if p.Mining != nil {
+		p.Mining.Save()
 	}
 }
 

@@ -351,6 +351,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		out["remote"] = s.remoteBrief()
 	}
 	out["fan"] = s.fanView(id, v.Latest)
+	mineSince := since
+	if mineSince > 0 {
+		mineSince -= 120 // last-share times can precede the poll timestamp
+	}
+	out["mining"] = s.Poll.MiningView(id, mineSince)
 	if s.Alerts != nil {
 		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
 		items, latest := s.Alerts.Since(a, 20)

@@ -55,7 +55,7 @@ func TestLiveNano3SAccuracy(t *testing.T) {
 		eq("5m", s.Hashrate.THs5m, 5.14583419)
 		eq("15m", s.Hashrate.THs15m, 5.00919056)
 		eq("avg", s.Hashrate.THsAvg, 5.12030053)
-		eq("hero = 5m", s.Hashrate.THsHero, 5.14583419)
+		eq("hero = GHSspd", s.Hashrate.THsHero, 5.01443)
 		eq("GHSspd", s.Hashrate.GHsSpd, 5014.43)
 		eq("GHSmm", s.Hashrate.GHsMM, 5154.36)
 		eq("WU", s.Hashrate.WU, map[string]float64{"estats": 71863.72, "stats": 71863.24}[statsCmd])
