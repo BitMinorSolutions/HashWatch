@@ -59,7 +59,9 @@ func (s *Server) lotteryGet(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"net": info, "server_time": s.Now().Unix()}
 	snap := s.Poll.Latest(id)
 	var h, sessionBest float64
-	if snap != nil && snap.OK {
+	minerOK := snap != nil && snap.OK
+	out["miner_ok"] = minerOK
+	if minerOK {
 		h = oddsHashrate(snap)
 		sessionBest, _ = fnum(snap.Shares.BestShare)
 		if avg, ok := fnum(snap.Hashrate.THsAvg); ok && snap.Uptime.Seconds > 0 {

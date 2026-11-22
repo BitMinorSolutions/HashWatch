@@ -40,9 +40,22 @@ func Lambda(h, d, t float64) float64 {
 	return h * t / HashesPerBlock(d)
 }
 
-// Chance is the probability of finding at least one block in t seconds.
-// It uses -expm1(-λ) so tiny probabilities keep full precision.
-func Chance(h, d, t float64) float64 { return -math.Expm1(-Lambda(h, d, t)) }
+// Chance is the probability of finding at least one block in t seconds:
+// 1 − (1 − p)^n, with p = 1/(D × 2^32) per hash and n = H × t hashes.
+// Computed as -expm1(n × log1p(-p)) so tiny probabilities keep full precision.
+// This is the right form over long periods (a year, many blocks); a linear
+// sum n×p would exceed 1 and is only the expected count (see Lambda).
+func Chance(h, d, t float64) float64 {
+	if h <= 0 || d <= 0 || t <= 0 {
+		return 0
+	}
+	p := 1 / HashesPerBlock(d)
+	if p >= 1 {
+		return 1
+	}
+	n := h * t
+	return -math.Expm1(n * math.Log1p(-p))
+}
 
 // SecondsPerBlock is the expected (mean) time to one block, in seconds. 0 if unknown.
 func SecondsPerBlock(h, d float64) float64 {
@@ -148,4 +161,13 @@ func BlockReward(tipHeight int64, avgFeesSat int64, priceUSD float64) Reward {
 		r.USD = float64(r.TotalSat) / 1e8 * priceUSD
 	}
 	return r
+}
+
+// CoinFlips is how many heads in a row have the same odds as a 1-in-N chance
+// (round(log2(N))). Zero when N is not greater than 1.
+func CoinFlips(oneIn float64) int {
+	if oneIn <= 1 {
+		return 0
+	}
+	return int(math.Round(math.Log2(oneIn)))
 }

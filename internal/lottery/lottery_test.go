@@ -57,8 +57,14 @@ func TestChanceSaturates(t *testing.T) {
 	// with λ = 1 the chance of at least one block is 1 - 1/e, never "100%"
 	d := 1.0
 	h := HashesPerBlock(d) / 600
-	if c := Chance(h, d, 600); !near(c, 1-1/math.E, 1e-12) {
+	p := 1 / HashesPerBlock(d)
+	want := -math.Expm1((h * 600) * math.Log1p(-p))
+	if c := Chance(h, d, 600); !near(c, want, 1e-12) || c >= 1 {
 		t.Fatal(c)
+	}
+	// Still agrees with the Poisson 1-e^{-λ} to many digits (p is ~2^-32).
+	if !near(Chance(h, d, 600), 1-1/math.E, 1e-9) {
+		t.Fatal("should still be ~1-1/e")
 	}
 	if Chance(0, d, 600) != 0 || Chance(h, 0, 600) != 0 {
 		t.Fatal("zero inputs")
@@ -78,5 +84,44 @@ func TestSubsidyAndReward(t *testing.T) {
 	}
 	if BlockReward(975765, 0, 0).USD != 0 {
 		t.Fatal("no price must mean no dollars")
+	}
+}
+
+func TestCoinFlipsAgreesWithLotteryCard(t *testing.T) {
+	// 5.1 TH/s at the Nov 2026 difficulty used in TestNano3Odds.
+	h, d := 5.1e12, 134.8238373232727e12
+	o := Compute(h, d, 76205629)
+	if o.OneInPerDay < 1.2e6 || o.OneInPerDay > 1.4e6 {
+		t.Fatalf("1 in %v per day", o.OneInPerDay)
+	}
+	// The lottery card uses the same OneInPerDay (Poisson, ≈ λ for these odds).
+	if !near(o.OneInPerDay, 1/o.PerDay, 1e-12) {
+		t.Fatal("card and phrase must share one_in_per_day")
+	}
+	if flips := CoinFlips(o.OneInPerDay); flips != 20 {
+		t.Fatalf("1 in %v -> %d flips, want 20", o.OneInPerDay, flips)
+	}
+	if CoinFlips(0) != 0 || CoinFlips(1) != 0 {
+		t.Fatal("tiny odds")
+	}
+}
+
+func TestChanceIsNotALinearSum(t *testing.T) {
+	// A hashrate expected to find 2 blocks a year must not report a 200% chance.
+	d := 1.0
+	h := 2 * HashesPerBlock(d) / Year
+	c := Chance(h, d, Year)
+	if c >= 1 || c <= 0.8 || !near(c, 1-math.Exp(-2), 1e-9) {
+		t.Fatalf("chance %v, want 1-e^-2", c)
+	}
+	if !near(Lambda(h, d, Year), 2, 1e-12) {
+		t.Fatal("expected count is still 2")
+	}
+	// Over one day, 1-(1-p)^n and λ still agree for a Nano 3.
+	h, d = 5.1e12, 134.8238373232727e12
+	p := Chance(h, d, Day)
+	lam := Lambda(h, d, Day)
+	if !near(p, lam, 1e-6) || p >= 1 {
+		t.Fatalf("day chance %v λ %v", p, lam)
 	}
 }

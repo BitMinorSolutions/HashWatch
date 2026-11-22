@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,13 @@ import (
 
 // DefaultBase is the public mempool.space API.
 const DefaultBase = "https://mempool.space/api"
+
+// Fallback sources used only when the primary mempool.space fetch fails.
+// Tests that point Base or PriceURL at a stub server never reach these.
+var (
+	FallbackDifficultyURL = "https://blockchain.info/q/getdifficulty"
+	FallbackPriceURL      = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+)
 
 // Default refresh intervals. Network stays at 2 minutes; price is 60s.
 // On HTTP 429 or any other fetch error the wait doubles, up to MaxBackoff,
@@ -64,12 +72,14 @@ type Snapshot struct {
 
 // Fetcher keeps Snapshot fresh in the background.
 type Fetcher struct {
-	Base       string // mempool API base
-	PriceURL   string // defaults to Base + "/v1/prices"
-	Client     *http.Client
-	Path       string        // cache file
-	Every      time.Duration // network refresh (default 2 min)
-	PriceEvery time.Duration // price refresh (default 60s)
+	Base          string // mempool API base
+	PriceURL      string // defaults to Base + "/v1/prices"
+	Client        *http.Client
+	Path          string        // cache file
+	Every         time.Duration // network refresh (default 2 min)
+	PriceEvery    time.Duration // price refresh (default 60s)
+	DiffFallback  string        // override FallbackDifficultyURL (tests)
+	PriceFallback string        // override FallbackPriceURL (tests)
 	// Enabled reports which sources may be contacted right now (privacy settings).
 	Enabled func() (network, price bool)
 	Now     func() time.Time
@@ -250,12 +260,24 @@ func Classify(name, slug string) (solo, unknown bool) {
 	return soloRe.MatchString(name) || soloRe.MatchString(slug), false
 }
 
+func (f *Fetcher) usesDefaultBase() bool {
+	b := f.Base
+	return b == "" || b == DefaultBase
+}
+
 // RefreshNetwork fetches recent blocks (which carry difficulty and the tip height).
+// If that fails and we are on the default mempool.space API, it falls back to
+// blockchain.info for the current difficulty so the odds card can stay current.
 func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 	var raw []mpBlock
 	err := f.get(ctx, strings.TrimRight(f.Base, "/")+"/v1/blocks", &raw)
 	if err == nil && len(raw) == 0 {
 		err = errors.New("no blocks in reply")
+	}
+	if err != nil && f.difficultyFallbackURL() != "" {
+		if ferr := f.refreshDifficultyFallback(ctx); ferr == nil {
+			return nil
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -288,9 +310,67 @@ func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 	return nil
 }
 
-// RefreshPrice fetches BTC/USD.
+func (f *Fetcher) difficultyFallbackURL() string {
+	if f.DiffFallback != "" {
+		return f.DiffFallback
+	}
+	if f.usesDefaultBase() {
+		return FallbackDifficultyURL
+	}
+	return ""
+}
+
+func (f *Fetcher) priceFallbackURL() string {
+	if f.PriceFallback != "" {
+		return f.PriceFallback
+	}
+	if f.PriceURL == "" && f.usesDefaultBase() {
+		return FallbackPriceURL
+	}
+	return ""
+}
+
+func (f *Fetcher) refreshDifficultyFallback(ctx context.Context) error {
+	u := f.difficultyFallbackURL()
+	if u == "" {
+		return errors.New("no difficulty fallback")
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "HashWatch (solo miner dashboard)")
+	res, err := f.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return fmt.Errorf("%s: HTTP %d", u, res.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	if err != nil {
+		return err
+	}
+	d, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("difficulty fallback: bad value %q", strings.TrimSpace(string(b)))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snap.Difficulty = d
+	f.snap.NetFetched = f.Now().Unix()
+	f.snap.Source = "blockchain.info"
+	f.snap.LastErr = ""
+	f.saveLocked()
+	return nil
+}
+
+// RefreshPrice fetches BTC/USD from mempool.space, then CoinGecko if that fails
+// and we are on the default sources (so tests with a stub PriceURL stay isolated).
 func (f *Fetcher) RefreshPrice(ctx context.Context) error {
 	u := f.PriceURL
+	src := "mempool.space"
 	if u == "" {
 		u = strings.TrimRight(f.Base, "/") + "/v1/prices"
 	}
@@ -301,6 +381,11 @@ func (f *Fetcher) RefreshPrice(ctx context.Context) error {
 	if err == nil && p.USD <= 0 {
 		err = errors.New("no USD price in reply")
 	}
+	if err != nil && f.priceFallbackURL() != "" {
+		if usd, ferr := f.fetchCoinGeckoPrice(ctx); ferr == nil {
+			p.USD, err, src = usd, nil, "coingecko"
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err != nil {
@@ -308,9 +393,21 @@ func (f *Fetcher) RefreshPrice(ctx context.Context) error {
 		return err
 	}
 	f.snap.PriceUSD, f.snap.PriceFetched, f.snap.PriceErr = p.USD, f.Now().Unix(), ""
-	f.snap.PriceSource = "mempool.space"
+	f.snap.PriceSource = src
 	f.saveLocked()
 	return nil
+}
+
+func (f *Fetcher) fetchCoinGeckoPrice(ctx context.Context) (float64, error) {
+	var raw map[string]map[string]float64
+	if err := f.get(ctx, f.priceFallbackURL(), &raw); err != nil {
+		return 0, err
+	}
+	usd := raw["bitcoin"]["usd"]
+	if usd <= 0 {
+		return 0, errors.New("no USD price in CoinGecko reply")
+	}
+	return usd, nil
 }
 
 func (f *Fetcher) saveLocked() {

@@ -492,7 +492,6 @@ const HASH_SERIES = () => [
   { k: "h5m", label: "5m avg", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.h5m } ];
 const hashRange = (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.2, (hi - lo) * .3); return [Math.max(0, lo - p), hi + p]; };
 function drawCharts() {
-  if (typeof MINING !== "undefined") MINING.draw();
   const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = Math.max(90, (S.pollS || (S.state && S.state.poll_seconds) || 5) * 8), h = [];
   S.hist.filter(x => x.t >= c).forEach((x, i, a) => { if (i && x.t - a[i - 1].t > gap) h.push({ t: a[i - 1].t + 1 }); h.push(x); });
   S.charts.forEach(u => {
@@ -943,27 +942,23 @@ const DASH = {
     <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
     <section class="panel panel-pad mining-sec" id="secMining">
       <div class="sec-h"><h2>Mining</h2><span class="t3" id="mineLive"></span></div>
-      <div class="mine-grid">
-        <div class="mine-chart-wrap">
-          <div class="mine-k">Share hits</div>
-          <div class="mine-chart" id="mineChart"><canvas id="mineCv" aria-label="Accepted share difficulties over time"></canvas><div class="tip" id="mineTip"></div><div class="chart-empty" id="mineEmpty">Shares will appear here as the miner finds them.</div></div>
-          <div class="legend mine-leg" id="mineLeg"></div>
-          <p class="mine-note" id="mineNote">If several shares land between readings, the latest is shown with a count. Other difficulties are not invented.</p>
-          <p class="mine-best" id="mineBest"></p>
+      <div class="mine-story blk-view" id="blkView">
+        <p class="mine-story-line" id="mineStory"></p>
+        <div class="blk-pool t2" id="blkPool"></div>
+        <div class="blk-ago t3" id="blkAgo"></div>
+      </div>
+      <div class="mine-meter-wrap" id="mineMeter">
+        <div class="mine-k">How close have we gotten?</div>
+        <div class="mine-bar-wrap">
+          <div class="mine-labs" id="mineLabs"></div>
+          <div class="mine-bar" id="mineBar"><i class="mine-fill" id="mineFill"></i><span class="mine-marks" id="mineMarks"></span><span class="mine-ticks" id="mineTicks"></span></div>
         </div>
-        <div class="mine-side">
-          <div class="blk-view" id="blkView">
-            <div class="mine-k">Live block</div>
-            <div class="blk-num num" id="blkH">—</div>
-            <div class="blk-pool t2" id="blkPool"></div>
-            <div class="blk-ago t3" id="blkAgo"></div>
-          </div>
-          <div class="mine-anim">
-            <div class="mine-k">Hashing</div>
-            <canvas id="hashAnim" width="600" height="88" aria-hidden="true"></canvas>
-            <p class="mine-note">Illustration — not individual hashes. Speed follows the live chip-reported hashrate; flashes are real accepted shares.</p>
-          </div>
-        </div>
+        <p class="mine-best" id="mineBest"></p>
+      </div>
+      <p class="mine-odds" id="mineOdds"></p>
+      <div class="mine-feed-wrap">
+        <div class="mine-k">Shares</div>
+        <ul class="mine-feed" id="mineFeed"></ul>
       </div>
     </section>
     <div class="cols dash">
@@ -1073,147 +1068,60 @@ const DASH = {
 
 /* ---------------- mining view ---------------- */
 const MINING = {
-  _io: null, _raf: 0, _last: 0, _parts: null, _flash: 0, _on: false, _seenH: 0,
+  _seenH: 0, _lastHitT: 0, _ticks: [], _wired: false, _ro: null,
   wire() {
-    const cv = $("#mineCv"), anim = $("#hashAnim");
-    if (!cv) return;
-    this.draw();
-    this.startAnim();
-    if (!this._io && typeof IntersectionObserver === "function") {
-      this._io = new IntersectionObserver(() => this.startAnim(), { threshold: 0.05 });
-      const sec = $("#secMining"); if (sec) this._io.observe(sec);
-    }
-    window.addEventListener("resize", () => { this.draw(); this.fitAnim(); }, { passive: true });
-    document.addEventListener("visibilitychange", () => this.startAnim());
+    if (this._wired) return;
+    this._wired = true;
+    window.addEventListener("resize", () => this.drawMeter(), { passive: true });
   },
-  stop() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = 0; this._on = false; this._parts = null; },
+  stop() { this._ticks = []; this._lastHitT = 0; this._seenH = 0; },
   update() {
     if (!$("#secMining")) return;
-    const d = D(), hr = d.hashrate || {}, hv = heroVal();
+    this.wire();
+    const bar = $("#mineBar");
+    if (bar && !this._ro && typeof ResizeObserver === "function") {
+      this._ro = new ResizeObserver(() => this.drawMeter());
+      this._ro.observe(bar);
+    }
+    const d = D(), hv = heroVal();
     const live = $("#mineLive");
     if (live) live.innerHTML = d.ok && isNum(hv) ? `Live (chip-reported) <b class="num">${fmt(hv, 3)}</b> TH/s` : "";
     const m = S.mining || {}, h = m.height || {};
-    const blkH = $("#blkH"), blkP = $("#blkPool"), blkA = $("#blkAgo"), box = $("#blkView");
-    if (blkH) {
-      if (h.has_height && h.height) {
-        blkH.textContent = "Block " + fmt(h.height);
-        if (blkP) blkP.textContent = h.pool || (activePool() ? (activePool().stratum_url || activePool().url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, "") : "");
-        if (blkA) {
-          if (h.changed_at) blkA.innerHTML = `New block found by the network <span data-rel="${h.changed_at}">${rel(h.changed_at)}</span>`;
-          else blkA.textContent = "Waiting to see the next network block";
-        }
-        if (box && this._seenH && h.height !== this._seenH) {
-          box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash");
-          setTimeout(() => box.classList.remove("flash"), 1200);
-        }
-        this._seenH = h.height;
-      } else {
-        blkH.textContent = "—";
-        if (blkP) blkP.textContent = "";
-        if (blkA) blkA.textContent = "The pool isn't reporting a block height.";
+    const story = $("#mineStory"), box = $("#blkView");
+    if (story) {
+      if (!d.ok) story.textContent = "Your miner is offline.";
+      else story.textContent = this.storyLine(isNum(hv) ? +hv : 0, h);
+    }
+    const blkP = $("#blkPool"), blkA = $("#blkAgo");
+    if (h.has_height && h.height) {
+      if (blkP) blkP.textContent = h.pool || (activePool() ? (activePool().stratum_url || activePool().url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, "") : "");
+      if (blkA) {
+        if (h.changed_at) blkA.innerHTML = `New block found by the network <span data-rel="${h.changed_at}">${rel(h.changed_at)}</span>`;
+        else blkA.textContent = "Waiting to see the next network block";
       }
+      if (box && this._seenH && h.height !== this._seenH) {
+        box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash");
+        setTimeout(() => box.classList.remove("flash"), 1200);
+      }
+      this._seenH = h.height;
+    } else {
+      if (blkP) blkP.textContent = h.pool || "";
+      if (blkA) blkA.textContent = d.ok ? "The pool isn't reporting a block height." : "";
     }
     const last = m.last_hit;
     if (last && last.t && last.t !== this._lastHitT) {
-      if (this._lastHitT) this._flash = 1;
+      if (this._lastHitT && last.diff > 0) this.addTick(last.diff);
       this._lastHitT = last.t;
     }
-    this.draw();
-    this.startAnim();
+    this.drawMeter();
+    this.drawOdds();
+    this.drawFeed();
   },
-  // Same rules as internal/mining TimeWindow / BucketHits / ShareAxis.
-  minWindow: 45 * 60,
-  maxWindow: 24 * 3600,
-  timeWindow(hits, now) {
-    const minW = this.minWindow, maxW = this.maxWindow;
-    let t1 = now, first = 0, last = 0, n = 0;
-    for (let i = 0; i < hits.length; i++) {
-      const h = hits[i];
-      if (!h || !(h.t > 0) || !(h.diff > 0)) continue;
-      if (!n || h.t < first) first = h.t;
-      if (!n || h.t > last) last = h.t;
-      n++;
-    }
-    if (!n) return { t0: t1 - minW, t1 };
-    if (last > t1) t1 = last;
-    let t0 = first - 30;
-    if (t1 - t0 < minW) t0 = t1 - minW;
-    if (t1 - t0 > maxW) t0 = t1 - maxW;
-    return { t0, t1 };
-  },
-  bucketSeconds(window) {
-    if (window >= 12 * 3600) return 300;
-    if (window >= 3 * 3600) return 120;
-    return 60;
-  },
-  bucketHits(hits, bucket) {
-    if (!hits.length) return [];
-    if (!(bucket >= 1)) bucket = 60;
-    const order = [], by = {};
-    for (let i = 0; i < hits.length; i++) {
-      const h = hits[i];
-      if (!h || !(h.diff > 0) || !(h.t > 0)) continue;
-      const k = Math.floor(h.t / bucket);
-      if (!by[k]) { by[k] = []; order.push(k); }
-      by[k].push({ t: h.t, diff: h.diff, n: h.n >= 1 ? h.n : 1 });
-    }
-    const out = [];
-    for (let i = 0; i < order.length; i++) {
-      const g = this.clusterDiffs(by[order[i]]);
-      for (let j = 0; j < g.length; j++) out.push(g[j]);
-    }
-    return out;
-  },
-  clusterDiffs(sIn) {
-    const s = sIn.slice();
-    s.sort((a, b) => a.diff - b.diff);
-    const groups = [];
-    for (let i = 0; i < s.length; i++) {
-      const h = s[i];
-      if (!groups.length) { groups.push([h]); continue; }
-      const g = groups[groups.length - 1];
-      let lo = g[0].diff, hi = g[0].diff;
-      for (let j = 0; j < g.length; j++) {
-        if (g[j].diff < lo) lo = g[j].diff;
-        if (g[j].diff > hi) hi = g[j].diff;
-      }
-      if (h.diff > hi * 2 || lo > h.diff * 2) groups.push([h]);
-      else g.push(h);
-    }
-    const out = [];
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
-      let latest = g[0], n = 0;
-      for (let j = 0; j < g.length; j++) {
-        n += g[j].n;
-        if (g[j].t >= latest.t) latest = g[j];
-      }
-      out.push({ t: latest.t, diff: latest.diff, n: n < 1 ? 1 : n });
-    }
-    return out;
-  },
-  shareAxis(pool, best, net, hits) {
-    const vs = [];
-    if (pool > 0) vs.push(pool);
-    if (best > 0) vs.push(best);
-    for (let i = 0; i < hits.length; i++) if (hits[i].diff > 0) vs.push(hits[i].diff);
-    if (!vs.length) return net > 0 ? { ymin: 1, ymax: net, netSeparate: false } : { ymin: 1, ymax: 10, netSeparate: false };
-    let lo = vs[0], hi = vs[0];
-    for (let i = 0; i < vs.length; i++) { if (vs[i] < lo) lo = vs[i]; if (vs[i] > hi) hi = vs[i]; }
-    let ymin = lo / 2; if (ymin < 1) ymin = 1;
-    let ymax = hi * 3; if (ymax <= ymin) ymax = ymin * 10;
-    const netSeparate = net > 0 && net > ymax * 1.5;
-    if (net > 0 && !netSeparate) ymax = net * 1.05;
-    return { ymin, ymax, netSeparate };
-  },
-  hitsInRange(t0, t1) {
-    const out = [];
-    const hits = S.hits || [];
-    for (let i = 0; i < hits.length; i++) {
-      const h = hits[i];
-      if (h && h.t >= t0 && h.t <= t1 && h.diff > 0) out.push(h);
-    }
-    return out;
+  storyLine(ths, h) {
+    const blk = h && h.has_height && h.height ? " for Block " + fmt(h.height) : "";
+    if (ths > 0) return "Your miner is guessing about " + words(ths * 1e12).trim() + " numbers a second, trying to find a winning one" + blk + ".";
+    if (blk) return "Your miner is trying to find a winning one" + blk + ".";
+    return "Your miner is trying to find a winning Bitcoin block.";
   },
   best() {
     const sh = (D() || {}).shares || {};
@@ -1226,209 +1134,192 @@ const MINING = {
     if (lottery > b) b = lottery;
     return b > 0 ? b : 0;
   },
+  // Best since HashWatch's current local day, from stored daily stats. 0 if unknown.
+  bestToday() {
+    const st = S.lot && S.lot.stats, d = st && st.today;
+    const v = d && isNum(d.best_share) ? +d.best_share : 0;
+    return v > 0 ? v : 0;
+  },
   netDiff() { const L = S.lot; return L && isNum(L.difficulty) && L.difficulty > 0 ? +L.difficulty : 0; },
+  netOn() { const L = S.lot; return !!(L && L.net && L.net.network_on && this.netDiff() > 0); },
   poolDiff() { const m = S.mining; return m && m.work_diff > 0 ? +m.work_diff : 0; },
-  wireTip() {
-    if (this._tipWired) return;
-    const cv = $("#mineCv"); if (!cv) return;
-    this._tipWired = true;
-    cv.addEventListener("pointermove", ev => {
-      if (ev.pointerType === "touch") return;
-      this.showTip(ev);
-    });
-    cv.addEventListener("pointerdown", ev => this.showTip(ev));
-    cv.addEventListener("pointerleave", ev => { if (ev.pointerType !== "touch") this.hideTip(); });
-    document.addEventListener("pointerdown", ev => {
-      const tip = $("#mineTip");
-      if (ev.target !== cv && !(tip && tip.contains(ev.target))) this.hideTip();
-    });
+  // Same rules as internal/mining LogPos / Place / LabelWidth.
+  charW: 5.4, labelPad: 8, narrowPx: 520, minGapPx: 4,
+  logPos(v, max) {
+    if (!(v > 0) || !(max > 0)) return 0;
+    if (v >= max) return 1;
+    if (v < 1) return 0;
+    if (max <= 1) return 1;
+    return Math.log(v / 1) / Math.log(max / 1);
   },
-  hideTip() { const tip = $("#mineTip"); if (tip) tip.classList.remove("on"); },
-  showTip(ev) {
-    const tip = $("#mineTip"), cv = $("#mineCv"), pts = this._pts || [];
-    if (!tip || !cv || !pts.length) return;
-    const r = cv.getBoundingClientRect();
-    const x = ev.clientX - r.left, y = ev.clientY - r.top;
-    let bestI = -1, bestD = 18;
-    for (let i = 0; i < pts.length; i++) {
-      const d = Math.hypot(pts[i].x - x, pts[i].y - y);
-      if (d < bestD) { bestD = d; bestI = i; }
+  labelWidth(s) { return (s ? s.length : 0) * this.charW + this.labelPad; },
+  spanOf(p, width) {
+    const w = this.labelWidth(p.label), x = p.x * width;
+    if (p.align === "start") return [x, x + w];
+    if (p.align === "end") return [x - w, x];
+    return [x - w / 2, x + w / 2];
+  },
+  overlaps(a, b, width) {
+    if (a.side !== b.side) return false;
+    const A = this.spanOf(a, width), B = this.spanOf(b, width);
+    return A[0] < B[1] - this.minGapPx && B[0] < A[1] - this.minGapPx;
+  },
+  place(markers, max, width) {
+    if (!(width > 0)) width = 1;
+    const useShort = width < this.narrowPx;
+    const out = [];
+    for (let i = 0; i < markers.length; i++) {
+      const m = markers[i];
+      if (m.id !== "win" && !(m.value > 0)) continue;
+      if (!(max > 0)) continue;
+      const lab = useShort && m.short ? m.short : m.label;
+      const x = m.id === "win" ? 1 : this.logPos(m.value, max);
+      out.push({ id: m.id, label: lab, x: x, value: m.value, side: "above", align: "center" });
     }
-    if (bestI < 0) { this.hideTip(); return; }
-    const p = pts[bestI];
-    const when = new Date(p.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-    const rows = [`<div class="tt">${esc(when)}</div>`, `<div class="tr"><span>Difficulty</span><b class="num">${esc(big(p.diff, 2))}</b></div>`];
-    if (p.n > 1) rows.push(`<div class="tr"><span>Shares in this minute</span><b class="num">${p.n}</b></div>`);
-    tip.innerHTML = rows.join("");
-    tip.classList.add("on");
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let left = p.x + 12, top = p.y - th - 8;
-    if (left + tw > r.width - 4) left = p.x - tw - 12;
-    if (left < 4) left = 4;
-    if (top < 4) top = p.y + 12;
-    if (top + th > r.height - 4) top = Math.max(4, r.height - th - 4);
-    tip.style.left = left + "px";
-    tip.style.top = top + "px";
-  },
-  fmtAxisTime(t, span) {
-    return new Date(t * 1000).toLocaleTimeString(undefined, span < 900
-      ? { hour: "numeric", minute: "2-digit", second: "2-digit" }
-      : { hour: "numeric", minute: "2-digit" });
-  },
-  draw() {
-    const wrap = $("#mineChart"), cv = $("#mineCv"), empty = $("#mineEmpty");
-    if (!cv || !wrap) return;
-    this.wireTip();
-    const now = Date.now() / 1000;
-    const all = S.hits || [];
-    const win = this.timeWindow(all, now);
-    const raw = this.hitsInRange(win.t0, win.t1);
-    const pts0 = this.bucketHits(raw, this.bucketSeconds(win.t1 - win.t0));
-    const netD = this.netDiff(), poolD = this.poolDiff(), best = this.best();
-    if (empty) empty.style.display = pts0.length ? "none" : "";
-    const w = Math.max(120, wrap.clientWidth), h = Math.max(160, wrap.clientHeight || 220);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
-    const ctx = cv.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    const axis = this.shareAxis(poolD, best, netD, pts0);
-    const ymin = axis.ymin, ymax = axis.ymax, netSep = axis.netSeparate && netD > 0;
-    const padL = 52, padR = 14, padB = 32;
-    const netBand = netSep ? 36 : 0;
-    const padT = 14 + netBand;
-    const t0 = win.t0, t1 = win.t1;
-    const span = Math.max(1, t1 - t0);
-    const xOf = (t) => padL + (Math.max(t0, Math.min(t1, t)) - t0) / span * (w - padL - padR);
-    const yOf = (d) => {
-      const a = Math.log(ymin) / Math.LN10, b = Math.log(ymax) / Math.LN10, v = Math.log(Math.max(ymin, d)) / Math.LN10;
-      return padT + (1 - (v - a) / (b - a)) * (h - padT - padB);
+    out.sort((a, b) => a.x !== b.x ? a.x - b.x : (a.id === "win" ? 1 : b.id === "win" ? -1 : a.id < b.id ? -1 : 1));
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].id === "win") { out[i].x = 1; out[i].align = "end"; out[i].side = "above"; }
+    }
+    let n = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].id === "win") continue;
+      out[i].side = n % 2 === 0 ? "below" : "above";
+      n++;
+      if (i > 0 && Math.abs(out[i].x - out[i - 1].x) < 0.02 && out[i - 1].id !== "win") {
+        out[i].side = out[i - 1].side === "below" ? "above" : "below";
+      }
+    }
+    const shortOf = (id) => { for (let i = 0; i < markers.length; i++) if (markers[i].id === id && markers[i].short) return markers[i].short; return ""; };
+    const clamp = () => {
+      for (let i = 0; i < out.length; i++) {
+        const p = out[i], w = this.labelWidth(p.label), x = p.x * width;
+        if (p.id === "win") { p.align = "end"; continue; }
+        const sp = this.spanOf(p, width);
+        if (sp[0] < 0) p.align = "start";
+        else if (sp[1] > width) p.align = "end";
+        else if (p.align !== "end" && p.align !== "start") p.align = "center";
+        if (p.align === "start" && x - w / 2 >= 0 && x + w / 2 <= width) p.align = "center";
+        if (p.align === "end" && p.id !== "win" && x - w / 2 >= 0 && x + w / 2 <= width) p.align = "center";
+      }
     };
-    ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
-    const e0 = Math.floor(Math.log(ymin) / Math.LN10), e1 = Math.ceil(Math.log(ymax) / Math.LN10);
-    ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#5f656e"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    for (let e = e0; e <= e1; e++) {
-      const d = Math.pow(10, e); if (d < ymin || d > ymax) continue;
-      const y = yOf(d);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-      ctx.fillText(e >= 3 ? big(d, 0) : String(d), padL - 6, y);
-    }
-    if (netSep) {
-      const yMid = 16;
-      ctx.save();
-      ctx.strokeStyle = "rgba(245,165,36,.85)"; ctx.lineWidth = 1; ctx.setLineDash([5, 4]);
-      ctx.beginPath(); ctx.moveTo(padL, yMid); ctx.lineTo(w - padR, yMid); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#f5a524"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
-      ctx.fillText("Network " + big(netD, 1), w - padR, yMid + 12);
-      ctx.strokeStyle = "#8b9098"; ctx.lineWidth = 1.4;
-      const yb = padT - 6;
-      const slash = (x) => { ctx.beginPath(); ctx.moveTo(x - 5, yb + 5); ctx.lineTo(x + 5, yb - 3); ctx.stroke(); ctx.beginPath(); ctx.moveTo(x - 5, yb + 9); ctx.lineTo(x + 5, yb + 1); ctx.stroke(); };
-      slash(padL); slash(w - padR);
-      ctx.restore();
-    }
-    const line = (d, color, dash) => {
-      if (!d || d <= 0) return;
-      const y = yOf(d);
-      ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1; if (dash) ctx.setLineDash(dash);
-      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.restore();
+    const resolve = () => {
+      for (let i = 0; i < out.length; i++) {
+        for (let j = i + 1; j < out.length; j++) {
+          if (!this.overlaps(out[i], out[j], width)) continue;
+          const flip = out[j].id === "win" ? i : j;
+          out[flip].side = out[flip].side === "above" ? "below" : "above";
+          if (!this.overlaps(out[i], out[j], width)) continue;
+          if (!useShort) {
+            const si = shortOf(out[i].id), sj = shortOf(out[j].id);
+            if (si) out[i].label = si;
+            if (sj) out[j].label = sj;
+            clamp();
+          }
+          if (!this.overlaps(out[i], out[j], width)) continue;
+          if (out[i].side === out[j].side) out[j].side = out[i].side === "above" ? "below" : "above";
+        }
+      }
     };
-    if (netD && !netSep) line(netD, "rgba(245,165,36,.85)", [5, 4]);
-    if (poolD) line(poolD, "rgba(110,168,254,.8)", [3, 4]);
-    if (best) {
-      const y = yOf(best);
-      ctx.fillStyle = "#3ccf8e";
-      ctx.beginPath();
-      ctx.moveTo(w - padR - 1, y); ctx.lineTo(w - padR - 9, y - 5); ctx.lineTo(w - padR - 9, y + 5); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = "#3ccf8e"; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR - 10, y); ctx.stroke();
+    clamp(); resolve(); clamp(); resolve();
+    // Markers at the same point (e.g. best today == best ever) must sit on
+    // opposite sides even after later overlap flips.
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        if (out[i].id === "win" || out[j].id === "win") continue;
+        if (Math.abs(out[i].x - out[j].x) < 0.02 && out[i].side === out[j].side) {
+          out[j].side = out[i].side === "above" ? "below" : "above";
+        }
+      }
     }
-    this._pts = [];
-    for (let i = 0; i < pts0.length; i++) {
-      const pt = pts0[i], x = xOf(pt.t), y = yOf(pt.diff);
-      const r = 3.2 + Math.min(5, Math.sqrt(pt.n) - 1);
-      ctx.beginPath(); ctx.fillStyle = "rgba(245,165,36,.95)"; ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-      this._pts.push({ x, y, t: pt.t, diff: pt.diff, n: pt.n, r });
+    return out;
+  },
+  addTick(diff) {
+    const net = this.netDiff();
+    if (!(diff > 0) || !(net > 0)) return;
+    this._ticks.push({ x: this.logPos(diff, net), t: Date.now() });
+    if (this._ticks.length > 12) this._ticks = this._ticks.slice(-12);
+    this.drawMeter();
+  },
+  drawMeter() {
+    const host = $("#mineMeter"), bar = $("#mineBar"), fill = $("#mineFill"), bestEl = $("#mineBest");
+    if (!host || !bar) return;
+    const netOn = this.netOn(), net = this.netDiff(), ever = this.best(), today = this.bestToday(), pool = this.poolDiff();
+    const labs = $("#mineLabs");
+    const marks = $("#mineMarks");
+    const ticks = $("#mineTicks");
+    if (!netOn) {
+      if (fill) fill.style.width = "0";
+      if (bestEl) bestEl.textContent = "";
+      if (labs) labs.innerHTML = "";
+      if (marks) marks.innerHTML = "";
+      if (ticks) ticks.innerHTML = "";
+      host.classList.add("no-net");
+      return;
     }
-    // Time axis
-    ctx.font = "500 11px Geist, sans-serif"; ctx.fillStyle = "#5f656e"; ctx.textAlign = "center"; ctx.textBaseline = "top";
-    const ticks = 5;
-    let last = "";
-    for (let i = 0; i < ticks; i++) {
-      const t = t0 + span * (i / (ticks - 1));
-      const s = this.fmtAxisTime(t, span);
-      if (s === last) continue;
-      last = s;
-      const x = xOf(t);
-      ctx.textAlign = i === 0 ? "left" : (i === ticks - 1 ? "right" : "center");
-      ctx.fillText(s, x, h - padB + 8);
+    host.classList.remove("no-net");
+    const width = bar.clientWidth || host.clientWidth || 390;
+    const markers = [
+      { id: "pool", label: "Pool share needed", short: "Pool share", value: pool },
+      { id: "today", label: "Your best today", short: "Best today", value: today },
+      { id: "ever", label: "Your best ever", short: "Best ever", value: ever },
+      { id: "win", label: "Winning a block", short: "Winning a block", value: net },
+    ];
+    const placed = this.place(markers, net, width);
+    const evX = ever > 0 ? this.logPos(ever, net) * 100 : 0;
+    if (fill) fill.style.width = evX + "%";
+    if (marks) {
+      marks.innerHTML = placed.filter(p => p.id !== "win").map(p => {
+        const title = p.value > 0 ? p.label + " · " + big(p.value, 2) : p.label;
+        return `<i class="mine-mark" style="left:${(p.x * 100).toFixed(3)}%" title="${esc(title)}"></i>`;
+      }).join("");
     }
-    const leg = $("#mineLeg");
-    if (leg) {
-      const bits = [];
-      if (netD) bits.push(`<span><i style="background:var(--accent);height:2px"></i>Network difficulty <b class="num">${big(netD, 1)}</b></span>`);
-      else bits.push(`<span class="t3">Network difficulty isn't shown — network data is off</span>`);
-      if (poolD) bits.push(`<span><i style="background:var(--info);height:2px"></i>Pool difficulty <b class="num">${big(poolD, 1)}</b></span>`);
-      if (best) bits.push(`<span><i style="background:var(--good);height:2px"></i>Best share <b class="num">${big(best, 2)}</b></span>`);
-      leg.innerHTML = bits.join("");
+    if (labs) {
+      labs.innerHTML = placed.map(p => {
+        const title = p.value > 0 && p.id !== "win" ? p.label + " · " + big(p.value, 2) : p.label;
+        return `<span class="mine-lab ${p.side} a-${p.align}" style="left:${(p.x * 100).toFixed(3)}%" title="${esc(title)}">${esc(p.label)}</span>`;
+      }).join("");
     }
-    const mb = $("#mineBest");
-    if (mb) {
-      if (best && netD) mb.textContent = "Best share is " + pct(best / netD) + " of the way to a block";
-      else if (best) mb.textContent = "Best share " + big(best, 2);
-      else mb.textContent = "";
+    const now = Date.now();
+    this._ticks = (this._ticks || []).filter(tk => now - tk.t < 2600);
+    if (ticks) {
+      ticks.innerHTML = this._ticks.map(tk => `<i class="mine-tick" style="left:${(tk.x * 100).toFixed(3)}%"></i>`).join("");
+    }
+    if (bestEl) {
+      const o = S.lot && S.lot.odds;
+      const cl = o && isNum(o.best_share_closeness) ? +o.best_share_closeness : (ever > 0 && net > 0 ? ever / net : 0);
+      bestEl.textContent = ever > 0 && cl > 0 ? "Your best share is " + pct(cl) + " of the way to winning a block." : "";
+    }
+    if (this._ticks.length && !this._tickT) {
+      this._tickT = setTimeout(() => { this._tickT = 0; this.drawMeter(); }, 400);
     }
   },
-
-  fitAnim() {
-    const cv = $("#hashAnim"); if (!cv || !cv.parentElement) return;
-    const w = Math.max(120, cv.parentElement.clientWidth), h = 88;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + "px"; cv.style.height = h + "px"; }
-    return { cv, w, h, dpr };
+  drawOdds() {
+    const el = $("#mineOdds"); if (!el) return;
+    if (!this.netOn()) { el.textContent = ""; return; }
+    const o = S.lot && S.lot.odds;
+    const one = o && isNum(o.one_in_per_day) ? +o.one_in_per_day : 0;
+    if (!(one > 0)) { el.textContent = ""; return; }
+    const flips = Math.round(Math.log(one) / Math.LN2);
+    let s = "About a " + oneIn(one) + " chance per day";
+    if (flips >= 2) s += ", like flipping heads " + flips + " times in a row";
+    el.textContent = s + ".";
   },
-  visible() {
-    if (document.hidden) return false;
-    const sec = $("#secMining"); if (!sec) return false;
-    const r = sec.getBoundingClientRect();
-    return r.bottom > 0 && r.top < (window.innerHeight || 800);
-  },
-  startAnim() {
-    const still = typeof reducedMotion === "function" && reducedMotion();
-    if (still || !this.visible() || !$("#hashAnim")) { if (this._raf) cancelAnimationFrame(this._raf); this._raf = 0; this._on = false; this.paintAnim(true); return; }
-    if (this._on) return;
-    this._on = true; this._last = 0;
-    const tick = (ts) => {
-      if (!this._on) return;
-      if ((typeof reducedMotion === "function" && reducedMotion()) || !this.visible()) { this._on = false; this._raf = 0; this.paintAnim(true); return; }
-      if (!this._last || ts - this._last >= 50) { this._last = ts; this.paintAnim(false); }
-      this._raf = requestAnimationFrame(tick);
-    };
-    this._raf = requestAnimationFrame(tick);
-  },
-  paintAnim(still) {
-    const sz = this.fitAnim(); if (!sz) return;
-    const { cv, w, h, dpr } = sz, ctx = cv.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    if (!this._parts) {
-      this._parts = [];
-      for (let i = 0; i < 28; i++) this._parts.push({ x: Math.random() * w, y: 12 + Math.random() * (h - 24), r: 0.8 + Math.random() * 1.4, a: 0.18 + Math.random() * 0.28 });
+  drawFeed() {
+    const el = $("#mineFeed"); if (!el) return;
+    const hits = S.hits || [];
+    const best = this.best();
+    const rows = [];
+    for (let i = hits.length - 1; i >= 0 && rows.length < 8; i--) {
+      const h = hits[i];
+      if (!h) continue;
+      const n = h.n >= 1 ? h.n : 1;
+      let line = n === 1 ? "Share found" : n + " shares found";
+      if (h.diff > 0) line += (n === 1 ? " · " : " · latest ") + si(h.diff, 1);
+      if (h.t) line += " · <span data-rel=\"" + h.t + "\">" + rel(h.t) + "</span>";
+      const isBest = h.diff > 0 && best > 0 && h.diff >= best * 0.999 && h.diff <= best * 1.001;
+      rows.push(`<li class="${isBest ? "best" : ""}">${isBest ? '<span class="mine-pb">New best share!</span>' : ""}<span>${line}</span></li>`);
     }
-    const hv = heroVal() || 0;
-    const spd = still ? 0 : (0.35 + Math.min(4, hv) * 0.55);
-    const parts = this._parts;
-    if (this._flash > 0) this._flash = Math.max(0, this._flash - (still ? 1 : 0.12));
-    for (let i = 0; i < parts.length; i++) {
-      const p = parts[i];
-      if (!still) { p.x += spd * (0.6 + p.r); if (p.x > w + 4) p.x = -4; }
-      ctx.beginPath(); ctx.fillStyle = "rgba(245,165,36," + p.a + ")"; ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-    }
-    if (this._flash > 0) {
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(245,165,36," + (0.22 * this._flash) + ")";
-      ctx.arc(w * 0.72, h * 0.5, 10 + (1 - this._flash) * 22, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    el.innerHTML = rows.join("") || '<li class="empty">Shares will appear here as the miner finds them.</li>';
   }
 };
 
@@ -1847,7 +1738,7 @@ const opt = (k) => !(S.state && S.state.optional && S.state.optional[k] === fals
 
 async function loadLotto() {
   if (!S.miner || !$("#secLotto")) return;
-  try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); if (typeof MINING !== "undefined") MINING.draw(); } catch (e) {}
+  try { S.lot = await api("/api/lottery?miner=" + encodeURIComponent(S.miner.id)); LOTTO.update(); if (typeof MINING !== "undefined") MINING.update(); } catch (e) {}
 }
 async function loadFeatures() {
   clearTimeout(S.featT);
@@ -1870,7 +1761,8 @@ const LOTTO = {
     const L = S.lot; if (!L || !$("#lotGrid")) return;
     const o = L.odds || {}, st = L.stats || {}, net = L.net || {}, rw = L.reward;
     $("#lotNet").innerHTML = !net.network_on ? `${ic("eye-off", "sm")}Network data off` : L.difficulty ? `difficulty <b class="num">${big(L.difficulty, 1)}</b>${net.network_stale ? ' · <span style="color:var(--warn)">stale</span>' : ""}` : "waiting for network data…";
-    const has = o.difficulty > 0 && o.hashrate_hs > 0;
+    const minerOn = !(S.data && S.data.ok === false) && o.hashrate_hs > 0;
+    const has = o.difficulty > 0 && minerOn;
     const T = (icn, k, v, sub, cls) => `<div class="lot-t ${cls || ""}"><div class="label">${ic(icn, "sm")}${k}</div><div class="lot-v num">${v}</div><div class="sub">${sub}</div></div>`;
     $("#lotGrid").innerHTML =
       T("dice-5", "Chance today", has ? oneIn(o.one_in_per_day) : "—", has ? `${pct(o.per_day)} per day · ${pct(o.per_year)} per year` : "needs hashrate and network difficulty", "hl") +

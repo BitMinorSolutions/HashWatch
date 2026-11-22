@@ -157,10 +157,28 @@ func hashrateHs(snap *model.Snapshot) float64 {
 	return 0
 }
 
-// oddsHashrate is the hashrate used for the odds (15-minute average when available).
+// oddsHashrate is the hashrate used for the odds, in H/s: the same live
+// headline as the dashboard (GHSspd / ths_hero), then MHS 1m, then MHS 5m.
+// A present-but-zero GHSspd is a live reading of "not hashing", not a reason
+// to fall back to a share-based average.
 func oddsHashrate(snap *model.Snapshot) float64 {
+	if snap == nil {
+		return 0
+	}
 	h := snap.Hashrate
-	for _, p := range []*float64{h.THs15m, h.THs5m, h.THs1m, h.THsAvg} {
+	if h.THsHero != nil {
+		if *h.THsHero > 0 {
+			return *h.THsHero * 1e12
+		}
+		return 0
+	}
+	if h.GHsSpd != nil {
+		if *h.GHsSpd > 0 {
+			return *h.GHsSpd * 1e9
+		}
+		return 0
+	}
+	for _, p := range []*float64{h.THs1m, h.THs5m} {
 		if p != nil && *p > 0 {
 			return *p * 1e12
 		}

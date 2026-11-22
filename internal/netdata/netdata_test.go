@@ -165,3 +165,71 @@ func TestTimeUntil(t *testing.T) {
 		t.Fatalf("both off: %v", d)
 	}
 }
+
+func TestNetworkFallsBackToDifficulty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/blocks":
+			http.Error(w, "down", 503)
+		case "/q/getdifficulty":
+			w.Write([]byte("1.34823837323273E14\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	f := New(t.TempDir())
+	f.Base = srv.URL + "/api"
+	f.Client = srv.Client()
+	f.DiffFallback = srv.URL + "/q/getdifficulty"
+	if err := f.RefreshNetwork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := f.Get()
+	if s.Difficulty < 1.34e14 || s.Difficulty > 1.35e14 || s.Source != "blockchain.info" {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestPriceFallsBackToCoinGecko(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/prices":
+			http.Error(w, "down", 503)
+		case "/gecko":
+			w.Write([]byte(`{"bitcoin":{"usd":60887}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	f := New(t.TempDir())
+	f.Base = srv.URL + "/api"
+	f.Client = srv.Client()
+	f.PriceFallback = srv.URL + "/gecko"
+	if err := f.RefreshPrice(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := f.Get()
+	if s.PriceUSD != 60887 || s.PriceSource != "coingecko" {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestCustomStubDoesNotCallPublicFallback(t *testing.T) {
+	// A test (or private) Base with no fallback URLs must not be considered
+	// "default mempool.space" just because the primary failed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", 503)
+	}))
+	defer srv.Close()
+	f := New(t.TempDir())
+	f.Base = srv.URL + "/api"
+	f.Client = srv.Client()
+	if err := f.RefreshNetwork(context.Background()); err == nil {
+		t.Fatal("want error, not a public fallback")
+	}
+	if err := f.RefreshPrice(context.Background()); err == nil {
+		t.Fatal("want price error, not a public fallback")
+	}
+}

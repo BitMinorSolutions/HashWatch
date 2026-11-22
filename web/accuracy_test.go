@@ -136,15 +136,19 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	for _, s := range []string{
 		"Live (chip-reported)",
 		`id="secMining"`,
-		`id="mineCv"`,
-		`id="hashAnim"`,
-		"Illustration — not individual hashes",
-		"If several shares land between readings, the latest is shown with a count. Other difficulties are not invented.",
+		`id="mineStory"`,
+		`id="mineMeter"`,
+		`id="mineOdds"`,
+		`id="mineFeed"`,
+		"How close have we gotten?",
+		"Your miner is guessing about ",
 		"New block found by the network",
-		"Best share is ",
-		"of the way to a block",
+		"of the way to winning a block",
+		"like flipping heads ",
+		"New best share!",
+		" shares found",
+		" · latest ",
 		"prefers-reduced-motion",
-		"visibilitychange",
 	} {
 		if !strings.Contains(js, s) && !strings.Contains(css, s) {
 			t.Errorf("Mining / hero UI missing %q", s)
@@ -156,26 +160,22 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	if strings.Contains(js, "· 5-minute average") {
 		t.Fatal("headline must not still call the main number a 5-minute average")
 	}
-	if !strings.Contains(js, "MINING.draw()") {
-		t.Fatal("lottery load must redraw the share-hits chart so network difficulty is not left blank")
+	if !strings.Contains(js, "MINING.update()") {
+		t.Fatal("lottery load must refresh the Mining view so odds and the meter stay in sync")
 	}
-	for _, s := range []string{
+	for _, gone := range []string{
+		`id="hashAnim"`,
+		`id="mineCv"`,
+		"Illustration — not individual hashes",
+		"Share hits",
 		"timeWindow(",
 		"bucketHits(",
 		"shareAxis(",
-		"wireTip()",
-		"fmtAxisTime(",
-		`id="mineTip"`,
+		"startAnim(",
 		`fillText("×`,
 	} {
-		if s == `fillText("×` {
-			if strings.Contains(js, s) {
-				t.Fatal("share-hits chart must not paint overlapping ×N labels on the canvas")
-			}
-			continue
-		}
-		if !strings.Contains(js, s) {
-			t.Errorf("share-hits chart missing %q", s)
+		if strings.Contains(js, gone) || strings.Contains(css, gone) {
+			t.Errorf("removed Mining chart/animation still present: %q", gone)
 		}
 	}
 	if strings.Contains(js, "for (let i = 0; i < hits.length; i++) if (hits[i].diff > b) b = hits[i].diff") {
@@ -190,13 +190,13 @@ func TestOfflineHidesHashrateUnit(t *testing.T) {
 	}
 }
 
-func TestShareHitsChartUsesDataWindow(t *testing.T) {
+func TestLotteryOddsFollowLiveHeadlineAndHideWhenOffline(t *testing.T) {
 	js := appJS(t)
-	if !strings.Contains(js, "minWindow: 45 * 60") {
-		t.Fatal("time axis should fit the data with a 45-minute minimum window")
+	if !strings.Contains(js, "const minerOn = !(S.data && S.data.ok === false) && o.hashrate_hs > 0;") {
+		t.Fatal("lottery chance/time must hide when the miner is offline")
 	}
-	if strings.Contains(js, "now - (S.range || 3600)") {
-		t.Fatal("share-hits x-axis must not be locked to the hashrate 1H/6H/24H selector")
+	if !strings.Contains(js, "one_in_per_day") || !strings.Contains(js, "like flipping heads") {
+		t.Fatal("Mining odds sentence must use the lottery card's one_in_per_day")
 	}
 }
 

@@ -213,7 +213,8 @@ func (s *Stats) MaybeDailySummary(id, name string, snap *model.Snapshot, hist []
 	var hs float64
 	if snap != nil && snap.OK {
 		hs = oddsHashrate(snap)
-	} else if w.AvgTHs > 0 {
+	}
+	if hs == 0 && w.AvgTHs > 0 {
 		hs = w.AvgTHs * 1e12
 	}
 	odds := lottery.Compute(hs, net.Difficulty, w.BestShare)
