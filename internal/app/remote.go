@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/qr"
+	"github.com/hashwatch/hashwatch/internal/tunnel"
 )
 
 var remoteMu sync.Mutex // serialises enable/disable
@@ -17,10 +18,53 @@ func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"app": AppName, "app_id": AppID, "id": s.InstanceID, "pid": os.Getpid(), "version": s.Version})
 }
 
+// Share: the Cloudflare tunnel only ever hands out the view-only link
+// (tunnel URL + /v/<token>). The tunnel's own address, where an admin would
+// sign in, is never shown, and nothing but watching works through it.
+
+// shareURL is the link to send people, or "" while the tunnel isn't up.
+func (s *Server) shareURL() string {
+	if s.Tunnel == nil {
+		return ""
+	}
+	u := s.Tunnel.Status().URL
+	s.Cfg.mu.Lock()
+	tok := s.Cfg.Security.ViewLink
+	s.Cfg.mu.Unlock()
+	if u == "" || tok == "" {
+		return ""
+	}
+	return strings.TrimRight(u, "/") + "/v/" + tok
+}
+
+// shareStatus is the tunnel status with the share link in place of the tunnel's address.
+func (s *Server) shareStatus() tunnel.Status {
+	if s.Tunnel == nil {
+		return tunnel.Status{State: "off"}
+	}
+	st := s.Tunnel.Status()
+	st.URL = s.shareURL()
+	return st
+}
+
+// EnsureShareLink makes sure a view-only link token exists (Share on, or an
+// older config that had remote access on).
+func (s *Server) EnsureShareLink() {
+	s.Cfg.mu.Lock()
+	made := s.Cfg.Security.ViewLink == ""
+	if made {
+		s.Cfg.Security.ViewLink = randToken(18)
+	}
+	s.Cfg.mu.Unlock()
+	if made {
+		s.Cfg.Save()
+	}
+}
+
 func (s *Server) remoteBrief() map[string]any {
 	out := map[string]any{"available": s.Tunnel != nil && !s.Locked, "enabled": s.Cfg.Remote.Enabled}
 	if s.Tunnel != nil {
-		st := s.Tunnel.Status()
+		st := s.shareStatus()
 		out["state"], out["url"] = st.State, st.URL
 	}
 	return out
@@ -29,12 +73,12 @@ func (s *Server) remoteBrief() map[string]any {
 func (s *Server) remoteGet(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"available": s.Tunnel != nil && !s.Locked, "enabled": s.Cfg.Remote.Enabled,
 		"local_viewer": IsLocal(r), "password_set": s.Cfg.PasswordHash != "", "hostname": s.Cfg.Remote.Hostname,
-		"named": s.Cfg.Remote.Token != "", "last_url": s.Cfg.Remote.LastURL}
+		"named": s.Cfg.Remote.Token != ""}
 	if s.Locked {
-		out["note"] = "Remote access is turned off in this preview. In your own copy of " + AppName + " you can switch it on here."
+		out["note"] = "Share is turned off in this preview. In your own copy of " + AppName + " you can switch it on here."
 	}
 	if s.Tunnel != nil {
-		out["status"] = s.Tunnel.Status()
+		out["status"] = s.shareStatus()
 	}
 	if s.AutoStart.Exe != "" {
 		st := autostart.Get(s.AutoStart)
@@ -48,7 +92,7 @@ func (s *Server) remoteGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) remoteQR(w http.ResponseWriter, r *http.Request) {
 	u := r.URL.Query().Get("u")
-	if s.Tunnel == nil || u == "" || u != s.Tunnel.Status().URL { // only ever encodes our own link
+	if s.Tunnel == nil || u == "" || u != s.shareURL() { // only ever encodes our own share link
 		http.NotFound(w, r)
 		return
 	}
@@ -64,7 +108,7 @@ func (s *Server) remoteQR(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) remoteSet(w http.ResponseWriter, r *http.Request) {
 	if s.Tunnel == nil || s.Locked {
-		writeJSON(w, 403, map[string]string{"error": "Remote access is turned off in this preview."})
+		writeJSON(w, 403, map[string]string{"error": "Share is turned off in this preview."})
 		return
 	}
 	var b struct {
@@ -101,7 +145,7 @@ func (s *Server) remoteSet(w http.ResponseWriter, r *http.Request) {
 	if b.Enabled {
 		if s.Cfg.PasswordHash == "" {
 			if len(b.Password) < 6 {
-				writeJSON(w, 412, map[string]string{"error": "Create a password (at least 6 characters) first. Anyone with the link will need it."})
+				writeJSON(w, 412, map[string]string{"error": "Create a password (at least 6 characters) first. It keeps your settings safe; people you share with don't need it."})
 				return
 			}
 			s.Cfg.SetPassword(b.Password)
@@ -110,17 +154,23 @@ func (s *Server) remoteSet(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			s.issue(w, r, RoleAdmin)
 		}
+		s.EnsureShareLink()
 		s.Cfg.Remote.Enabled = true
 		s.Tunnel.Start()
 	} else {
+		// Off: the tunnel stops and the link dies with it, right away.
+		s.Cfg.mu.Lock()
 		s.Cfg.Remote.Enabled = false
+		s.Cfg.Security.ViewLink = ""
+		s.Cfg.mu.Unlock()
 		s.Tunnel.Stop()
+		s.revokeShare()
 	}
 	if err := s.Cfg.Save(); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "status": s.Tunnel.Status()})
+	writeJSON(w, 200, map[string]any{"ok": true, "status": s.shareStatus()})
 }
 
 func deref(p *string) string {
@@ -136,11 +186,16 @@ func (s *Server) TunnelURL(u string) {
 	s.Cfg.mu.Lock()
 	old := s.Cfg.Remote.LastURL
 	s.Cfg.Remote.LastURL = u
+	tok := s.Cfg.Security.ViewLink
 	s.Cfg.mu.Unlock()
 	s.Cfg.Save()
 	if old != "" && old != u && s.Alerts != nil {
-		s.Alerts.Fire(Alert{Kind: "link", Level: "info", Title: "New remote link", URL: u,
-			Body: "Your remote link changed. Open " + AppName + " at home and re-scan the QR code on your phone."})
+		share := ""
+		if tok != "" {
+			share = strings.TrimRight(u, "/") + "/v/" + tok
+		}
+		s.Alerts.Fire(Alert{Kind: "link", Level: "info", Title: "New share link", URL: share,
+			Body: "Your share link changed. Send the new link to anyone you share with."})
 	}
 }
 

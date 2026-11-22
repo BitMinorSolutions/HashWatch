@@ -334,7 +334,7 @@ func (s *macShell) buildStatusItem() {
 	s.itHash.Send(sel("setEnabled:"), false)
 	s.itDetail = s.item("", "", "", 0)
 	s.itDetail.Send(sel("setEnabled:"), false)
-	s.itRemote = s.own("Remote access", "toggleRemote:", "")
+	s.itRemote = s.own("Share my dashboard", "toggleRemote:", "")
 	m := menu(s.o.Name,
 		s.itHash, s.itDetail, sep(),
 		s.own("Open Dashboard", "openDashboard:", ""),
@@ -395,9 +395,9 @@ func (s *macShell) refreshMenu() {
 		state = 1
 	}
 	s.itRemote.Send(sel("setState:"), state)
-	t := "Remote access"
+	t := "Share my dashboard"
 	if st.Remote && st.RemoteURL == "" {
-		t = "Remote access (connecting…)"
+		t = "Share my dashboard (connecting…)"
 	}
 	s.itRemote.Send(sel("setTitle:"), nsstr(t))
 }
@@ -411,7 +411,7 @@ func (s *macShell) toggleRemote() {
 		return
 	}
 	if err != nil {
-		log.Printf("remote access: %v", err)
+		log.Printf("share: %v", err)
 	}
 	s.refreshMenu()
 }

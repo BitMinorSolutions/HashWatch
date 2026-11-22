@@ -31,7 +31,7 @@ VIAddVersionKey "LegalCopyright" "${TAGLINE}"
 !define MUI_UNICON "HashWatch.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Install ${NAME}"
-!define MUI_WELCOMEPAGE_TEXT "${NAME} watches your Avalon miners: hashrate, temperature, alerts and remote access from your phone.$\r$\n$\r$\n${TAGLINE}"
+!define MUI_WELCOMEPAGE_TEXT "${NAME} watches your Avalon miners: hashrate, temperature, alerts, and a view-only link you can share.$\r$\n$\r$\n${TAGLINE}"
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Open ${NAME} now"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchApp

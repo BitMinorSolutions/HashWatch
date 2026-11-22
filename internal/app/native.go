@@ -20,7 +20,7 @@ import (
 
 // Hooks used by the native app shells (macOS menu bar / Windows tray).
 
-// ErrNeedPassword means remote access can't be switched on until a password exists.
+// ErrNeedPassword means Share can't be switched on until a password exists.
 var ErrNeedPassword = errors.New("set a password first")
 
 // MenuStatus is what the menu bar / tray shows.
@@ -85,27 +85,33 @@ func (s *Server) Status() MenuStatus {
 	ms.RemoteOK = s.Tunnel != nil && !s.Locked
 	ms.Remote = s.Cfg.Remote.Enabled
 	if s.Tunnel != nil {
-		ms.RemoteURL = s.Tunnel.Status().URL
+		ms.RemoteURL = s.shareURL()
 	}
 	return ms
 }
 
-// SetRemote switches remote access from a native menu (the UI's password flow is
+// SetRemote switches Share on or off from a native menu (the UI's password flow is
 // needed the first time, so it returns ErrNeedPassword when none is set).
 func (s *Server) SetRemote(on bool) error {
 	if s.Tunnel == nil || s.Locked {
-		return errors.New("remote access isn't available here")
+		return errors.New("sharing isn't available here")
 	}
 	remoteMu.Lock()
 	defer remoteMu.Unlock()
 	if on && s.Cfg.PasswordHash == "" {
 		return ErrNeedPassword
 	}
-	s.Cfg.Remote.Enabled = on
 	if on {
+		s.EnsureShareLink()
+		s.Cfg.Remote.Enabled = true
 		s.Tunnel.Start()
 	} else {
+		s.Cfg.mu.Lock()
+		s.Cfg.Remote.Enabled = false
+		s.Cfg.Security.ViewLink = ""
+		s.Cfg.mu.Unlock()
 		s.Tunnel.Stop()
+		s.revokeShare()
 	}
 	return s.Cfg.Save()
 }

@@ -366,7 +366,7 @@ func TestFailoverViewOnlyAndPreviewAPI(t *testing.T) {
 	if r, _ := admin.do("POST", "/api/security/view", `{"password":"lookonly"}`); r.StatusCode != 200 {
 		t.Fatal("view password")
 	}
-	viewer := &tclient{t: t, ts: ts, ip: "203.0.113.80"}
+	viewer := &tclient{t: t, ts: ts}
 	if r, _ := viewer.do("POST", "/api/login", `{"password":"lookonly"}`); r.StatusCode != 200 {
 		t.Fatal("view login")
 	}

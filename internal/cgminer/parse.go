@@ -231,7 +231,7 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 		s.Power.Watts, s.Power.VoltageV, s.Power.PSOK = &w, &v, &okPS
 	}
 	s.Power.MPOW = f("MPO")
-	s.Power.WorkLevel = intp(f("WORKLEVEL"))
+	s.Power.WorkLevel = intp(workLevel(mm))
 
 	s.Chips = model.Chips{Temps: nums(mm["PVT_T0"]), VoltsMV: nums(mm["PVT_V0"]), Nonces: nums(mm["MW0"])}
 	s.Errors = model.Errors{ECHU: nums(mm["ECHU"]), ECMM: f("ECMM"), HashStatus: intp(f("HashStatus")), SoftOff: f("SoftOFF"),
@@ -316,7 +316,7 @@ func Warnings(s *model.Snapshot) []string {
 		w = append(w, fmt.Sprintf("Max chip temperature %.0f°C is above the %.0f°C target.", *s.Temps.Max, *s.Temps.Target))
 	}
 	if s.Shares.DHPct != nil && *s.Shares.DHPct >= 1 {
-		w = append(w, fmt.Sprintf("Device hardware error rate is %.3f%%.", *s.Shares.DHPct))
+		w = append(w, fmt.Sprintf("Chip error rate (DH) is %.3f%%.", *s.Shares.DHPct))
 	}
 	if s.Errors.HashStatus != nil && *s.Errors.HashStatus != 1 {
 		w = append(w, fmt.Sprintf("Hash board reports status %d (not hashing).", *s.Errors.HashStatus))
@@ -349,16 +349,23 @@ func LEDModeName(n int) string {
 	return fmt.Sprintf("mode %d", n)
 }
 
+// workLevel is the work speed the owner set (0 low, 1 medium, 2 high).
+// The Nano 3S reports both WORKMODE and WORKLEVEL; WORKMODE is the setting
+// (what "ascset workmode,set,N" writes and the Avalon app shows) and WORKLEVEL
+// stays 0 there. The Nano 3 reports only WORKLEVEL.
+func workLevel(mm map[string]string) *float64 {
+	if v := num(mm["WORKMODE"]); v != nil {
+		return v
+	}
+	return num(mm["WORKLEVEL"])
+}
+
 // ControlState reads work level and light settings from the MM fields.
-// WORKLEVEL (fallback WORKMODE) is the work speed. LEDUser[effect-bright-temper-r-g-b]
+// See workLevel for the work speed. LEDUser[effect-bright-temper-r-g-b]
 // is the light on firmwares that report it (Nano 3S); otherwise Led[n] gives the effect only.
 func ControlState(mm map[string]string) *model.Control {
 	c := &model.Control{}
-	lv := num(mm["WORKLEVEL"])
-	if lv == nil {
-		lv = num(mm["WORKMODE"])
-	}
-	if lv != nil {
+	if lv := workLevel(mm); lv != nil {
 		c.WorkLevel = intp(lv)
 		c.WorkName = WorkName(*c.WorkLevel)
 	}

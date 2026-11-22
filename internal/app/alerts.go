@@ -37,7 +37,7 @@ var AlertKinds = []AlertKind{
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
 	{"temp", "Running hot", "Max chip temperature above the miner's own target (or 90 °C if it reports none) for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
-	{"link", "Remote link changed", "When the remote-access link changes, so you can re-scan it."},
+	{"link", "Share link changed", "When your share link changes, so you can send the new one."},
 	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
 	{"badge", "Badges", "When you earn a badge (streaks, big shares, ticket milestones)."},
 	{"summary", "Daily / weekly summary", "Average hashrate, time online, best share and tickets for the day or week."},

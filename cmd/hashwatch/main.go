@@ -310,8 +310,9 @@ func main() {
 		}
 		srv.AutoStart = autostart.Spec{Exe: autostart.Exe(), Args: args, Dir: absPath(*dir), AppName: app.AppName}
 		if cfg.Remote.Enabled && cfg.PasswordHash != "" {
+			srv.EnsureShareLink() // older configs: remote access on becomes Share on
 			srv.Tunnel.Start()
-			fmt.Println("  Remote access: starting…")
+			fmt.Println("  Share: starting…")
 		}
 	}
 	if *remote == "" || private {

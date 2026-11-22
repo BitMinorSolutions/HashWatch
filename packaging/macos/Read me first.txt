@@ -32,7 +32,7 @@ Allow notifications too if you want alerts as Mac notifications.
 USING IT
 - HashWatch opens in its own window. Closing the window keeps it running in the
   menu bar (the hexagon icon at the top right): live hashrate, Open Dashboard,
-  Remote access on/off, Quit.
+  Share my dashboard on/off, Quit.
 - Quit fully: HashWatch menu > Quit HashWatch (Cmd-Q), or the menu bar icon > Quit.
 - Settings: HashWatch menu > Settings (Cmd-,).
 
@@ -42,7 +42,7 @@ HashWatch is fully independent of any other dashboard on the same Mac or network
 - Its own port (48412, or the next free one). It never uses a port another program
   answers on and checks that its own address really reaches HashWatch.
 - Its own folder: ~/Library/Application Support/Hashwatch. Nothing else is read or written.
-- Remote access uses HashWatch's own copy of cloudflared in that folder and its own
+- Share uses HashWatch's own copy of cloudflared in that folder and its own
   tunnel. It never touches, reuses or stops any other cloudflared or other program.
 - Installing HashWatch never changes your miner. The work speed schedule, backup
   pool failover and the light effects (block-found gold flash, status lamp,

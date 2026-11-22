@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -76,6 +75,9 @@ func trimUA(ua string) string {
 // role is the caller's role, or "" when not signed in. With no password set,
 // visitors on this computer / home network are admin; nobody gets in through
 // the remote link without a password.
+//
+// Through the share link (the Cloudflare tunnel) only view-only sessions
+// count: an admin session, even a cookie copied from home, is ignored there.
 func (s *Server) role(r *http.Request) string {
 	if s.Cfg.PasswordHash == "" {
 		if viaTunnel(r) {
@@ -84,10 +86,16 @@ func (s *Server) role(r *http.Request) string {
 		return RoleAdmin
 	}
 	if se := s.sessionOf(r); se != nil {
+		if viaTunnel(r) && se.Role != RoleView {
+			return ""
+		}
 		return se.Role
 	}
 	return ""
 }
+
+// ErrShareOnly is the answer to anything but watching through the share link.
+const ErrShareOnly = "This HashWatch is shared by link only. Sign-in and changes aren't available through a share link."
 
 func (s *Server) authed(r *http.Request) bool { return s.role(r) != "" }
 
@@ -104,6 +112,10 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 // adminOnly refuses view-only sessions (read endpoints that reveal links, IPs or settings).
 func (s *Server) adminOnly(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if viaTunnel(r) {
+			writeJSON(w, 403, map[string]string{"error": ErrShareOnly})
+			return
+		}
 		if s.role(r) != RoleAdmin {
 			writeJSON(w, 403, map[string]string{"error": ErrViewOnly})
 			return
@@ -228,6 +240,10 @@ func tooMany(w http.ResponseWriter, wait time.Duration) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ip, remote := clientIP(r), viaTunnel(r)
+	if remote { // share link: view-only by link, no password sign-in at all
+		writeJSON(w, 403, map[string]string{"error": "Sign-in isn't available through a share link."})
+		return
+	}
 	if wait := s.blocked(ip, remote); wait > 0 {
 		tooMany(w, wait)
 		return
@@ -268,9 +284,9 @@ func (s *Server) viewLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	want, got := s.Cfg.Security.ViewLink, r.PathValue("token")
-	if want == "" || s.Cfg.PasswordHash == "" || subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
+	if want == "" || !s.Cfg.Remote.Enabled || s.Cfg.PasswordHash == "" || subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
 		s.fail(ip, remote)
-		http.Error(w, "This view-only link is no longer valid.", http.StatusNotFound)
+		http.Error(w, "This share link is no longer valid.", http.StatusNotFound)
 		return
 	}
 	s.succeed(ip)
@@ -305,18 +321,10 @@ func (s *Server) revokeAll(keep func(*session) bool) int {
 func (s *Server) securityGet(w http.ResponseWriter, r *http.Request) {
 	sec := s.Cfg.Security
 	out := map[string]any{"password_set": s.Cfg.PasswordHash != "",
-		"view_password_set": sec.ViewHash != "", "view_link_on": sec.ViewLink != "",
-		"remote_on": s.Cfg.Remote.Enabled, "lockout": map[string]any{"free_tries": freeTries, "max_lock_min": int(maxLock.Minutes()),
+		"view_password_set": sec.ViewHash != "",
+		"remote_on":         s.Cfg.Remote.Enabled, "lockout": map[string]any{"free_tries": freeTries, "max_lock_min": int(maxLock.Minutes()),
 			"remote_max": globalMax, "remote_window_min": int(globalWindow.Minutes())},
 		"signing_note": "The Mac app isn't signed with an Apple Developer ID yet (that needs a paid Apple account), so macOS asks you to confirm the first launch."}
-	if sec.ViewLink != "" {
-		out["view_link_path"] = "/v/" + sec.ViewLink
-		if s.Tunnel != nil {
-			if u := s.Tunnel.Status().URL; u != "" {
-				out["view_link_url"] = strings.TrimRight(u, "/") + "/v/" + sec.ViewLink
-			}
-		}
-	}
 	writeJSON(w, 200, out)
 }
 
@@ -352,45 +360,23 @@ func (s *Server) viewPassword(w http.ResponseWriter, r *http.Request) {
 	s.securityGet(w, r)
 }
 
-func (s *Server) viewLinkSet(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Action string }
-	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&b)
-	if s.Cfg.PasswordHash == "" {
-		writeJSON(w, 409, map[string]string{"error": "Set your main password first."})
-		return
-	}
-	s.Cfg.mu.Lock()
-	switch b.Action {
-	case "create", "rotate":
-		s.Cfg.Security.ViewLink = randToken(18)
-	case "off":
-		s.Cfg.Security.ViewLink = ""
-	default:
-		s.Cfg.mu.Unlock()
-		writeJSON(w, 400, map[string]string{"error": "action must be create, rotate or off"})
-		return
-	}
-	s.Cfg.mu.Unlock()
-	s.Cfg.Save()
-	// the old link's viewers lose access
-	s.revokeAll(func(se *session) bool { return se.Via != "view-link" })
-	s.securityGet(w, r)
-}
-
-// remoteRotate gets a new free link (and signs out everyone who came in through the old one).
+// remoteRotate is "New link": a new share token; everyone using the old link is signed out.
 func (s *Server) remoteRotate(w http.ResponseWriter, r *http.Request) {
 	if s.Tunnel == nil || s.Locked || !s.Cfg.Remote.Enabled {
-		writeJSON(w, 409, map[string]string{"error": "Turn on remote access first."})
-		return
-	}
-	if s.Cfg.Remote.Token != "" {
-		writeJSON(w, 409, map[string]string{"error": "Your permanent link can't be rotated here. Use “Sign out everywhere” instead, or change the hostname in Cloudflare."})
+		writeJSON(w, 409, map[string]string{"error": "Turn on Share first."})
 		return
 	}
 	remoteMu.Lock()
-	s.Tunnel.Stop()
-	s.Tunnel.Start()
+	s.Cfg.mu.Lock()
+	s.Cfg.Security.ViewLink = randToken(18)
+	s.Cfg.mu.Unlock()
+	s.Cfg.Save()
+	n := s.revokeShare()
 	remoteMu.Unlock()
-	n := s.revokeAll(func(se *session) bool { return !se.Remote })
-	writeJSON(w, 200, map[string]any{"ok": true, "signed_out": n, "status": s.Tunnel.Status()})
+	writeJSON(w, 200, map[string]any{"ok": true, "signed_out": n, "status": s.shareStatus()})
+}
+
+// revokeShare signs out everyone who came in through the share link.
+func (s *Server) revokeShare() int {
+	return s.revokeAll(func(se *session) bool { return se.Via != "view-link" && !se.Remote })
 }

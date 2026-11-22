@@ -102,7 +102,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v/{token}", s.viewLink)
 	mux.HandleFunc("GET /api/security", s.auth(s.adminOnly(s.securityGet)))
 	mux.HandleFunc("POST /api/security/view", s.auth(s.admin(s.viewPassword)))
-	mux.HandleFunc("POST /api/security/viewlink", s.auth(s.admin(s.viewLinkSet)))
 	mux.HandleFunc("POST /api/sessions/revoke", s.auth(s.mutating(s.sessionsRevoke)))
 	mux.HandleFunc("GET /api/lottery", s.auth(s.lotteryGet))
 	mux.HandleFunc("GET /api/features", s.auth(s.featuresGet))
@@ -186,6 +185,10 @@ func (s *Server) mutatingFirst(firstPassword bool, h http.HandlerFunc) http.Hand
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Locked {
 			writeJSON(w, 403, map[string]string{"error": "Settings are locked in this preview."})
+			return
+		}
+		if viaTunnel(r) { // the share link is view-only, whatever the session
+			writeJSON(w, 403, map[string]string{"error": ErrShareOnly})
 			return
 		}
 		if s.role(r) == RoleView {
@@ -284,7 +287,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	role := s.role(r)
 	ok := role != ""
 	out := map[string]any{"role": role, "view_only": role == RoleView, "optional": Optional, "app": AppName, "version": s.Version, "auth_required": s.Cfg.PasswordHash != "", "authed": ok,
-		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !ServiceMode(), "tagline": Tagline, "shell": s.Shell, "service": ServiceMode()}
+		"locked": s.Locked, "poll_seconds": int(s.Poll.Every / time.Second), "can_quit": s.Quit != nil && !ServiceMode(), "tagline": Tagline, "shell": s.Shell, "service": ServiceMode(), "shared": viaTunnel(r)}
 	if pi := s.piBrief(r); pi != nil {
 		out["pi"] = pi
 	}
@@ -434,7 +437,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.New == "" && s.Cfg.Remote.Enabled {
-		writeJSON(w, 409, map[string]string{"error": "Turn off remote access before removing the password."})
+		writeJSON(w, 409, map[string]string{"error": "Turn off Share before removing the password."})
 		return
 	}
 	if b.New != "" && len(b.New) < 6 {

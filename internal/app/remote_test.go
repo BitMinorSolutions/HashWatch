@@ -3,6 +3,7 @@ package app
 import (
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,14 @@ func TestRemoteAccessGuards(t *testing.T) {
 	if rr := get("/api/remote/qr.svg?u=https://evil.example"); rr.StatusCode != 404 {
 		t.Fatalf("foreign QR: %d", rr.StatusCode)
 	}
-	rr := get("/api/remote/qr.svg?u=https://test-link-abc.trycloudflare.com")
+	if rr := get("/api/remote/qr.svg?u=https://test-link-abc.trycloudflare.com"); rr.StatusCode != 404 {
+		t.Fatalf("QR of the admin address: %d", rr.StatusCode)
+	}
+	share := s.shareURL()
+	if !strings.HasPrefix(share, "https://test-link-abc.trycloudflare.com/v/") {
+		t.Fatalf("share url %q", share)
+	}
+	rr := get("/api/remote/qr.svg?u=" + url.QueryEscape(share))
 	b, _ := io.ReadAll(rr.Body)
 	if rr.StatusCode != 200 || !strings.HasPrefix(string(b), "<svg") {
 		t.Fatalf("qr: %d", rr.StatusCode)

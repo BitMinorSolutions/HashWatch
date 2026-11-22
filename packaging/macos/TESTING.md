@@ -1,7 +1,7 @@
 # Testing HashWatch on your Mac
 
 Thanks for testing! This build has **everything switched on**: controls, alerts,
-remote access, auto-start and multiple miners. Nothing is read-only.
+sharing, auto-start and multiple miners. Nothing is read-only.
 
 ## 1. Install
 1. Open `HashWatch.dmg`, drag **HashWatch** onto **Applications**, eject the disk image.
@@ -15,19 +15,19 @@ remote access, auto-start and multiple miners. Nothing is read-only.
 - The setup screen scans your network for Avalon miners. Pick yours, **or** type
   its IP address (for example `192.168.1.50`; port 4028 is the default).
 - Choose a password when asked. It protects the dashboard on your phone and
-  remote access.
+  is needed before you can share a link.
 
 ## 3. What to test
 | Area | What to try | What should happen |
 |---|---|---|
 | Window | Resize, move, quit and reopen | Size and position are remembered. Minimum size is enforced. |
-| Menu bar | Click the hexagon icon at the top right | It shows the live hashrate (and temperature), Open Dashboard, Remote access and Quit. |
+| Menu bar | Click the hexagon icon at the top right | It shows the live hashrate (and temperature), Open Dashboard, Share my dashboard and Quit. |
 | Close | Close the window (red button or Cmd-W) | HashWatch keeps running in the menu bar, and the Dock icon goes away. |
-| Quit | Cmd-Q, or menu bar → Quit | Everything stops, including remote access. |
+| Quit | Cmd-Q, or menu bar → Quit | Everything stops, including the share link. |
 | Live data | Leave it open for a few minutes | It updates every 5 seconds, with hashrate, temperatures and fans matching the miner's own page. |
 | Controls | **Controls** → change the work speed, toggle the light | A confirm dialog appears and the miner changes. Change it back afterwards. |
 | Alerts | Unplug the miner's network cable for about 2 minutes | You get a Mac notification that it's offline, then another when it's back. |
-| Remote access | Settings → Remote access → On, and open the link on your phone (with Wi-Fi off) | The dashboard loads after you enter your password. |
+| Share | Settings → Share my dashboard → On, and open the share link on your phone (with Wi-Fi off) | The dashboard loads view-only, with no password. Sign-in and changes are refused through the link. |
 | iPhone | Open the phone link in Safari → Share → Add to Home Screen | It works like an app. |
 | Auto-start | Settings → **Start automatically** → On, then log out and back in | HashWatch starts quietly in the menu bar. |
 | More miners | Add a second miner by IP, if you have one | Both show up. |

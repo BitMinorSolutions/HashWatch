@@ -1,4 +1,4 @@
-/* HashWatch v0.8.4 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.0 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -86,6 +86,7 @@ async function boot() {
   catch (e) { root.innerHTML = `<div class="center"><div class="auth"><h1>Can't reach ${esc(APP)}</h1><p class="lead">${esc(e.message)}</p></div></div>`; return; }
   const pi = S.state.pi, view = new URLSearchParams(location.search).get("view");
   if (pi && pi.mode && view !== "pi") return viewPiReconnect(); // this Mac shows the Pi: landing here means the Pi didn't answer
+  if (S.state.shared && !S.state.authed) return viewShareOnly(); // through the share tunnel: link only, never a sign-in form
   if (S.state.auth_required && !S.state.authed) return viewLogin();
   if (pi && view === "pi") return viewPi();
   if (S.state.setup_needed) return viewSetup();
@@ -140,6 +141,13 @@ function moveOffer() {
 }
 
 /* ---------------- login / setup ---------------- */
+// Through the share tunnel with no (or an expired) share-link session: there is nothing to sign in to.
+function viewShareOnly() {
+  root.innerHTML = `<div class="center"><div class="auth view">
+    <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
+    <h1>This ${esc(APP)} is shared by link only</h1>
+    <p class="lead">Open the share link you were sent to watch this dashboard. If it stopped working, the owner turned sharing off or made a new link: ask them for the current one.</p></div></div>`;
+}
 function viewLogin() {
   root.innerHTML = `<div class="center"><div class="auth view">
     <img class="auth-logo" src="/assets/icons/icon-192.png" alt="">${TAG ? `<div class="auth-tag">${esc(APP)} · ${esc(TAG)}</div>` : ""}
@@ -153,7 +161,7 @@ function viewLogin() {
     </form></div></div>`;
   $("#f").onsubmit = async (ev) => { ev.preventDefault(); const b = $("#b"); b.disabled = true; $("#e").textContent = "";
     const body = { password: $("#pw").value };
-    const r = await fetch("/api/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch("/api/login", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRF-Token": S.csrf || "" }, body: JSON.stringify(body) });
     let j = {}; try { j = await r.json(); } catch (e) {}
     if (r.ok) { boot(); return; }
     b.disabled = false; $("#e").textContent = j.error || "HTTP " + r.status; };
@@ -319,7 +327,7 @@ function viewPiOffline() {
 }
 
 /* ---------------- shell: ONE scrolling page (v0.7.0) ----------------
-   Everything about the miner lives on the dashboard. Settings (incl. remote access/QR) and alert history open as a sheet. */
+   Everything about the miner lives on the dashboard. Settings (incl. Share and its QR) and alert history open as a sheet. */
 const PAGES = [["dashboard", "Dashboard"], ["settings", "Settings"], ["alerts", "Alerts"]];
 // Old multi-page links (#/pools, #/controls, …) now scroll to that card on the single page.
 const ANCHOR = { overview: "top", performance: "secShares", hardware: "secTemps", pools: "secPools", controls: "secControls", raw: "secRaw" };
@@ -335,7 +343,7 @@ function shell() {
       <span class="hdr-live" id="hdrLive"><span class="dot warn"></span><span>Connecting…</span></span>
       <span class="grow"></span>
       <div class="top-acts">
-        ${isView() ? "" : `<a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Remote access" title="Remote access">${ic("globe", "sm")}<em class="rem-dot" id="remDot"></em></a>`}
+        ${isView() ? "" : `<a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Share my dashboard" title="Share my dashboard">${ic("share", "sm")}<em class="rem-dot" id="remDot"></em></a>`}
         <a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts" title="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
         <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">${ic("settings", "sm")}</a></div>
     </header>
@@ -494,7 +502,7 @@ function notices() {
   const d = D(), w = d.warnings || [];
   if (!d.ok) return `<div class="notice bad"><div class="ic">${ic("wifi-off", "sm")}</div><div><b>Can't read the miner</b><span>${esc((d.query_errors || []).join("; ") || "No reply.")}</span></div></div>`;
   if (!w.length) return `<div class="notice good"><div class="ic">${ic("circle-check", "sm")}</div><div><b>All systems normal</b><span>No errors or warnings reported by the miner.</span></div></div>`;
-  return w.map(x => `<div class="notice warn"><div class="ic">${ic("triangle-alert", "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${x.includes("temperature") ? "Chips are running hot. Check airflow or lower the work speed." : x.includes("hardware error") ? "A small hardware-error rate is normal; watch it if it keeps rising." : ""}</span></div></div>`).join("");
+  return w.map(x => `<div class="notice warn"><div class="ic">${ic("triangle-alert", "sm")}</div><div><b>${esc(x.split(/(?<=\.)\s/)[0])}</b><span>${x.includes("temperature") ? "Chips are running hot. Check airflow or lower the work speed." : x.includes("error rate") ? "A small chip error rate is normal; watch it if it keeps rising." : ""}</span></div></div>`).join("");
 }
 function sharesBlock() {
   const sh = D().shares || {}, er = D().errors || {}, tot = (+sh.accepted || 0) + (+sh.rejected || 0) + (+sh.stale || 0);
@@ -582,7 +590,7 @@ VIEWS.performance = {
     const echu = (er.echu && er.echu.length) ? er.echu.join(" ") : "0";
     $("#shares").innerHTML = sharesBlock().html + `<div class="list two">${kv([
       ["Rejected", `${fmt(sh.rejected)} <span class="t3">· ${fmt(sh.reject_pct, 2)}%</span>`], ["Stale", `${fmt(sh.stale)} <span class="t3">· ${fmt(sh.stale_pct, 2)}%</span>`],
-      ["Hardware errors", `${fmt(sh.hw_errors)} <span class="t3">· ${isNum(sh.dh_pct) ? fmt(sh.dh_pct, 3) + "%" : "—"}</span>`], ["Best share", `<span title="${fmt(sh.best_share)}">${si(sh.best_share)}</span>`],
+      ["Hardware errors", `${fmt(sh.hw_errors)} <span class="t3">· ${isNum(sh.device_hw_pct) ? fmt(sh.device_hw_pct, 3) + "%" : "—"}</span>`], ["Chip error rate (DH)", isNum(sh.dh_pct) ? fmt(sh.dh_pct, 3) + "%" : "—"], ["Best share", `<span title="${fmt(sh.best_share)}">${si(sh.best_share)}</span>`],
       ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"], ["Get / remote fails", `${fmt(sh.get_failures)} / ${fmt(sh.remote_failures)}`],
       ["ECHU / ECMM / CRC", `${esc(echu)} / ${fmt(er.ecmm)} / ${fmt(er.crc)}`], ["Work utility", fmt(hr.wu, 0)], ["GHS avg", fmt(hr.ghs_avg, 1)], ["Blocks found", fmt(sh.found_blocks)],
       ["Last share", ap && ap.last_share_unix ? `<span data-rel="${ap.last_share_unix}">${rel(ap.last_share_unix)}</span>` : "—"], ["Block height", ap && ap.block_height ? fmt(ap.block_height) : "—"]])}</div>`;
@@ -623,11 +631,11 @@ VIEWS.hardware = {
         <div><div class="m"><span>${isNum(cv[i]) ? fmt(cv[i]) + " mV" : ""}</span><span class="v2">${isNum(cn[i]) ? si(cn[i], 1) + " MW" : ""}</span></div><div class="mw"><i style="width:${isNum(cn[i]) ? cn[i] / mwMax * 100 : 0}%"></i></div></div></div>`).join("");
     } else { $("#heat").innerHTML = '<div class="t3">No per-chip data in this reply.</div>'; }
     const c = d.control || {};
-    $("#devList").innerHTML = kv([["Model", esc([id.product, id.model].filter(Boolean).join(" ") || "—")], ["Core", esc(id.core ? `${id.core} · ${id.chips || "?"} chips` : "—")],
+    $("#devList").innerHTML = kv([["Model", esc((id.product && id.model && id.product.toLowerCase().includes(id.model.toLowerCase()) ? id.product : [id.product, id.model].filter(Boolean).join(" ")) || "—")], ["Core", esc(id.core ? `${id.core} · ${id.chips || "?"} chips` : "—")],
       ["Firmware", `<span class="mono">${esc(id.firmware || "—")}</span>`], ["Hardware", `<span class="mono">${esc(id.hardware || "—")}</span>`],
       ["Type", `<span class="mono">${esc([id.hwtype, id.swtype].filter(Boolean).join(" / ") || "—")}</span>`], ["cgminer · API", `${esc(id.cgminer || "—")} · ${esc(id.api || "—")}`],
       ["Device", esc([dev.name, dev.status].filter(Boolean).join(" · ") || "—")], ["Work speed", c.work_name ? cap(c.work_name) : "—"],
-      ["Light", c.led_mode ? `${c.led_hex ? `<span class="sw-i" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(cap(c.led_mode))}${isNum(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : (er.led ? "LED " + esc(er.led) : "—")],
+      ["Light", c.led_mode ? `${c.led_hex ? `<span class="sw-i" style="background:${esc(c.led_hex)}"></span>` : ""}${esc(MODE[c.led_mode] || cap(c.led_mode))}${isNum(c.led_brightness) ? " · " + c.led_brightness + "%" : ""}` : (er.led ? "LED " + esc(er.led) : "—")],
       ["Soft-off", esc(er.soft_off == null ? "0" : er.soft_off)], ["Host", d.source === "remote" ? "Preview" : `<span class="mono">${esc(d.miner_host || "—")}</span>`], ["Uptime", esc((d.uptime || {}).human || "—")]]);
     const nf = (er.net_fail || []).slice().reverse();
     $("#nfN").textContent = nf.length ? `${nf.length} recorded` : "";
@@ -988,7 +996,7 @@ VIEWS.alerts = {
   },
 };
 
-/* ---------------- remote link card (overview) ---------------- */
+/* ---------------- share link card (overview) ---------------- */
 const qrSrc = (u) => "/api/remote/qr.svg?u=" + encodeURIComponent(u);
 const tsQR = (u) => "/api/tailscale/qr.svg?u=" + encodeURIComponent(u);
 function tailscaleInfo() { return (S.state && S.state.tailscale) || {}; }
@@ -1014,10 +1022,10 @@ function linkCard() {
   if (!seen) LS.set("hw_seen_link", r.url);
   const key = r.url + changed; if (el.dataset.u === key) return; el.dataset.u = key;
   el.innerHTML = `<section class="panel link-card ${changed ? "is-new" : ""}">
-    <a class="lc-qr" href="#/settings?remote" aria-label="Show a larger QR code"><img src="${qrSrc(r.url)}" alt="QR code for your remote link" width="104" height="104"></a>
-    <div class="lc-txt"><div class="lc-k">${ic("globe", "sm")}Remote link ${changed ? '<span class="pill accent">New link · re-scan</span>' : '<span class="pill good"><span class="dot"></span>On</span>'}</div>
+    <a class="lc-qr" href="#/settings?remote" aria-label="Show a larger QR code"><img src="${qrSrc(r.url)}" alt="QR code for your share link" width="104" height="104"></a>
+    <div class="lc-txt"><div class="lc-k">${ic("share", "sm")}Share link ${changed ? '<span class="pill accent">New link</span>' : '<span class="pill good"><span class="dot"></span>On</span>'}</div>
       <div class="lc-url mono">${esc(r.url.replace(/^https:\/\//, ""))}</div>
-      <p>${changed ? "Your link changed since you last saw it. Scan this code again on your phone and replace the old Home Screen icon." : "Scan with your phone's camera, then in Safari tap Share → Add to Home Screen."}</p></div>
+      <p>${changed ? "Your share link changed since you last saw it. The old one no longer works: send this one to anyone you share with." : "Anyone with this link can watch your dashboard. They can't sign in or change anything."}</p></div>
     <div class="lc-acts"><button class="btn ghost" id="lcCopy">${ic("copy", "sm")}Copy</button>${changed ? '<button class="btn accent" id="lcOk">Got it</button>' : ""}</div></section>`;
   $("#lcCopy").onclick = (e) => copyLink(r.url, e.currentTarget);
   const ok = $("#lcOk"); if (ok) ok.onclick = () => { LS.set("hw_seen_link", r.url); el.dataset.u = ""; linkCard(); };
@@ -1029,14 +1037,15 @@ const setH = (icn, title, desc, right) => `<div class="set-h"><div class="set-ic
 VIEWS.settings = {
   build: () => {
     const st = S.state, locked = st.locked;
-    if (isView()) return `<div class="banner">${ic("eye", "sm")}<div><b>View-only access.</b> You can watch everything, but the owner's settings, controls and remote access can't be changed from here.</div></div>
+    if (isView()) return `<div class="banner">${ic("eye", "sm")}<div><b>View-only access.</b> You can watch everything, but the owner's settings, controls and sharing can't be changed from here.</div></div>
       <div class="cols set-cols"><div class="span-7 set-col"><section class="panel panel-pad" id="funSet">${skList(200)}</section></div>
       <div class="span-5 set-col"><section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} · view-only.</p>
         <button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button></section></div></div>`;
-    return `${locked ? `<div class="banner">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings, remote access and alert switches are locked here. In your own copy of ${esc(APP)} they all work.</div></div>` : ""}
+    return `${locked ? `<div class="banner">${ic("lock", "sm")}<div><b>Read-only preview.</b> Settings, sharing and alert switches are locked here. In your own copy of ${esc(APP)} they all work.</div></div>` : ""}
     <div class="cols set-cols">
       <div class="span-7 set-col">
         <section class="panel panel-pad" id="remoteSet"><div class="sk" style="height:120px"></div></section>
+        <section class="panel panel-pad" id="tsSet" hidden></section>
         <section class="panel panel-pad" id="secSet"><div class="sk" style="height:220px"></div></section>
         <section class="panel panel-pad" id="sessSet"><div class="sk" style="height:120px"></div></section>
         <section class="panel panel-pad" id="autoFeat"><div class="sk" style="height:220px"></div></section>
@@ -1049,7 +1058,7 @@ VIEWS.settings = {
           ${locked ? "" : `<details class="disclose"><summary>${ic("plus", "sm")}Add a miner</summary><form id="a-form" autocomplete="off" style="padding-top:12px">${minerForm("a")}</form></details>`}</section>
         <section class="panel panel-pad" id="funSet"><div class="sk" style="height:200px"></div></section>
         <section class="panel panel-pad" id="autoSet"><div class="sk" style="height:56px"></div></section>
-        <section class="panel panel-pad">${setH("lock", "Password", locked ? "Managed by the preview host." : st.auth_required ? "Required to open " + esc(APP) + ", on your network and through remote access." : "Optional on your home network. Required for remote access.")}
+        <section class="panel panel-pad">${setH("lock", "Password", locked ? "Managed by the preview host." : st.auth_required ? "Required to open " + esc(APP) + " on your network. People you share a link with don't need it." : "Optional on your home network. Required before you can share a link.")}
           ${locked ? "" : `<form id="pwf"><input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
             ${st.auth_required ? `<label class="f" style="margin-top:0" for="pwc">Current password</label><input class="input" id="pwc" type="password" autocomplete="current-password">` : ""}
             <label class="f" for="pwn"${st.auth_required ? "" : ' style="margin-top:0"'}>${st.auth_required ? "New password · leave empty to remove" : "New password"}</label><input class="input" id="pwn" type="password" autocomplete="new-password" minlength="6">
@@ -1059,7 +1068,7 @@ VIEWS.settings = {
         <section class="panel panel-pad">${setH("info", "About", TAG ? esc(TAG) : "")}<p class="t2" style="margin:0;font-size:13.5px;line-height:1.55">${esc(APP)} ${esc(st.version || "")} reads your miner over its local API (port 4028). It changes miner settings only when you confirm a change in Controls on the dashboard. Running ${esc(APP)} again opens this page instead of starting a second copy.</p>
           ${st.auth_required ? `<button class="btn ghost block" id="so" style="margin-top:16px">${ic("log-out", "sm")}Sign out</button>` : ""}
           <button class="btn ghost block" id="dbg" style="margin-top:16px">${ic("copy", "sm")}Copy debug info</button>
-          ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:8px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including remote access" : ""}. Open the app again to restart it.</p>` : ""}</section>
+          ${st.can_quit && st.local_viewer ? `<button class="btn danger block" id="quit" style="margin-top:8px">${ic("power", "sm")}Quit ${esc(APP)}</button><p class="fine" style="margin-top:8px">Stops ${esc(APP)} on this computer${S.remote && S.remote.enabled ? ", including your share link" : ""}. Open the app again to restart it.</p>` : ""}</section>
       </div></div>`;
   },
   wire: () => {
@@ -1078,7 +1087,7 @@ VIEWS.settings = {
       try { const t = await (await fetch("/api/debug", { cache: "no-store" })).text(); await copyText(t); toast("Debug info copied. Paste it into a message to support."); }
       catch (e) { toast("Couldn't copy debug info: " + e.message, "bad"); } };
     const qb = $("#quit"); if (qb) qb.onclick = async () => {
-      if (!await confirmDialog("Quit " + APP + "?", `Monitoring, alerts and remote access stop until you open ${esc(APP)} again.`, "Quit")) return;
+      if (!await confirmDialog("Quit " + APP + "?", `Monitoring, alerts and your share link stop until you open ${esc(APP)} again.`, "Quit")) return;
       qb.disabled = true;
       try { await api("/api/quit", { method: "POST", body: {} }); } catch (e) { toast(e.message, "bad"); qb.disabled = false; return; }
       clearInterval(S.timer);
@@ -1100,39 +1109,57 @@ async function remoteLoad() {
 function remoteUI() {
   const el = $("#remoteSet"); if (!el) return;
   const R = S.rem, st = R.status || { state: "off" }, on = R.enabled, can = R.available && R.local_viewer;
-  const pill = !R.available ? '<span class="pill">Off in preview</span>' : !on ? "" : st.state === "online" ? '<span class="pill good"><span class="dot"></span>Online</span>'
+  const pill = !R.available ? '<span class="pill">Off in preview</span>' : !on ? "" : st.state === "online" ? '<span class="pill good"><span class="dot"></span>On</span>'
     : st.state === "error" ? '<span class="pill bad">Problem</span>' : '<span class="pill warn"><span class="spin"></span>Connecting</span>';
   let body = "";
-  if (!R.available) body = `<div class="notice-s">${ic("info", "sm")}<span>${esc(R.note || "Remote access isn't available here.")}</span></div>`;
-  else if (!R.local_viewer) body = `<div class="notice-s">${ic("lock", "sm")}<span>For safety, remote access can only be switched from your home network.</span></div>`;
-  if (R.available && S.remForm && !on) body += `<form class="rp-form" id="rpf"><div class="rp-k">${ic("lock", "sm")}Create a password first</div><p>Anyone who opens your link will need it. Use at least 6 characters.</p>
+  if (!R.available) body = `<div class="notice-s">${ic("info", "sm")}<span>${esc(R.note || "Sharing isn't available here.")}</span></div>`;
+  else if (!R.local_viewer) body = `<div class="notice-s">${ic("lock", "sm")}<span>For safety, Share can only be switched from your home network.</span></div>`;
+  if (R.available && S.remForm && !on) body += `<form class="rp-form" id="rpf"><div class="rp-k">${ic("lock", "sm")}Create a password first</div><p>It keeps your settings and controls safe. People you share with don't need it. Use at least 6 characters.</p>
       <input type="text" autocomplete="username" value="${esc(APP)}" class="sr" tabindex="-1" aria-hidden="true">
       <div class="rp-in"><input class="input" id="rp1" type="password" autocomplete="new-password" placeholder="New password" minlength="6" required><input class="input" id="rp2" type="password" autocomplete="new-password" placeholder="Repeat password" minlength="6" required></div>
-      <div class="err" id="rpe"></div><div class="rp-acts"><button type="button" class="btn ghost" id="rpx">Cancel</button><button class="btn accent" id="rpgo">Create password & turn on</button></div></form>`;
+      <div class="err" id="rpe"></div><div class="rp-acts"><button type="button" class="btn ghost" id="rpx">Cancel</button><button class="btn accent" id="rpgo">Create password & share</button></div></form>`;
   else if (on && st.state === "downloading") { const p = Math.round((st.progress || 0) * 100);
     body += `<div class="dl"><div class="dl-k"><span>${esc(st.detail || "Downloading cloudflared…")}</span><b class="num">${p}%</b></div><div class="dl-bar"><i style="width:${p}%"></i></div><p class="fine">One-time download of Cloudflare's official cloudflared (about 20–40 MB), checked against Cloudflare's published SHA-256.</p></div>`; }
   else if (on && st.state === "online" && st.url) body += `<div class="rl">
-      <div class="rl-qr"><img src="${qrSrc(st.url)}" alt="QR code for your remote link" width="168" height="168"></div>
-      <div class="rl-main"><div class="label">Your link</div><div class="rl-url"><span class="mono">${esc(st.url)}</span></div>
-        <div class="rl-acts"><button class="btn ghost" id="rlCopy">${ic("copy", "sm")}Copy link</button><a class="btn ghost" href="${esc(st.url)}" target="_blank" rel="noopener">${ic("external-link", "sm")}Open</a></div>
-        <ol class="steps"><li><span>Scan the code with your phone's camera.</span></li><li><span>Sign in with your ${esc(APP)} password.</span></li><li><span>In Safari tap Share → <b>Add to Home Screen</b>.</span></li></ol></div></div>
-      <div class="rl-foot">${ic("circle-check", "sm")}<span>Connected through Cloudflare${st.cloudflared ? " · cloudflared " + esc(st.cloudflared) : ""} · since <span data-rel="${st.since}">${rel(st.since)}</span>${st.restarts ? ` · reconnected ${st.restarts}×` : ""}</span></div>
-      ${R.named ? "" : `<div class="notice-s warn">${ic("triangle-alert", "sm")}<span><b>This free link changes</b> when ${esc(APP)} or the computer restarts. You'll get a “New link” alert and the card on the dashboard will ask you to re-scan. Turn on <b>Start automatically</b> below so restarts are rare, or set up a permanent link.</span></div>`}`;
-  else if (on && st.state === "error") body += `<div class="notice-s bad">${ic("circle-alert", "sm")}<span><b>Couldn't start remote access.</b> ${esc(st.error || "")}</span></div><button class="btn ghost" id="rlRetry" style="margin-top:12px">${ic("refresh-cw", "sm")}Try again</button>`;
+      <div class="rl-qr"><img src="${qrSrc(st.url)}" alt="QR code for your share link" width="168" height="168"></div>
+      <div class="rl-main"><div class="label">Your share link · view only</div><div class="rl-url"><span class="mono">${esc(st.url)}</span></div>
+        <div class="rl-acts"><button class="btn ghost" id="rlCopy">${ic("copy", "sm")}Copy link</button><button class="btn ghost" id="rlNew"${can ? "" : " disabled"}>${ic("refresh-cw", "sm")}New link</button></div>
+        <ol class="steps"><li><span>Send the link, or let someone scan the code.</span></li><li><span>They see your dashboard live, with no password.</span></li><li><span>They can't sign in or change anything through it.</span></li></ol></div></div>
+      <div class="rl-foot">${ic("circle-check", "sm")}<span>Shared through Cloudflare${st.cloudflared ? " · cloudflared " + esc(st.cloudflared) : ""} · since <span data-rel="${st.since}">${rel(st.since)}</span>${st.restarts ? ` · reconnected ${st.restarts}×` : ""}</span></div>
+      ${R.named ? "" : `<div class="notice-s warn">${ic("triangle-alert", "sm")}<span><b>This free link changes</b> when ${esc(APP)} or the computer restarts. You'll get a “New share link” alert with the new one to send. Turn on <b>Start automatically</b> below so restarts are rare, or set up a permanent link.</span></div>`}`;
+  else if (on && st.state === "error") body += `<div class="notice-s bad">${ic("circle-alert", "sm")}<span><b>Couldn't start sharing.</b> ${esc(st.error || "")}</span></div><button class="btn ghost" id="rlRetry" style="margin-top:12px">${ic("refresh-cw", "sm")}Try again</button>`;
   else if (on) body += `<div class="conn"><span class="spin"></span><span>${esc(st.detail || "Connecting to Cloudflare…")}</span></div>${st.error && st.state === "restarting" ? `<p class="fine">${esc(st.error)}</p>` : ""}`;
-  else if (R.available) body += `<ul class="facts"><li>${ic("lock", "sm")}<span>Password-protected. Settings like this one can only be changed from home.</span></li>
+  else if (R.available) body += `<ul class="facts"><li>${ic("eye", "sm")}<span>View only. People with the link can watch, but can't sign in or change anything.</span></li>
       <li>${ic("globe", "sm")}<span>Uses a free Cloudflare quick tunnel. No account, no router changes.</span></li>
-      <li>${ic("refresh-cw", "sm")}<span>The free link changes when ${esc(APP)} restarts. ${esc(APP)} shows the new one here and alerts you.</span></li></ul>`;
+      <li>${ic("power", "sm")}<span>Turn Share off and the link stops working right away. <b>New link</b> replaces it anytime.</span></li></ul>`;
   const adv = R.available ? `<details class="disclose" ${R.named ? "open" : ""}><summary>${ic("link", "sm")}Permanent link <span class="t3">· optional, needs a free Cloudflare account</span></summary>
-      <div style="padding-top:12px"><p class="t2" style="margin:0 0 4px;font-size:13px;line-height:1.55">In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel, add a public hostname that points to <span class="mono">http://127.0.0.1:${location.port || 80}</span>, then paste the tunnel token and that hostname here. The link then never changes.</p>
+      <div style="padding-top:12px"><p class="t2" style="margin:0 0 4px;font-size:13px;line-height:1.55">In Cloudflare Zero Trust → Networks → Tunnels, create a tunnel, add a public hostname that points to <span class="mono">http://127.0.0.1:${location.port || 80}</span>, then paste the tunnel token and that hostname here. The address then never changes; it is still shared view-only.</p>
       <label class="f" for="tkT">Tunnel token</label><input class="input mono" id="tkT" type="password" autocomplete="off" placeholder="${R.named ? "•••••••• (saved)" : "eyJhIjoi…"}"${can ? "" : " disabled"}>
       <label class="f" for="tkH">Hostname</label><input class="input mono" id="tkH" placeholder="miner.example.com" value="${esc(R.hostname || "")}"${can ? "" : " disabled"} autocapitalize="off" spellcheck="false">
       <div class="err" id="tkE"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn ghost" id="tkS"${can ? "" : " disabled"}>Save</button>${R.named ? `<button class="btn danger" id="tkC"${can ? "" : " disabled"}>Use free link instead</button>` : ""}</div></div></details>` : "";
-  const T = tailscaleInfo();
-  const tsLocal = !!(S.state && S.state.local_viewer);
+  el.innerHTML = setH("share", `Share my dashboard ${pill}`, `Send a link that lets anyone watch your dashboard live, view only. Off by default.`,
+    sw("remSw", on || S.remForm, !can, "Share my dashboard")) + body + adv;
+  const s = $("#remSw"); if (s) s.onclick = remoteToggle;
+  const c = $("#rlCopy"); if (c) c.onclick = (e) => copyLink(st.url, e.currentTarget);
+  const nl = $("#rlNew"); if (nl) nl.onclick = newShareLink;
+  const rt = $("#rlRetry"); if (rt) rt.onclick = async () => { await remoteSet({ enabled: false }); await remoteSet({ enabled: true }); };
+  const f = $("#rpf"); if (f) { $("#rp1").focus(); $("#rpx").onclick = () => { S.remForm = false; remoteUI(); };
+    f.onsubmit = async (e) => { e.preventDefault(); const a = $("#rp1").value, b = $("#rp2").value;
+      if (a.length < 6) { $("#rpe").textContent = "Use at least 6 characters."; return; } if (a !== b) { $("#rpe").textContent = "The passwords don't match."; return; }
+      $("#rpgo").disabled = true; try { await remoteSet({ enabled: true, password: a }); S.remForm = false; toast("Password created · sharing starts"); S.state = await api("/api/state"); route(); } catch (er) { $("#rpe").textContent = er.message; $("#rpgo").disabled = false; } }; }
+  const ts = $("#tkS"); if (ts) ts.onclick = async () => { const t = $("#tkT").value.trim(), h = $("#tkH").value.trim();
+    if (!t && !R.named) { $("#tkE").textContent = "Paste the tunnel token."; return; }
+    try { await remoteSet({ enabled: R.enabled, token: t || undefined, hostname: h }); toast("Permanent link saved"); } catch (er) { $("#tkE").textContent = er.message; } };
+  const tc = $("#tkC"); if (tc) tc.onclick = async () => { try { await remoteSet({ enabled: R.enabled, token: "", hostname: "" }); toast("Using the free link"); } catch (er) { $("#tkE").textContent = er.message; } };
+  tsUI();
+}
+// Tailscale: the owner's own full-access address on their tailnet (unchanged, in its own panel).
+function tsUI() {
+  const el = $("#tsSet"); if (!el) return;
+  const T = tailscaleInfo(), tsLocal = !!(S.state && S.state.local_viewer);
   let tsBlock = "";
   if (T.available && T.url) {
-    tsBlock = `<div class="rl" style="margin:0 0 18px">
+    tsBlock = `<div class="rl" style="margin:0">
       <div class="rl-qr"><img src="${tsQR(T.url)}" alt="QR code for your Tailscale link" width="168" height="168"></div>
       <div class="rl-main"><div class="label">Tailscale · permanent</div><div class="rl-url"><span class="mono">${esc(T.url)}</span></div>
         <div class="rl-acts"><button class="btn ghost" id="tsCopy">${ic("copy", "sm")}Copy link</button><a class="btn ghost" href="${esc(T.url)}" target="_blank" rel="noopener">${ic("external-link", "sm")}Open</a>
@@ -1141,35 +1168,28 @@ function remoteUI() {
         <p class="fine" style="margin:10px 0 0">${T.https ? "HTTPS is on through tailscale serve. This link stays the same after restarts." : "Open this from any device signed into the same Tailscale network. The address does not change when " + esc(APP) + " restarts. Optionally turn on tailscale serve for HTTPS."}</p>
         ${T.error ? `<p class="fine" style="margin:8px 0 0">${esc(T.error)}</p>` : ""}</div></div>`;
   } else if (T.available && T.error) {
-    tsBlock = `<div class="notice-s" style="margin:0 0 16px">${ic("info", "sm")}<span>${esc(T.error)}</span></div>`;
+    tsBlock = `<div class="notice-s" style="margin:0">${ic("info", "sm")}<span>${esc(T.error)}</span></div>`;
   } else {
-    tsBlock = `<div class="notice-s" style="margin:0 0 16px">${ic("info", "sm")}<span>If this computer already runs Tailscale, ${esc(APP)} will show a permanent link here (IP or MagicDNS). ${esc(APP)} never installs Tailscale for you. Cloudflare, below, stays an optional alternative.</span></div>`;
+    tsBlock = `<div class="notice-s" style="margin:0">${ic("info", "sm")}<span>If this computer already runs Tailscale, ${esc(APP)} shows your tailnet address here (IP or MagicDNS). ${esc(APP)} never installs Tailscale for you.</span></div>`;
   }
-  el.innerHTML = setH("globe", `Remote access ${pill}`, `Open ${esc(APP)} from anywhere. A Tailscale address on this computer is the permanent link when Tailscale is already installed. Cloudflare remains an optional alternative, off by default.`,
-    sw("remSw", on || S.remForm, !can, "Cloudflare remote access")) + tsBlock + body + adv;
-  const s = $("#remSw"); if (s) s.onclick = remoteToggle;
-  const c = $("#rlCopy"); if (c) c.onclick = (e) => copyLink(st.url, e.currentTarget);
-  const rt = $("#rlRetry"); if (rt) rt.onclick = async () => { await remoteSet({ enabled: false }); await remoteSet({ enabled: true }); };
-  const f = $("#rpf"); if (f) { $("#rp1").focus(); $("#rpx").onclick = () => { S.remForm = false; remoteUI(); };
-    f.onsubmit = async (e) => { e.preventDefault(); const a = $("#rp1").value, b = $("#rp2").value;
-      if (a.length < 6) { $("#rpe").textContent = "Use at least 6 characters."; return; } if (a !== b) { $("#rpe").textContent = "The passwords don't match."; return; }
-      $("#rpgo").disabled = true; try { await remoteSet({ enabled: true, password: a }); S.remForm = false; toast("Password created · remote access starting"); S.state = await api("/api/state"); route(); } catch (er) { $("#rpe").textContent = er.message; $("#rpgo").disabled = false; } }; }
-  const ts = $("#tkS"); if (ts) ts.onclick = async () => { const t = $("#tkT").value.trim(), h = $("#tkH").value.trim();
-    if (!t && !R.named) { $("#tkE").textContent = "Paste the tunnel token."; return; }
-    try { await remoteSet({ enabled: R.enabled, token: t || undefined, hostname: h }); toast("Permanent link saved"); } catch (er) { $("#tkE").textContent = er.message; } };
-  const tc = $("#tkC"); if (tc) tc.onclick = async () => { try { await remoteSet({ enabled: R.enabled, token: "", hostname: "" }); toast("Using the free link"); } catch (er) { $("#tkE").textContent = er.message; } };
+  el.hidden = false;
+  el.innerHTML = setH("globe", "Tailscale", `Your own full dashboard from anywhere on your tailnet, with your password.`) + tsBlock;
   const tsc = $("#tsCopy"); if (tsc) tsc.onclick = (e) => copyLink(tailscaleInfo().url, e.currentTarget);
   const tss = $("#tsServe"); if (tss) tss.onclick = async () => {
     if (!await confirmDialog("Turn on Tailscale HTTPS?", "This runs tailscale serve on this computer so your tailnet link is https. " + APP + " does not change your Tailscale settings beyond that, and it will not install Tailscale.", "Turn on")) return;
     tss.disabled = true;
-    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: true } }); toast("Tailscale HTTPS is on"); remoteUI(); }
+    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: true } }); toast("Tailscale HTTPS is on"); tsUI(); }
     catch (e) { toast(e.message, "bad"); tss.disabled = false; }
   };
   const tso = $("#tsServeOff"); if (tso) tso.onclick = async () => {
     if (!await confirmDialog("Turn off Tailscale HTTPS?", "This runs tailscale serve reset. Your http Tailscale address will still work.", "Turn off")) return;
-    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: false } }); toast("Tailscale HTTPS is off"); remoteUI(); }
+    try { S.state.tailscale = await api("/api/tailscale/serve", { method: "POST", body: { enabled: false } }); toast("Tailscale HTTPS is off"); tsUI(); }
     catch (e) { toast(e.message, "bad"); }
   };
+}
+async function newShareLink() {
+  if (!await confirmDialog("Make a new share link?", "The current link stops working right away and everyone watching through it is disconnected. Send the new link to anyone you still want to share with.", "New link")) return;
+  try { const r = await api("/api/remote/rotate", { method: "POST", body: {} }); toast("New share link ready", "good", `${r.signed_out} viewer${r.signed_out === 1 ? "" : "s"} disconnected`); await remoteLoad(); } catch (e) { toast(e.message, "bad"); }
 }
 async function remoteSet(body) {
   const r = await api("/api/remote", { method: "POST", body });
@@ -1178,20 +1198,20 @@ async function remoteSet(body) {
 async function remoteToggle() {
   const R = S.rem;
   if (R.enabled) {
-    if (!await confirmDialog("Turn off remote access?", "Your remote link stops working right away. Next time you turn it on you'll get a new link.", "Turn off")) return;
-    try { await remoteSet({ enabled: false }); toast("Remote access is off"); } catch (e) { toast(e.message, "bad"); }
+    if (!await confirmDialog("Stop sharing?", "Your share link stops working right away and everyone watching is disconnected. Next time you turn Share on you'll get a new link.", "Stop sharing")) return;
+    try { await remoteSet({ enabled: false }); toast("Share is off · the link no longer works"); } catch (e) { toast(e.message, "bad"); }
     return;
   }
   if (S.remForm) { S.remForm = false; remoteUI(); return; }
   if (!R.password_set) { S.remForm = true; remoteUI(); return; }
-  if (!await confirmDialog("Turn on remote access?", `${esc(APP)} will open a private Cloudflare link to this computer. Anyone with the link still needs your password. The first time, ${esc(APP)} downloads Cloudflare's official cloudflared.`, "Turn on")) return;
+  if (!await confirmDialog("Share your dashboard?", `${esc(APP)} makes a view-only Cloudflare link to this dashboard. Anyone with the link can watch, but can't sign in or change anything. The first time, ${esc(APP)} downloads Cloudflare's official cloudflared.`, "Share")) return;
   try { await remoteSet({ enabled: true }); } catch (e) { toast(e.message, "bad"); }
 }
 function autoUI() {
   const el = $("#autoSet"); if (!el) return;
   const a = S.rem.autostart, locked = S.state.locked;
   const can = a && a.supported && !locked && S.rem.local_viewer;
-  el.innerHTML = setH("power", "Start automatically", `Start ${esc(APP)} quietly ${(S.state.shell || "").includes("native") ? "in the menu bar" : "in the background"} when this computer starts, with no window. Fewer restarts also means your remote link changes less often.`,
+  el.innerHTML = setH("power", "Start automatically", `Start ${esc(APP)} quietly ${(S.state.shell || "").includes("native") ? "in the menu bar" : "in the background"} when this computer starts, with no window. Fewer restarts also means your share link changes less often.`,
     sw("autoSw", a && a.enabled, !can, "Start automatically")) +
     `<div class="set-meta">${locked ? `${ic("lock", "sm")}<span>Not available in the preview.</span>` : !a ? `${ic("info", "sm")}<span>Not available here.</span>` :
       `${ic(a.enabled ? "circle-check" : "info", "sm")}<span>${a.enabled ? `On · ${esc(a.method)}` : `Uses a ${esc(a.method)}`}${a.note ? ` · ${esc(a.note)}` : ""}</span>`}</div>
@@ -1501,34 +1521,26 @@ function sessLoad() { sessUI(); }
 function secUI() {
   const el = $("#secSet"); if (!el || !S.sec) return;
   const X = S.sec, locked = S.state.locked, need = !X.password_set;
-  el.innerHTML = setH("shield-check", "Security", `Sign-in protection for ${esc(APP)}, at home and through remote access.`) +
+  el.innerHTML = setH("shield-check", "Security", `Sign-in protection for ${esc(APP)} on your home network and Tailscale.`) +
     `<div class="toggles">
-      <div class="tg-row"><div class="tg-ic">${ic("timer", "sm")}</div><div class="tg-t"><b>Lockout after wrong passwords</b><span>Always on. ${X.lockout.free_tries} tries, then a growing wait (up to ${X.lockout.max_lock_min} min). Remote sign-ins are also capped at ${X.lockout.remote_max} per ${X.lockout.remote_window_min} min in total.</span></div><span class="pill good">${ic("check", "sm")}On</span></div>
-      <div class="tg-row"><div class="tg-ic">${ic("eye", "sm")}</div><div class="tg-t"><b>View-only password</b><span>${X.view_password_set ? "On · people who sign in with it can see everything but change nothing." : "A second password for family or friends: they can watch, but can't change the miner, settings or remote access."}</span></div><button class="btn ghost sm" id="vpBtn"${locked || need ? " disabled" : ""}>${X.view_password_set ? "Change" : "Set"}</button></div>
-      <div class="tg-row"><div class="tg-ic">${ic("share", "sm")}</div><div class="tg-t"><b>View-only link</b><span>${X.view_link_on ? (X.view_link_url ? `<span class="mono vl">${esc(X.view_link_url)}</span>` : "On · works through your remote link once remote access is on.") : "Share a link that opens a view-only dashboard with no password. Turn it off or make a new one anytime."}</span></div>
-        <div class="tg-acts">${X.view_link_on ? `${X.view_link_url ? `<button class="btn ghost sm" id="vlCopy">${ic("copy", "sm")}Copy</button>` : ""}<button class="btn ghost sm" id="vlNew">New link</button><button class="btn danger sm" id="vlOff">Off</button>` : `<button class="btn ghost sm" id="vlOn"${locked || need ? " disabled" : ""}>Create</button>`}</div></div>
+      <div class="tg-row"><div class="tg-ic">${ic("timer", "sm")}</div><div class="tg-t"><b>Lockout after wrong passwords</b><span>Always on. ${X.lockout.free_tries} tries, then a growing wait (up to ${X.lockout.max_lock_min} min). Wrong share links are also capped at ${X.lockout.remote_max} per ${X.lockout.remote_window_min} min in total.</span></div><span class="pill good">${ic("check", "sm")}On</span></div>
+      <div class="tg-row"><div class="tg-ic">${ic("eye", "sm")}</div><div class="tg-t"><b>View-only password</b><span>${X.view_password_set ? "On · people who sign in with it can see everything but change nothing." : "A second password for family or friends at home or on your Tailscale: they can watch, but can't change the miner or settings."}</span></div><button class="btn ghost sm" id="vpBtn"${locked || need ? " disabled" : ""}>${X.view_password_set ? "Change" : "Set"}</button></div>
       <div class="tg-row"><div class="tg-ic">${ic("info", "sm")}</div><div class="tg-t"><b>App signing</b><span>${esc(X.signing_note)}</span></div></div>
     </div>`;
   const on = (id, f) => { const b = $("#" + id); if (b) b.onclick = f; };
   on("vpBtn", async () => { const pw = await promptDialog("View-only password", "Anyone who signs in with this can see the dashboard but can't change anything. Leave empty to remove it.", "View-only password", "password", "Save", true); if (pw == null) return;
     try { S.sec = await api("/api/security/view", { method: "POST", body: { password: pw } }); toast(pw ? "View-only password saved" : "View-only password removed"); secUI(); } catch (e) { toast(e.message, "bad"); } });
-  const vl = async (action, msg) => { try { S.sec = await api("/api/security/viewlink", { method: "POST", body: { action } }); toast(msg); secUI(); } catch (e) { toast(e.message, "bad"); } };
-  on("vlOn", () => vl("create", "View-only link created"));
-  on("vlNew", async () => { if (await confirmDialog("Make a new view-only link?", "The old link stops working and anyone watching through it is signed out.", "New link")) vl("rotate", "New view-only link · the old one no longer works"); });
-  on("vlOff", async () => { if (await confirmDialog("Turn off the view-only link?", "Anyone watching through it is signed out.", "Turn off")) vl("off", "View-only link is off"); });
-  on("vlCopy", (e) => copyLink(X.view_link_url, e.currentTarget));
 }
 function sessUI() {
   const el = $("#sessSet"); if (!el) return;
-  const locked = S.state.locked, remoteOn = S.rem && S.rem.enabled && !(S.rem && S.rem.named);
+  const locked = S.state.locked, remoteOn = !!(S.rem && S.rem.enabled);
   el.innerHTML = setH("log-out", "Sign out everywhere", "Lost a phone, or shared your password or link by mistake?") +
     `<div class="set-foot sec-acts"><button class="btn ghost" id="soAll"${locked || !S.state.auth_required ? " disabled" : ""}>${ic("log-out", "sm")}Sign out everywhere else</button>
-      <button class="btn ghost" id="newLink"${locked || !remoteOn ? " disabled" : ""} title="${remoteOn ? "" : "Needs remote access with the free link"}">${ic("refresh-cw", "sm")}New remote link</button></div>
-    <p class="fine">Sign out everywhere else: every other phone, tablet and browser has to sign in again; this one stays. New remote link: the old link stops working at once and everyone using it is signed out.${S.state.auth_required ? "" : " Set a password first: without one there are no sign-ins to end."}</p>`;
+      <button class="btn ghost" id="newLink"${locked || !remoteOn ? " disabled" : ""} title="${remoteOn ? "" : "Needs Share turned on"}">${ic("refresh-cw", "sm")}New share link</button></div>
+    <p class="fine">Sign out everywhere else: every other phone, tablet and browser has to sign in again; this one stays. New share link: the old link stops working at once and everyone watching through it is disconnected.${S.state.auth_required ? "" : " Set a password first: without one there are no sign-ins to end."}</p>`;
   $("#soAll").onclick = async () => { if (!await confirmDialog("Sign out everywhere else?", "Every other phone, tablet and browser has to sign in again. This device stays signed in.", "Sign out others")) return;
     try { const r = await api("/api/sessions/revoke", { method: "POST", body: {} }); toast(`Signed out ${r.signed_out} other session${r.signed_out === 1 ? "" : "s"}`); } catch (e) { toast(e.message, "bad"); } };
-  $("#newLink").onclick = async () => { if (!await confirmDialog("Get a new remote link?", "The current link stops working right away and everyone using it is signed out. Scan the new QR code on your phone afterwards.", "New link")) return;
-    try { const r = await api("/api/remote/rotate", { method: "POST", body: {} }); toast("New link on its way", "good", `${r.signed_out} remote session${r.signed_out === 1 ? "" : "s"} signed out`); remoteLoad(); } catch (e) { toast(e.message, "bad"); } };
+  $("#newLink").onclick = newShareLink;
 }
 function promptDialog(title, html, label, type, okLabel, allowEmpty) {
   return new Promise((resolve) => {
@@ -1607,7 +1619,7 @@ function accessUI() {
   el.innerHTML = setH("smartphone", "This computer", "How phones reach this dashboard, and how often the miner is read.") +
     (openWifi ? `<div class="banner" style="margin:0 0 14px">${ic("triangle-alert")}<div><b>No password, and phones can reach this dashboard.</b> Anyone on your Wi-Fi can open ${esc(APP)}. Set a password in Settings. Until you do, changes and miner controls from other devices are blocked; only this computer can change anything.</div></div>` : "") +
     `<div class="toggles">
-      <div class="tg-row"><div class="tg-ic">${ic("smartphone", "sm")}</div><div class="tg-t"><b>Allow phones on Wi-Fi</b><span>Let phones on your Wi-Fi open ${esc(APP)}. Off, only this computer can. Remote access through your Cloudflare link still works.</span></div>${sw("wifiSw", wifi, locked, "Allow phones on Wi-Fi")}</div>
+      <div class="tg-row"><div class="tg-ic">${ic("smartphone", "sm")}</div><div class="tg-t"><b>Allow phones on Wi-Fi</b><span>Let phones on your Wi-Fi open ${esc(APP)}. Off, only this computer can. Your share link still works.</span></div>${sw("wifiSw", wifi, locked, "Allow phones on Wi-Fi")}</div>
     </div>
     ${wifi && urls.length ? urls.map(u => `<div class="mono" style="font-size:14px;padding:3px 0">${esc(u)}</div>`).join("") + `<p class="fine" style="margin-top:6px">Then Share → Add to Home Screen.</p>` : ""}
     <div class="toggles" style="margin-top:8px">

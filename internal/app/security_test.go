@@ -111,49 +111,67 @@ func secServer(t *testing.T) (*httptest.Server, *Server, *time.Time) {
 	return ts, s, &now
 }
 
+// shareOn turns Share on directly (no cloudflared) and returns the link path.
+func shareOn(s *Server) string {
+	s.Cfg.Remote.Enabled = true
+	s.EnsureShareLink()
+	return "/v/" + s.Cfg.Security.ViewLink
+}
+
+// Wrong share-link tokens through the tunnel lock that address out.
 func TestLockoutBackoff(t *testing.T) {
-	ts, _, now := secServer(t)
+	ts, s, now := secServer(t)
+	good := shareOn(s)
 	c := &tclient{t: t, ts: ts, ip: "203.0.113.5"}
-	for i := 1; i < freeTries; i++ {
-		if r, _ := c.do("POST", "/api/login", `{"password":"nope"}`); r.StatusCode != 401 {
+	for i := 1; i <= freeTries; i++ {
+		if r, _ := c.do("GET", "/v/wrong", ""); r.StatusCode != 404 {
 			t.Fatalf("try %d: %d", i, r.StatusCode)
 		}
 	}
-	r, out := c.do("POST", "/api/login", `{"password":"nope"}`)
+	r, _ := c.do("GET", "/v/wrong", "")
 	if r.StatusCode != 429 || r.Header.Get("Retry-After") == "" {
-		t.Fatalf("5th wrong try should lock: %d %v", r.StatusCode, out)
+		t.Fatalf("after %d wrong tries the address is locked: %d", freeTries, r.StatusCode)
 	}
-	// locked: even the right password is refused until the lock ends
-	if r, _ := c.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 429 {
+	// locked: even the right link is refused until the lock ends
+	if r, _ := c.do("GET", good, ""); r.StatusCode != 429 {
 		t.Fatal("locked out")
 	}
 	// another address isn't affected
 	other := &tclient{t: t, ts: ts, ip: "198.51.100.7"}
-	if r, _ := other.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
-		t.Fatal("other address should sign in")
+	if r, _ := other.do("GET", good, ""); r.StatusCode != 303 {
+		t.Fatal("other address should get in")
 	}
 	*now = now.Add(61 * time.Second)
 	// one more wrong try doubles the lock (2 min)
-	c.do("POST", "/api/login", `{"password":"nope"}`)
+	c.do("GET", "/v/wrong", "")
 	*now = now.Add(70 * time.Second)
-	if r, _ := c.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 429 {
+	if r, _ := c.do("GET", good, ""); r.StatusCode != 429 {
 		t.Fatal("second lock should be 2 minutes")
 	}
 	*now = now.Add(60 * time.Second)
-	if r, _ := c.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
-		t.Fatal("after the lock the right password works")
+	if r, _ := c.do("GET", good, ""); r.StatusCode != 303 {
+		t.Fatal("after the lock the right link works")
+	}
+	// home-network password sign-in has its own lockout
+	home := &tclient{t: t, ts: ts}
+	for i := 0; i < freeTries; i++ {
+		home.do("POST", "/api/login", `{"password":"nope"}`)
+	}
+	if r, _ := home.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 429 {
+		t.Fatalf("home lockout: %d", r.StatusCode)
 	}
 }
 
 func TestGlobalRemoteLimit(t *testing.T) {
-	ts, _, _ := secServer(t)
+	ts, s, _ := secServer(t)
+	good := shareOn(s)
 	for i := 0; i < globalMax; i++ {
 		c := &tclient{t: t, ts: ts, ip: "203.0.113." + itoa(i+1)}
-		c.do("POST", "/api/login", `{"password":"nope"}`)
+		c.do("GET", "/v/wrong", "")
 	}
 	fresh := &tclient{t: t, ts: ts, ip: "192.0.2.200"}
-	if r, _ := fresh.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 429 {
-		t.Fatalf("remote sign-ins should pause after %d failures from many addresses: %d", globalMax, r.StatusCode)
+	if r, _ := fresh.do("GET", good, ""); r.StatusCode != 429 {
+		t.Fatalf("share link should pause after %d failures from many addresses: %d", globalMax, r.StatusCode)
 	}
 	home := &tclient{t: t, ts: ts}
 	if r, _ := home.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
@@ -184,7 +202,7 @@ func TestViewOnlyRole(t *testing.T) {
 	if r, _ := admin.do("POST", "/api/security/view", `{"password":"lookonly"}`); r.StatusCode != 200 {
 		t.Fatal("set view password")
 	}
-	viewer := &tclient{t: t, ts: ts, ip: "203.0.113.30"}
+	viewer := &tclient{t: t, ts: ts} // view password: home network only
 	r, out := viewer.do("POST", "/api/login", `{"password":"lookonly"}`)
 	if r.StatusCode != 200 || out["role"] != RoleView {
 		t.Fatalf("view login: %d %v", r.StatusCode, out)
@@ -219,33 +237,10 @@ func TestViewOnlyRole(t *testing.T) {
 			t.Errorf("%s %s: viewer got %d, want 403", c[0], c[1], r.StatusCode)
 		}
 	}
-	// view-only link
-	_, sec := admin.do("POST", "/api/security/viewlink", `{"action":"create"}`)
-	path, _ := sec["view_link_path"].(string)
-	if !strings.HasPrefix(path, "/v/") {
-		t.Fatalf("link: %v", sec)
-	}
-	guest := &tclient{t: t, ts: ts, ip: "203.0.113.31"}
-	if r, _ := guest.do("GET", path, ""); r.StatusCode != 303 {
-		t.Fatal("link signs in and redirects")
-	}
-	if _, st := guest.do("GET", "/api/state", ""); st["role"] != RoleView {
-		t.Fatal("link gives view role")
-	}
-	if r, _ := guest.do("POST", "/api/control/workmode", `{"miner":"m","mode":"low"}`); r.StatusCode != 403 {
-		t.Fatal("link viewer can't control")
-	}
-	// rotating the link signs out its viewers and kills the old link
-	admin.do("POST", "/api/security/viewlink", `{"action":"rotate"}`)
-	if r, _ := guest.do("GET", "/api/state", ""); r.StatusCode != 200 {
-		t.Fatal("state")
-	}
-	if _, st := guest.do("GET", "/api/state", ""); st["authed"] == true {
-		t.Fatal("rotated link: old viewers signed out")
-	}
-	g2 := &tclient{t: t, ts: ts, ip: "203.0.113.32"}
-	if r, _ := g2.do("GET", path, ""); r.StatusCode != 404 {
-		t.Fatal("old link is dead")
+	// the view password doesn't work through the share link
+	far := &tclient{t: t, ts: ts, ip: "203.0.113.30"}
+	if r, _ := far.do("POST", "/api/login", `{"password":"lookonly"}`); r.StatusCode != 403 {
+		t.Fatalf("view password over the tunnel: %d", r.StatusCode)
 	}
 	_ = s
 }
@@ -253,8 +248,8 @@ func TestViewOnlyRole(t *testing.T) {
 func TestSignOutEverywhere(t *testing.T) {
 	ts, _, _ := secServer(t)
 	a := &tclient{t: t, ts: ts}
-	b := &tclient{t: t, ts: ts, ip: "203.0.113.40"}
-	c := &tclient{t: t, ts: ts, ip: "203.0.113.41"}
+	b := &tclient{t: t, ts: ts}
+	c := &tclient{t: t, ts: ts}
 	for _, x := range []*tclient{a, b, c} {
 		if r, _ := x.do("POST", "/api/login", `{"password":"mainpass1"}`); r.StatusCode != 200 {
 			t.Fatal("login")

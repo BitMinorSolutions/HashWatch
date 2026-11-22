@@ -54,7 +54,8 @@ func TestFetchNano3S(t *testing.T) {
 		if s.Power.PSOK == nil || !*s.Power.PSOK {
 			t.Errorf("ps ok %v", s.Power.PSOK)
 		}
-		if s.Power.WorkLevel == nil || *s.Power.WorkLevel != 0 || s.Control == nil || s.Control.WorkName != "low" {
+		// WORKMODE[1] WORKLEVEL[0]: the owner set Medium in the Avalon app.
+		if s.Power.WorkLevel == nil || *s.Power.WorkLevel != 1 || s.Control == nil || s.Control.WorkName != "medium" {
 			t.Errorf("work level %v control %+v", s.Power.WorkLevel, s.Control)
 		}
 		if s.Control.LEDMode != "fixed" || s.Control.LEDHex != "#0000ff" {

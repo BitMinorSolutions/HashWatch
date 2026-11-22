@@ -1,6 +1,6 @@
 # HashWatch
 
-HashWatch is a local dashboard for a Canaan Avalon Nano 3 (and Nano 3S / Mini 3 / Avalon Q) Bitcoin miner. It runs on your Mac, Windows PC or a Raspberry Pi, reads the miner over its LAN API (port 4028), and shows hashrate, temperature, pool status, lottery-style odds, and alerts. Optional remote access uses Tailscale (if you already have it) or a Cloudflare quick tunnel. Phone alerts can go to the [ntfy](https://ntfy.sh) app on an iPhone or Apple Watch.
+HashWatch is a local dashboard for a Canaan Avalon Nano 3 (and Nano 3S / Mini 3 / Avalon Q) Bitcoin miner. It runs on your Mac, Windows PC or a Raspberry Pi, reads the miner over its LAN API (port 4028), and shows hashrate, temperature, pool status, lottery-style odds, and alerts. You can share a view-only link to your dashboard (a Cloudflare quick tunnel), and reach the full dashboard from anywhere over Tailscale if you already use it. Phone alerts can go to the [ntfy](https://ntfy.sh) app on an iPhone or Apple Watch.
 
 It never ports-forward your miner, and it never talks to the miner unless you confirm a change in the dashboard.
 
@@ -50,7 +50,7 @@ Add `--purge` to also delete `/var/lib/hashwatch`.
 - Do not port-forward the miner’s API (4028) or the HashWatch port to the internet.
 - If phones on your Wi-Fi can open the dashboard, set a HashWatch password. Until you do, only the computer running HashWatch can change settings or the miner.
 - Work speed, the miner light, pool changes and reboot are confirm-and-password actions. Advanced pool/reboot controls are off until you turn them on.
-- HashWatch does not install Tailscale or cloudflared unless you choose those optional remote-access features (cloudflared is downloaded only if you turn Remote access on).
+- HashWatch does not install Tailscale or cloudflared unless you choose those optional features (cloudflared is downloaded only if you turn Share on).
 - Release binaries are SHA-256 checksummed. Pi / Linux service updates are also ed25519-signed; the public key is baked into the binary.
 
 ## Build from source
@@ -59,7 +59,7 @@ Go 1.22+ (this tree uses the version in `go.mod`):
 
 ```sh
 go test ./...
-go build -trimpath -ldflags "-s -w -X main.version=0.8.4" -o hashwatch ./cmd/hashwatch
+go build -trimpath -ldflags "-s -w -X main.version=0.9.0" -o hashwatch ./cmd/hashwatch
 ```
 
 The installer, Linux binaries and signed update manifest used by the Pi one-liner are attached to each [GitHub release](https://github.com/BitMinorSolutions/HashWatch/releases). Keep the ed25519 private signing key offline (never in the repo).
