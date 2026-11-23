@@ -104,7 +104,28 @@ func (f *Fetcher) wsSession(ctx context.Context) error {
 	}
 
 	f.setWSConnected(true)
-	// A quiet socket for this long is treated as dead so REST polling resumes.
+	// Protocol pings detect a silently dead socket well before the idle
+	// read timeout, so REST can take over instead of waiting for a block.
+	go func() {
+		tick := time.NewTicker(wsPingEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				err := conn.Ping(pctx)
+				cancel()
+				if err != nil {
+					_ = conn.Close(websocket.StatusGoingAway, "ping failed")
+					return
+				}
+			}
+		}
+	}()
+	// A quiet socket for this long is treated as dead so we reconnect;
+	// REST already resumes earlier if NetFetched ages out.
 	const idle = 15 * time.Minute
 	for {
 		readCtx, cancelRead := context.WithTimeout(ctx, idle)
@@ -191,10 +212,18 @@ func (f *Fetcher) applyWSMessage(data []byte) error {
 				f.snap.DiffAdj = da
 				changed = true
 			}
-			if f.snap.NetFetched == 0 {
-				f.snap.NetFetched = now
-			}
+			// Any successful stats receipt is a freshness heartbeat, even
+			// when difficulty-adjustment fields have not materially changed.
+			f.snap.NetFetched = now
 		}
+	}
+	// Other mempool "stats" fields (fees, mempoolInfo) are also a successful
+	// network receipt, even when they do not change a UI value.
+	if _, ok := raw["mempoolInfo"]; ok {
+		f.snap.NetFetched = now
+	}
+	if _, ok := raw["fees"]; ok {
+		f.snap.NetFetched = now
 	}
 	// Always mark the socket healthy when we parsed a known payload,
 	// but only bump Rev / wake waiters when a value the UI shows changed.

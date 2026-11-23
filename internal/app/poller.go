@@ -27,8 +27,9 @@ const GentlePoll = 30 * time.Second
 // Backoff after failed fetches: first failure waits 15 s, then 30 s, until one succeeds.
 var backoff = []time.Duration{15 * time.Second, 30 * time.Second}
 
-// History keeps every sample for the last hour, then thins older ones to one per
-// thinEvery, for 24 h in total (~720 + 5,520 samples at 5 s polling).
+// History keeps every sample for the last hour, then thins older ones to a
+// thinEvery-second average per bucket, for 24 h in total (~720 + 5,520 samples
+// at 5 s polling). 6H and 24H charts should be labeled as such.
 const (
 	historyKeep = 24 * 3600
 	fullRes     = 3600
@@ -230,22 +231,71 @@ func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
 	}
 }
 
-// thin drops samples older than 24 h and keeps one per thinEvery seconds beyond the last hour.
+// thin drops samples older than 24 h. Beyond the last hour it keeps one point
+// per thinEvery seconds, averaging hashrate, temperature, power and fan in
+// each bucket (share counters keep the last value in the bucket).
 func thin(h []model.Sample, now int64) []model.Sample {
-	out := h[:0]
-	var last int64 = -1 << 62
+	out := make([]model.Sample, 0, len(h))
+	var bucket []model.Sample
+	flush := func() {
+		if len(bucket) == 0 {
+			return
+		}
+		out = append(out, averageSamples(bucket))
+		bucket = bucket[:0]
+	}
 	for _, x := range h {
 		if x.T < now-historyKeep {
 			continue
 		}
-		if x.T < now-fullRes {
-			if x.T-last < thinEvery {
-				continue
+		if x.T >= now-fullRes {
+			flush()
+			out = append(out, x)
+			continue
+		}
+		if len(bucket) > 0 && x.T-bucket[0].T < thinEvery {
+			bucket = append(bucket, x)
+			continue
+		}
+		flush()
+		bucket = append(bucket, x)
+	}
+	flush()
+	return out
+}
+
+func averageSamples(b []model.Sample) model.Sample {
+	if len(b) == 1 {
+		return b[0]
+	}
+	out := b[len(b)-1]
+	avg := func(get func(model.Sample) *float64, set func(*float64)) {
+		var sum float64
+		n := 0
+		for _, s := range b {
+			if p := get(s); p != nil {
+				sum += *p
+				n++
 			}
 		}
-		out = append(out, x)
-		last = x.T
+		if n == 0 {
+			set(nil)
+			return
+		}
+		v := sum / float64(n)
+		set(&v)
 	}
+	avg(func(s model.Sample) *float64 { return s.HHero }, func(v *float64) { out.HHero = v })
+	avg(func(s model.Sample) *float64 { return s.H5s }, func(v *float64) { out.H5s = v })
+	avg(func(s model.Sample) *float64 { return s.H1m }, func(v *float64) { out.H1m = v })
+	avg(func(s model.Sample) *float64 { return s.H5m }, func(v *float64) { out.H5m = v })
+	avg(func(s model.Sample) *float64 { return s.H15m }, func(v *float64) { out.H15m = v })
+	avg(func(s model.Sample) *float64 { return s.TMax }, func(v *float64) { out.TMax = v })
+	avg(func(s model.Sample) *float64 { return s.TAvg }, func(v *float64) { out.TAvg = v })
+	avg(func(s model.Sample) *float64 { return s.TAmb }, func(v *float64) { out.TAmb = v })
+	avg(func(s model.Sample) *float64 { return s.TOut }, func(v *float64) { out.TOut = v })
+	avg(func(s model.Sample) *float64 { return s.RPM }, func(v *float64) { out.RPM = v })
+	avg(func(s model.Sample) *float64 { return s.W }, func(v *float64) { out.W = v })
 	return out
 }
 

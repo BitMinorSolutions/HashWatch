@@ -179,8 +179,25 @@ type Sample struct {
 	HW    *float64 `json:"hw"`
 }
 
+// LiveTHs is the chip-reported headline hashrate in TH/s: GHSspd / ths_hero,
+// then the 1-minute average, then the 5-minute average. A present-but-zero
+// GHSspd is a live "not hashing" reading and is kept.
+func (h Hashrate) LiveTHs() *float64 {
+	if h.THsHero != nil {
+		return h.THsHero
+	}
+	if h.GHsSpd != nil {
+		v := *h.GHsSpd / 1000
+		return &v
+	}
+	if h.THs1m != nil {
+		return h.THs1m
+	}
+	return h.THs5m
+}
+
 func (s *Snapshot) Sample() Sample {
-	return Sample{T: s.FetchedAt, H5s: s.Hashrate.THs5s, H1m: s.Hashrate.THs1m, H5m: s.Hashrate.THs5m, H15m: s.Hashrate.THs15m, HHero: s.Hashrate.THsHero,
+	return Sample{T: s.FetchedAt, H5s: s.Hashrate.THs5s, H1m: s.Hashrate.THs1m, H5m: s.Hashrate.THs5m, H15m: s.Hashrate.THs15m, HHero: s.Hashrate.LiveTHs(),
 		TMax: s.Temps.Max, TAvg: s.Temps.Avg, TAmb: s.Temps.Ambient, TOut: s.Temps.Outlet, RPM: s.Fan.RPM, W: s.Power.Watts,
 		Acc: s.Shares.Accepted, Rej: s.Shares.Rejected, HW: s.Shares.HWErrors}
 }

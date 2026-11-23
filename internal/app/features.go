@@ -33,7 +33,7 @@ func (s *Server) netView() (netdata.Snapshot, map[string]any) {
 		n.DiffAdj = full.DiffAdj
 		n.WSConnected, n.WSLastEvent, n.Rev = full.WSConnected, full.WSLastEvent, full.Rev
 		info["network_age"] = now - full.NetFetched
-		info["network_stale"] = now-full.NetFetched > 15*60
+		info["network_stale"] = full.NetworkStale(now)
 		if full.DiffAdj != nil {
 			info["diff_adj"] = full.DiffAdj
 		}
@@ -44,7 +44,7 @@ func (s *Server) netView() (netdata.Snapshot, map[string]any) {
 	if !p.PriceOff && full.PriceFetched > 0 {
 		n.PriceUSD, n.PriceFetched, n.PriceSource = full.PriceUSD, full.PriceFetched, full.PriceSource
 		info["price_age"] = now - full.PriceFetched
-		info["price_stale"] = now-full.PriceFetched > 10*60
+		info["price_stale"] = full.PriceStale(now)
 	}
 	if !p.PriceOff && full.PriceErr != "" {
 		info["price_err"] = full.PriceErr

@@ -223,3 +223,183 @@ func TestApplyWSMessageDoesNotBumpOnSameValues(t *testing.T) {
 		t.Fatalf("price change should bump rev and update: %+v", s3)
 	}
 }
+
+func TestNetworkFreshnessIsReceiptNotBlockAge(t *testing.T) {
+	f := New(t.TempDir())
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	f.Now = func() time.Time { return now }
+
+	block := []byte(`{"block":{"height":800000,"timestamp":1699990000,"difficulty":42,"extras":{"reward":1,"totalFees":1,"pool":{"name":"P","slug":"p"}}},"da":{"progressPercent":10,"difficultyChange":0.5,"remainingBlocks":1000,"nextRetargetHeight":810000,"previousRetarget":1}}`)
+	if err := f.applyWSMessage(block); err != nil {
+		t.Fatal(err)
+	}
+	s0 := f.Get()
+	if s0.NetFetched != start.Unix() {
+		t.Fatalf("initial net_fetched %d", s0.NetFetched)
+	}
+	if s0.NetworkStale(start.Unix()) {
+		t.Fatal("fresh receipt should not be stale")
+	}
+
+	// 30 minutes of difficulty-adjustment ticks, no new block.
+	da := []byte(`{"da":{"progressPercent":10,"difficultyChange":0.5,"remainingBlocks":1000,"nextRetargetHeight":810000,"previousRetarget":1}}`)
+	for i := 0; i < 15; i++ {
+		now = now.Add(2 * time.Minute)
+		if err := f.applyWSMessage(da); err != nil {
+			t.Fatal(err)
+		}
+		s := f.Get()
+		if s.TipHeight != 800000 {
+			t.Fatalf("tip moved: %d", s.TipHeight)
+		}
+		if s.NetFetched != now.Unix() {
+			t.Fatalf("da tick should refresh net_fetched, got %d want %d", s.NetFetched, now.Unix())
+		}
+		if s.NetworkStale(now.Unix()) {
+			t.Fatalf("stale at +%s while WS stats kept arriving (block age %s)", now.Sub(start), now.Sub(time.Unix(1699990000, 0)))
+		}
+		if s.Rev != s0.Rev {
+			t.Fatalf("identical da should not bump rev: %d -> %d", s0.Rev, s.Rev)
+		}
+	}
+	if now.Sub(start) < 30*time.Minute {
+		t.Fatalf("clock only advanced %s", now.Sub(start))
+	}
+}
+
+func TestRESTKeepsNetworkFreshWhenWSQuiet(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if strings.Contains(r.URL.Path, "prices") {
+			w.Write([]byte(`{"USD":111}`))
+			return
+		}
+		w.Write([]byte(`[{"height":9,"timestamp":1,"difficulty":4,"extras":{}}]`))
+	}))
+	defer srv.Close()
+
+	f := New(t.TempDir())
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	f.Now = func() time.Time { return now }
+	f.Base = srv.URL
+	f.PriceURL = srv.URL + "/v1/prices"
+	f.WSURL = "-"
+
+	if err := f.RefreshNetwork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RefreshPrice(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Same tip for 30 minutes; REST still succeeds and refreshes receipt time.
+	now = now.Add(30 * time.Minute)
+	if err := f.RefreshNetwork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := f.Get()
+	if s.TipHeight != 9 || s.NetFetched != now.Unix() {
+		t.Fatalf("REST should refresh receipt: %+v", s)
+	}
+	if s.NetworkStale(now.Unix()) {
+		t.Fatal("not stale after 30 min of successful REST with no new block")
+	}
+}
+
+func TestNetworkStaleWhenAllSourcesFail(t *testing.T) {
+	var fail bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			http.Error(w, "down", 500)
+			return
+		}
+		if strings.Contains(r.URL.Path, "prices") {
+			w.Write([]byte(`{"USD":111}`))
+			return
+		}
+		w.Write([]byte(`[{"height":9,"timestamp":1,"difficulty":4,"extras":{}}]`))
+	}))
+	defer srv.Close()
+
+	f := New(t.TempDir())
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	f.Now = func() time.Time { return now }
+	f.Base = srv.URL
+	f.PriceURL = srv.URL + "/v1/prices"
+	f.DiffFallback = "http://127.0.0.1:1/nope"
+	f.PriceFallback = "http://127.0.0.1:1/nope"
+	f.WSURL = "-"
+
+	if err := f.RefreshNetwork(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	good := f.Get().NetFetched
+	fail = true
+	now = now.Add(15 * time.Minute)
+	if err := f.RefreshNetwork(context.Background()); err == nil {
+		t.Fatal("expected failure")
+	}
+	s := f.Get()
+	if s.NetFetched != good {
+		t.Fatalf("failed fetch overwrote net_fetched %d -> %d", good, s.NetFetched)
+	}
+	if !s.NetworkStale(now.Unix()) {
+		t.Fatal("should be stale after 15 min with every source failing")
+	}
+	if s.PriceStale(now.Unix()) {
+		// price was fetched at start and not refreshed; 15 > 10 so price is also stale — that's fine
+	}
+}
+
+func TestRESTPollsWhenWebsocketIsQuiet(t *testing.T) {
+	var hits int
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if strings.Contains(r.URL.Path, "prices") {
+			w.Write([]byte(`{"USD":77}`))
+			return
+		}
+		w.Write([]byte(`[{"height":3,"timestamp":1,"difficulty":2,"extras":{}}]`))
+	}))
+	defer rest.Close()
+
+	// Websocket accepts and stays up but never sends application data.
+	ws := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "")
+		ctx := r.Context()
+		for {
+			if _, _, err := c.Read(ctx); err != nil {
+				return
+			}
+		}
+	}))
+	defer ws.Close()
+
+	f := New(t.TempDir())
+	f.Base = rest.URL
+	f.PriceURL = rest.URL + "/v1/prices"
+	f.WSURL = "ws" + strings.TrimPrefix(ws.URL, "http")
+	f.Every = 40 * time.Millisecond
+	f.PriceEvery = 40 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	go f.Run(ctx)
+	<-ctx.Done()
+	s := f.Get()
+	if hits < 2 {
+		t.Fatalf("REST should keep polling while the socket is quiet, hits=%d ws=%v snap=%+v", hits, s.WSConnected, s)
+	}
+	if s.TipHeight != 3 || s.PriceUSD != 77 {
+		t.Fatalf("REST should fill snapshot while WS is quiet: %+v hits=%d", s, hits)
+	}
+	if s.NetworkStale(f.Now().Unix()) {
+		t.Fatal("quiet-WS REST path should not leave network stale")
+	}
+}

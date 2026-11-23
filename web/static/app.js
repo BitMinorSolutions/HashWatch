@@ -1,4 +1,4 @@
-/* HashWatch v0.9.6 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.7 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -7,7 +7,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const root = $("#root");
 const S = { state: null, miner: null, data: null, hist: [], range: 3600, err: null, charts: [], can: false, route: "overview",
-  ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { h5s: false, h15m: true, h5m: true },
+  ctl: { mode: "fixed", color: "#f5a524", bright: 100, dirty: false, init: false }, series: { hhero: true, h5m: true },
   alerts: [], alertSeen: null, kinds: [], desktop: false, desktopOK: false, remote: {}, rem: null };
 const LS = { get: (k, d = "") => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
 
@@ -527,22 +527,21 @@ function chart(el, series, yf, rowF, yRange) {
   S.charts.push(u); return u;
 }
 const HASH_SERIES = () => [
-  { k: "h5s", label: "5s", c: "rgba(255,255,255,.26)", w: 1, linear: true, show: S.series.h5s },
-  { k: "h15m", label: "15m avg", c: "rgba(255,210,150,.55)", w: 1.25, dash: [3, 4], show: S.series.h15m },
-  { k: "h5m", label: "5m avg", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.h5m } ];
+  { k: "hhero", label: "Live (chip-reported)", c: "#f5a524", w: 2.25, fill: ["rgba(245,165,36,.30)", "rgba(245,165,36,0)"], show: S.series.hhero !== false },
+  { k: "h5m", label: "5m avg", c: "rgba(255,210,150,.55)", w: 1.25, dash: [3, 4], show: S.series.h5m !== false } ];
 const hashRange = (u, lo, hi) => { if (lo == null) return [0, 5]; const p = Math.max(.2, (hi - lo) * .3); return [Math.max(0, lo - p), hi + p]; };
 function drawCharts() {
   const c = Date.now() / 1000 - S.range, tg = tgtOf(), gap = Math.max(90, (S.pollS || (S.state && S.state.poll_seconds) || 5) * 8), h = [];
   S.hist.filter(x => x.t >= c).forEach((x, i, a) => { if (i && x.t - a[i - 1].t > gap) h.push({ t: a[i - 1].t + 1 }); h.push(x); });
   S.charts.forEach(u => {
     const ts = h.map(x => x.t);
-    u.setData([ts, ...u._keys.map(k => k === "target" ? h.map(() => tg) : k === "eff" ? h.map(x => isNum(x.w) && x.h5m ? x.w / x.h5m : null) : h.map(x => isNum(x[k]) ? +x[k] : null))]);
+    u.setData([ts, ...u._keys.map(k => k === "target" ? h.map(() => tg) : k === "eff" ? h.map(x => isNum(x.w) && (x.hhero || x.h5m) ? x.w / (x.hhero || x.h5m) : null) : h.map(x => isNum(x[k]) ? +x[k] : null))]);
     const e = u.root.parentElement.querySelector(".chart-empty");
     if (e) e.textContent = h.length < 2 ? `Collecting history… a new point every ${S.pollS || (S.state && S.state.poll_seconds) || 5}s.` : "";
   });
 }
 function rangeSeg() { return `<div class="seg" id="range">${[[3600, "1H"], [21600, "6H"], [86400, "24H"]].map(([r, l]) => `<button data-r="${r}" class="${S.range === r ? "on" : ""}">${l}</button>`).join("")}</div>`; }
-function wireRange() { const el = $("#range"); if (!el) return; el.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.range = +b.dataset.r; segSet(el, "r", S.range); drawCharts(); }; }
+function wireRange() { const el = $("#range"); if (!el) return; el.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.range = +b.dataset.r; segSet(el, "r", S.range); drawCharts(); if (VIEWS.overview && VIEWS.overview.update) VIEWS.overview.update(); }; }
 function spark(vals, color, id) {
   const pts = vals.filter(isNum); if (pts.length < 2) return "";
   let lo = Math.min(...pts), hi = Math.max(...pts); const mid = (lo + hi) / 2, minSp = Math.abs(mid) * .08 || 1; if (hi - lo < minSp) { lo = mid - minSp / 2; hi = mid + minSp / 2; } const sp = hi - lo, n = vals.length; let d = "", f = true;
@@ -685,7 +684,11 @@ VIEWS.overview = {
     const sT = $("#kpiTmpS"); if (sT) sT.innerHTML = d.ok ? `avg <b class="num">${fmt(tp.avg)}</b>° · target <b class="num">${fmt(tp.target)}</b>°` : "";
     const sW = $("#kpiWS"); if (sW) sW.innerHTML = d.ok ? `<b class="num">${fmt(pw.voltage_v, 2)}</b> V · MPO <b class="num">${fmt(pw.mpo_w)}</b> W` : "";
     const sE = $("#kpiEffS"); if (sE) sE.innerHTML = d.ok ? `<b class="num">${hv5 && pw.watts ? fmt(hv5 * 1000 / pw.watts, 1) : "—"}</b> GH/W` : "";
-    const ha = $("#heroAvgs"); if (ha) ha.innerHTML = d.ok ? `<span>5-minute average <b class="num">${fmt(hr.ths_5m, 3)}</b> · since boot <b class="num">${fmt(hr.ths_avg, 3)}</b> TH/s</span>` : "";
+    const ha = $("#heroAvgs");
+    if (ha) {
+      const down = S.range > 3600 ? `<span class="sep"></span><span class="t3">Beyond 1 hour, live is a 15s average</span>` : "";
+      ha.innerHTML = d.ok ? `<span>Live <b class="num">${fmt(hv5, 3)}</b> TH/s</span><span class="sep"></span><span>5m avg <b class="num">${fmt(hr.ths_5m, 3)}</b> · since boot <b class="num">${fmt(hr.ths_avg, 3)}</b></span>${down}` : "";
+    }
     const hashing = er.hash_status == 1 || (er.hash_status == null && d.ok), ap = activePool();
     const meta = $("#heroMeta");
     if (meta) meta.innerHTML = `<span class="pill ${d.ok ? (hashing ? "good" : "bad") : "bad"}"><span class="dot"></span>${d.ok ? (hashing ? "Hashing" : "Not hashing") : "Offline"}</span>` +
@@ -717,7 +720,7 @@ VIEWS.performance = {
     chart($("#chPow"), [{ k: "w", label: "Power", c: "#d4d7dd", w: 1.75, fill: ["rgba(255,255,255,.10)", "rgba(255,255,255,0)"] }], (u, v) => v.map(x => x + "W"), v => fmt(v) + " W",
       (u, lo, hi) => lo == null ? [0, 200] : [Math.max(0, Math.floor(lo * .9 / 10) * 10), Math.ceil(hi * 1.08 / 10) * 10]);
     const lg = $("#hsLegend");
-    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "h5m" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
+    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "hhero" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
     lg.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; S.series[k] = !S.series[k]; b.classList.toggle("off", !S.series[k]);
       const u = S.charts[0]; const i = u._keys.indexOf(k) + 1; u.setSeries(i, { show: S.series[k] }); };
   },
@@ -1143,7 +1146,7 @@ const DASH = {
     wireRange();
     chart($("#chHero"), HASH_SERIES(), (u, v) => v.map(x => x.toFixed(1)), v => fmt(v, 3) + " TH/s", hashRange);
     const lg = $("#hsLegend");
-    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "h5m" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
+    lg.innerHTML = HASH_SERIES().map(s => `<button data-k="${s.k}" class="${S.series[s.k] ? "" : "off"}"><i style="background:${s.c};width:12px;height:${s.k === "hhero" ? 3 : 2}px;border-radius:2px;display:inline-block"></i>${s.label}</button>`).join("");
     lg.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; S.series[k] = !S.series[k]; b.classList.toggle("off", !S.series[k]);
       const u = S.charts.find(c => c._keys.includes(k) && c.root.closest("#chHero")); if (u) u.setSeries(u._keys.indexOf(k) + 1, { show: S.series[k] }); };
     VIEWS.hardware.wire();

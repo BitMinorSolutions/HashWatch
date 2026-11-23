@@ -149,11 +149,20 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 			t.Errorf("Mining / KPI UI missing %q", s)
 		}
 	}
-	if strings.Count(js, "5-minute average") < 1 {
-		t.Fatal("chart header should still show the 5-minute average")
+	if !strings.Contains(js, "Live <b class=\"num\">${fmt(hv5, 3)}</b> TH/s") {
+		t.Fatal("chart header should lead with the live chip-reported hashrate")
 	}
-	if strings.Contains(js, "· 5-minute average") {
-		t.Fatal("headline must not still call the main number a 5-minute average")
+	if !strings.Contains(js, "5m avg") {
+		t.Fatal("chart header should still show the 5-minute average as secondary")
+	}
+	if strings.Contains(js, "5-minute average") {
+		t.Fatal("chart header must not lead with the 5-minute average")
+	}
+	if !strings.Contains(js, `{ k: "hhero", label: "Live (chip-reported)"`) {
+		t.Fatal("hashrate chart main series must be live chip-reported")
+	}
+	if strings.Contains(js, `{ k: "h15m"`) || strings.Contains(js, `"15m avg"`) {
+		t.Fatal("15m avg must not appear on the hashrate chart")
 	}
 	if !strings.Contains(js, "MINING.update()") {
 		t.Fatal("lottery load must refresh the Mining card so odds stay in sync")

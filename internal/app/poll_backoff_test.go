@@ -45,3 +45,26 @@ func TestThinHistory(t *testing.T) {
 		t.Fatalf("recent=%d old=%d total=%d", recent, old, len(h))
 	}
 }
+
+func TestThinAveragesLiveHashrate(t *testing.T) {
+	now := int64(200000)
+	f := func(v float64) *float64 { return &v }
+	var h []model.Sample
+	// Two hours back, 5s cadence: three live readings in the first old bucket.
+	start := now - fullRes - 30
+	for i, v := range []float64{3, 6, 9} {
+		h = append(h, model.Sample{T: start + int64(i)*5, HHero: f(v), H5m: f(4)})
+	}
+	// And a recent full-res point that must be left alone.
+	h = append(h, model.Sample{T: now - 10, HHero: f(8), H5m: f(5)})
+	out := thin(h, now)
+	if len(out) != 2 {
+		t.Fatalf("want 2 samples, got %d", len(out))
+	}
+	if out[0].HHero == nil || *out[0].HHero != 6 {
+		t.Fatalf("old live bucket should average 3,6,9 got %v", out[0].HHero)
+	}
+	if out[1].HHero == nil || *out[1].HHero != 8 {
+		t.Fatalf("recent point should be unchanged, got %v", out[1].HHero)
+	}
+}

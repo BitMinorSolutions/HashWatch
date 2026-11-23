@@ -39,6 +39,8 @@ const (
 	DefaultEvery      = 2 * time.Minute
 	DefaultPriceEvery = 60 * time.Second
 	MaxBackoff        = 5 * time.Minute
+	NetworkStaleAfter = 15 * time.Minute
+	PriceStaleAfter   = 10 * time.Minute
 )
 
 // Block is one recent network block.
@@ -61,7 +63,7 @@ type Snapshot struct {
 	TipHeight    int64   `json:"tip_height"`
 	Blocks       []Block `json:"blocks"`
 	AvgFeesSat   int64   `json:"avg_fees_sat"`
-	NetFetched   int64   `json:"net_fetched"` // unix time difficulty/blocks were fetched
+	NetFetched   int64   `json:"net_fetched"` // unix time of last successful network data receipt (not block age)
 	PriceUSD     float64 `json:"price_usd"`
 	PriceFetched int64   `json:"price_fetched"`
 	Source       string  `json:"source"`
@@ -69,8 +71,8 @@ type Snapshot struct {
 	LastErr      string  `json:"last_err,omitempty"`
 	PriceErr     string  `json:"price_err,omitempty"`
 	// Live websocket (mempool.space). WSConnected is true while the socket is up.
-	WSConnected bool    `json:"ws_connected"`
-	WSLastEvent int64   `json:"ws_last_event,omitempty"` // unix time of the last applied ws message
+	WSConnected bool     `json:"ws_connected"`
+	WSLastEvent int64    `json:"ws_last_event,omitempty"` // unix time of the last applied ws message
 	DiffAdj     *DiffAdj `json:"diff_adj,omitempty"`
 	// Rev increments on every applied network/price change so the UI can wait for it.
 	Rev int64 `json:"rev,omitempty"`
@@ -79,11 +81,23 @@ type Snapshot struct {
 // DiffAdj is Bitcoin's current difficulty-adjustment progress, from mempool.space.
 type DiffAdj struct {
 	ProgressPercent       float64 `json:"progress_percent"`
-	DifficultyChange      float64 `json:"difficulty_change"` // estimated % change at retarget
+	DifficultyChange      float64 `json:"difficulty_change"`                 // estimated % change at retarget
 	EstimatedRetargetDate int64   `json:"estimated_retarget_date,omitempty"` // unix seconds
 	RemainingBlocks       int64   `json:"remaining_blocks"`
 	NextRetargetHeight    int64   `json:"next_retarget_height,omitempty"`
 	PreviousRetarget      float64 `json:"previous_retarget,omitempty"`
+}
+
+// NetworkStale is true when we once had network data and it is older than
+// NetworkStaleAfter. Age is measured from the last successful receipt
+// (websocket stats/blocks or REST), not from the last block's timestamp.
+func (s Snapshot) NetworkStale(now int64) bool {
+	return s.NetFetched > 0 && now-s.NetFetched >= int64(NetworkStaleAfter/time.Second)
+}
+
+// PriceStale is true when the last successful price receipt is older than PriceStaleAfter.
+func (s Snapshot) PriceStale(now int64) bool {
+	return s.PriceFetched > 0 && now-s.PriceFetched >= int64(PriceStaleAfter/time.Second)
 }
 
 // Fetcher keeps Snapshot fresh in the background.
@@ -105,11 +119,11 @@ type Fetcher struct {
 	// when using the default mempool.space API; a literal "-" disables the socket.
 	WSURL string
 
-	mu     sync.Mutex
-	snap   Snapshot
-	kick   chan struct{}
-	wait   chan struct{}
-	wsUp   bool
+	mu   sync.Mutex
+	snap Snapshot
+	kick chan struct{}
+	wait chan struct{}
+	wsUp bool
 }
 
 func New(dir string) *Fetcher {
@@ -181,10 +195,11 @@ func (f *Fetcher) Run(ctx context.Context) {
 			net, price = f.Enabled()
 		}
 		now := f.Now()
-		// When the websocket is healthy, skip REST polling; fall back to it the
-		// moment the socket is down or has gone quiet.
-		wsLive := f.wsHealthy()
-		if net && !wsLive && (lastNet.IsZero() || now.Sub(lastNet) >= netWait) {
+		// REST is the freshness source whenever a source has gone quiet
+		// (including a live websocket that has not delivered that data).
+		// Successful WS stats/blocks/price messages keep fetched times fresh
+		// and suppress the corresponding REST poll until they age out.
+		if net && !f.netFresh(now) && (lastNet.IsZero() || now.Sub(lastNet) >= netWait) {
 			if err := f.RefreshNetwork(ctx); err != nil {
 				netWait = nextBackoff(netWait, MaxBackoff)
 			} else {
@@ -192,7 +207,7 @@ func (f *Fetcher) Run(ctx context.Context) {
 			}
 			lastNet = now
 		}
-		if price && !wsLive && (lastPrice.IsZero() || now.Sub(lastPrice) >= priceWait) {
+		if price && !f.priceFresh(now) && (lastPrice.IsZero() || now.Sub(lastPrice) >= priceWait) {
 			if err := f.RefreshPrice(ctx); err != nil {
 				priceWait = nextBackoff(priceWait, MaxBackoff)
 			} else {
@@ -200,7 +215,7 @@ func (f *Fetcher) Run(ctx context.Context) {
 			}
 			lastPrice = now
 		}
-		wait := timeUntil(now, net, lastNet, netWait, price, lastPrice, priceWait)
+		wait := f.sleepFor(now, net, price, lastNet, netWait, lastPrice, priceWait)
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -234,6 +249,64 @@ func timeUntil(now time.Time, net bool, lastNet time.Time, netWait time.Duration
 	}
 	due(net, lastNet, netWait)
 	due(price, lastPrice, priceWait)
+	if !net && !price {
+		return 20 * time.Second
+	}
+	if wait < 0 {
+		return 0
+	}
+	return wait
+}
+
+func (f *Fetcher) netFresh(now time.Time) bool {
+	return f.sourceFresh(now, func(s Snapshot) int64 { return s.NetFetched }, f.netEvery())
+}
+
+func (f *Fetcher) priceFresh(now time.Time) bool {
+	return f.sourceFresh(now, func(s Snapshot) int64 { return s.PriceFetched }, f.priceEvery())
+}
+
+func (f *Fetcher) sourceFresh(now time.Time, get func(Snapshot) int64, every time.Duration) bool {
+	f.mu.Lock()
+	ts := get(f.snap)
+	f.mu.Unlock()
+	if ts <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(ts, 0)) < every
+}
+
+// sleepFor waits until a source is due for REST, or until a previously fresh
+// WS/REST receipt ages out so REST can take over.
+func (f *Fetcher) sleepFor(now time.Time, net, price bool, lastNet time.Time, netWait time.Duration, lastPrice time.Time, priceWait time.Duration) time.Duration {
+	f.mu.Lock()
+	nf, pf := f.snap.NetFetched, f.snap.PriceFetched
+	f.mu.Unlock()
+	wait := MaxBackoff
+	consider := func(on bool, fetched int64, every time.Duration, last time.Time, attemptWait time.Duration) {
+		if !on {
+			return
+		}
+		var d time.Duration
+		if fetched > 0 {
+			if left := every - now.Sub(time.Unix(fetched, 0)); left > 0 {
+				d = left
+			} else if last.IsZero() {
+				d = 0
+			} else {
+				d = attemptWait - now.Sub(last)
+			}
+		} else if last.IsZero() {
+			d = 0
+		} else {
+			d = attemptWait - now.Sub(last)
+		}
+		if d < wait {
+			wait = d
+		}
+	}
+	consider(net, nf, f.netEvery(), lastNet, netWait)
+	consider(price, pf, f.priceEvery(), lastPrice, priceWait)
 	if !net && !price {
 		return 20 * time.Second
 	}
@@ -466,9 +539,11 @@ func (f *Fetcher) Set(s Snapshot) {
 // DefaultWSURL is mempool.space's public live websocket.
 const DefaultWSURL = "wss://mempool.space/api/v1/ws"
 
-// How long the socket may stay silent before we treat it as down and resume REST polling.
-// A new block is ~10 minutes; conversions often arrive more often. 12 minutes covers a
-// missed block with a little slack.
+// wsPingEvery is how often we send a websocket ping while the session is up.
+const wsPingEvery = 30 * time.Second
+
+// How long the socket may stay silent (no applied messages) before wsHealthy
+// is false. REST polling itself is driven by fetched-time freshness, not this.
 const wsQuietAfter = 12 * time.Minute
 
 func (f *Fetcher) wsHealthy() bool {
