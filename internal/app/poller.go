@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -62,10 +63,11 @@ type Poller struct {
 	dir    string
 	mu     sync.RWMutex
 	m      map[string]*minerState
+	wait   chan struct{}
 }
 
 func NewPoller(dir string, every time.Duration) *Poller {
-	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}, Mining: mining.NewLog(dir)}
+	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}, Mining: mining.NewLog(dir), wait: make(chan struct{})}
 	go func() {
 		for range time.Tick(time.Minute) {
 			p.saveHistory()
@@ -222,6 +224,10 @@ func (p *Poller) record(id string, st *minerState, snap *model.Snapshot) {
 		st.LastErr = fmt.Sprint(snap.QueryErrors)
 		log.Printf("miner %s: %s", id, st.LastErr)
 	}
+	if p.wait != nil {
+		close(p.wait)
+		p.wait = make(chan struct{})
+	}
 }
 
 // thin drops samples older than 24 h and keeps one per thinEvery seconds beyond the last hour.
@@ -294,6 +300,40 @@ func (p *Poller) MiningView(id string, since int64) mining.View {
 		return mining.View{}
 	}
 	return p.Mining.View(id, since)
+}
+
+// lastChangeUnix is the most recent poll timestamp we can wait on (ok or failed).
+func (p *Poller) lastChangeUnix(id string) int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	st := p.m[id]
+	if st == nil || st.Latest == nil {
+		return 0
+	}
+	if st.Latest.FetchedAt > 0 {
+		return st.Latest.FetchedAt
+	}
+	return st.LastOK
+}
+
+// WaitChange returns when this miner has a newer sample than since, or ctx is done.
+func (p *Poller) WaitChange(ctx context.Context, id string, since int64) {
+	for {
+		if p.lastChangeUnix(id) > since {
+			return
+		}
+		p.mu.RLock()
+		ch := p.wait
+		p.mu.RUnlock()
+		if ch == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+		}
+	}
 }
 
 // SaveNow writes history to disk (used on shutdown).

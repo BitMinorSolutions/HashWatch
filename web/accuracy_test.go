@@ -136,36 +136,36 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	for _, s := range []string{
 		"Live (chip-reported)",
 		`id="secMining"`,
-		`id="mineStory"`,
-		`id="mineMeter"`,
-		`id="mineOdds"`,
-		`id="mineFeed"`,
-		"How close have we gotten?",
-		"Your miner is guessing about ",
-		"New block found by the network",
-		"of the way to winning a block",
+		`id="kpiRow"`,
+		`id="mineGrid"`,
+		`id="dashAlert"`,
+		"New block ",
+		"of the way to a block",
 		"like flipping heads ",
-		"New best share!",
-		" shares found",
-		" · latest ",
+		"Hidden while the miner is offline",
 		"prefers-reduced-motion",
 	} {
 		if !strings.Contains(js, s) && !strings.Contains(css, s) {
-			t.Errorf("Mining / hero UI missing %q", s)
+			t.Errorf("Mining / KPI UI missing %q", s)
 		}
 	}
 	if strings.Count(js, "5-minute average") < 1 {
-		t.Fatal("headline should still show the 5-minute average underneath the live hashrate")
+		t.Fatal("chart header should still show the 5-minute average")
 	}
 	if strings.Contains(js, "· 5-minute average") {
 		t.Fatal("headline must not still call the main number a 5-minute average")
 	}
 	if !strings.Contains(js, "MINING.update()") {
-		t.Fatal("lottery load must refresh the Mining view so odds and the meter stay in sync")
+		t.Fatal("lottery load must refresh the Mining card so odds stay in sync")
 	}
 	for _, gone := range []string{
 		`id="hashAnim"`,
 		`id="mineCv"`,
+		`id="mineStory"`,
+		`id="mineMeter"`,
+		`id="mineFeed"`,
+		"How close have we gotten?",
+		"Your miner is guessing about ",
 		"Illustration — not individual hashes",
 		"Share hits",
 		"timeWindow(",
@@ -185,8 +185,11 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 
 func TestOfflineHidesHashrateUnit(t *testing.T) {
 	js := appJS(t)
-	if !strings.Contains(js, "unit.hidden = !d.ok") {
-		t.Fatal("the TH/s unit next to the headline must be hidden when the miner is offline")
+	if !strings.Contains(js, "unit.hidden = !unitShow") && !strings.Contains(js, "unit.hidden = !d.ok") {
+		t.Fatal("KPI units must be hidden when the miner is offline")
+	}
+	if !strings.Contains(js, "Miner offline") || !strings.Contains(js, `id="dashOffline"`) {
+		t.Fatal("offline state needs a dedicated screen")
 	}
 }
 

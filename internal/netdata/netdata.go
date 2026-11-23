@@ -68,6 +68,22 @@ type Snapshot struct {
 	PriceSource  string  `json:"price_source"`
 	LastErr      string  `json:"last_err,omitempty"`
 	PriceErr     string  `json:"price_err,omitempty"`
+	// Live websocket (mempool.space). WSConnected is true while the socket is up.
+	WSConnected bool    `json:"ws_connected"`
+	WSLastEvent int64   `json:"ws_last_event,omitempty"` // unix time of the last applied ws message
+	DiffAdj     *DiffAdj `json:"diff_adj,omitempty"`
+	// Rev increments on every applied network/price change so the UI can wait for it.
+	Rev int64 `json:"rev,omitempty"`
+}
+
+// DiffAdj is Bitcoin's current difficulty-adjustment progress, from mempool.space.
+type DiffAdj struct {
+	ProgressPercent       float64 `json:"progress_percent"`
+	DifficultyChange      float64 `json:"difficulty_change"` // estimated % change at retarget
+	EstimatedRetargetDate int64   `json:"estimated_retarget_date,omitempty"` // unix seconds
+	RemainingBlocks       int64   `json:"remaining_blocks"`
+	NextRetargetHeight    int64   `json:"next_retarget_height,omitempty"`
+	PreviousRetarget      float64 `json:"previous_retarget,omitempty"`
 }
 
 // Fetcher keeps Snapshot fresh in the background.
@@ -83,15 +99,22 @@ type Fetcher struct {
 	// Enabled reports which sources may be contacted right now (privacy settings).
 	Enabled func() (network, price bool)
 	Now     func() time.Time
+	// OnChange is called (without the fetcher lock held) after the snapshot changes.
+	OnChange func(Snapshot)
+	// WSURL overrides the default mempool websocket (tests). Empty = DefaultWSURL
+	// when using the default mempool.space API; a literal "-" disables the socket.
+	WSURL string
 
-	mu   sync.Mutex
-	snap Snapshot
-	kick chan struct{}
+	mu     sync.Mutex
+	snap   Snapshot
+	kick   chan struct{}
+	wait   chan struct{}
+	wsUp   bool
 }
 
 func New(dir string) *Fetcher {
 	f := &Fetcher{Base: DefaultBase, Path: filepath.Join(dir, "netcache.json"), Every: DefaultEvery, PriceEvery: DefaultPriceEvery,
-		Client: &http.Client{Timeout: 12 * time.Second}, Now: time.Now, kick: make(chan struct{}, 1)}
+		Client: &http.Client{Timeout: 12 * time.Second}, Now: time.Now, kick: make(chan struct{}, 1), wait: make(chan struct{})}
 	if b, err := os.ReadFile(f.Path); err == nil {
 		_ = json.Unmarshal(b, &f.snap)
 	}
@@ -149,6 +172,7 @@ func (f *Fetcher) priceEvery() time.Duration {
 // the last good values and their timestamps, and double the wait up to
 // MaxBackoff. A successful fetch, or Kick, resets the wait to the default.
 func (f *Fetcher) Run(ctx context.Context) {
+	go f.runWS(ctx)
 	var lastNet, lastPrice time.Time
 	netWait, priceWait := f.netEvery(), f.priceEvery()
 	for {
@@ -157,7 +181,10 @@ func (f *Fetcher) Run(ctx context.Context) {
 			net, price = f.Enabled()
 		}
 		now := f.Now()
-		if net && (lastNet.IsZero() || now.Sub(lastNet) >= netWait) {
+		// When the websocket is healthy, skip REST polling; fall back to it the
+		// moment the socket is down or has gone quiet.
+		wsLive := f.wsHealthy()
+		if net && !wsLive && (lastNet.IsZero() || now.Sub(lastNet) >= netWait) {
 			if err := f.RefreshNetwork(ctx); err != nil {
 				netWait = nextBackoff(netWait, MaxBackoff)
 			} else {
@@ -165,7 +192,7 @@ func (f *Fetcher) Run(ctx context.Context) {
 			}
 			lastNet = now
 		}
-		if price && (lastPrice.IsZero() || now.Sub(lastPrice) >= priceWait) {
+		if price && !wsLive && (lastPrice.IsZero() || now.Sub(lastPrice) >= priceWait) {
 			if err := f.RefreshPrice(ctx); err != nil {
 				priceWait = nextBackoff(priceWait, MaxBackoff)
 			} else {
@@ -280,9 +307,9 @@ func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 		}
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if err != nil {
 		f.snap.LastErr = err.Error()
+		f.mu.Unlock()
 		return err
 	}
 	var blocks []Block
@@ -306,7 +333,10 @@ func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 	f.snap.NetFetched = f.Now().Unix()
 	f.snap.Source = "mempool.space"
 	f.snap.LastErr = ""
+	f.bumpLocked()
 	f.saveLocked()
+	f.mu.Unlock()
+	f.notify()
 	return nil
 }
 
@@ -357,12 +387,14 @@ func (f *Fetcher) refreshDifficultyFallback(ctx context.Context) error {
 		return fmt.Errorf("difficulty fallback: bad value %q", strings.TrimSpace(string(b)))
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.snap.Difficulty = d
 	f.snap.NetFetched = f.Now().Unix()
 	f.snap.Source = "blockchain.info"
 	f.snap.LastErr = ""
+	f.bumpLocked()
 	f.saveLocked()
+	f.mu.Unlock()
+	f.notify()
 	return nil
 }
 
@@ -387,14 +419,17 @@ func (f *Fetcher) RefreshPrice(ctx context.Context) error {
 		}
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if err != nil {
 		f.snap.PriceErr = err.Error()
+		f.mu.Unlock()
 		return err
 	}
 	f.snap.PriceUSD, f.snap.PriceFetched, f.snap.PriceErr = p.USD, f.Now().Unix(), ""
 	f.snap.PriceSource = src
+	f.bumpLocked()
 	f.saveLocked()
+	f.mu.Unlock()
+	f.notify()
 	return nil
 }
 
@@ -426,4 +461,87 @@ func (f *Fetcher) Set(s Snapshot) {
 	f.mu.Lock()
 	f.snap = s
 	f.mu.Unlock()
+}
+
+// DefaultWSURL is mempool.space's public live websocket.
+const DefaultWSURL = "wss://mempool.space/api/v1/ws"
+
+// How long the socket may stay silent before we treat it as down and resume REST polling.
+// A new block is ~10 minutes; conversions often arrive more often. 12 minutes covers a
+// missed block with a little slack.
+const wsQuietAfter = 12 * time.Minute
+
+func (f *Fetcher) wsHealthy() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.wsUp && !f.snap.WSConnected {
+		return false
+	}
+	last := f.snap.WSLastEvent
+	if last <= 0 {
+		// Just connected, waiting for the first message: treat as healthy briefly
+		// so we don't immediately stampede REST, but not forever.
+		return f.wsUp
+	}
+	return f.Now().Unix()-last < int64(wsQuietAfter/time.Second)
+}
+
+// Wait waits until the snapshot revision is greater than since, or ctx is done.
+func (f *Fetcher) Wait(ctx context.Context, since int64) (Snapshot, int64) {
+	for {
+		f.mu.Lock()
+		rev := f.snap.Rev
+		ch := f.wait
+		if ch == nil {
+			ch = make(chan struct{})
+			f.wait = ch
+		}
+		if rev > since {
+			s := f.snap
+			s.Blocks = append([]Block(nil), f.snap.Blocks...)
+			if f.snap.DiffAdj != nil {
+				d := *f.snap.DiffAdj
+				s.DiffAdj = &d
+			}
+			f.mu.Unlock()
+			return s, rev
+		}
+		f.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			s := f.Get()
+			return s, s.Rev
+		case <-ch:
+		}
+	}
+}
+
+func (f *Fetcher) bumpLocked() {
+	f.snap.Rev++
+	if f.wait != nil {
+		close(f.wait)
+	}
+	f.wait = make(chan struct{})
+}
+
+func (f *Fetcher) notify() {
+	if f.OnChange == nil {
+		return
+	}
+	s := f.Get()
+	f.OnChange(s)
+}
+
+func (f *Fetcher) setWSConnected(up bool) {
+	f.mu.Lock()
+	changed := f.wsUp != up || f.snap.WSConnected != up
+	f.wsUp = up
+	f.snap.WSConnected = up
+	if changed {
+		f.bumpLocked()
+	}
+	f.mu.Unlock()
+	if changed {
+		f.notify()
+	}
 }

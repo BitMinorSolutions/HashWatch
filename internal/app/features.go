@@ -21,10 +21,22 @@ func (s *Server) netView() (netdata.Snapshot, map[string]any) {
 	}
 	full := s.Net.Get()
 	now := s.Now().Unix()
+	info["ws_live"] = full.WSConnected
+	if full.WSLastEvent > 0 {
+		info["ws_age"] = now - full.WSLastEvent
+	}
+	if full.Rev > 0 {
+		info["rev"] = full.Rev
+	}
 	if !p.NetworkOff && full.NetFetched > 0 {
 		n.Difficulty, n.TipHeight, n.Blocks, n.AvgFeesSat, n.NetFetched, n.Source = full.Difficulty, full.TipHeight, full.Blocks, full.AvgFeesSat, full.NetFetched, full.Source
+		n.DiffAdj = full.DiffAdj
+		n.WSConnected, n.WSLastEvent, n.Rev = full.WSConnected, full.WSLastEvent, full.Rev
 		info["network_age"] = now - full.NetFetched
-		info["network_stale"] = now-full.NetFetched > 30*60
+		info["network_stale"] = now-full.NetFetched > 15*60
+		if full.DiffAdj != nil {
+			info["diff_adj"] = full.DiffAdj
+		}
 	}
 	if !p.NetworkOff && full.LastErr != "" {
 		info["network_err"] = full.LastErr
@@ -32,7 +44,7 @@ func (s *Server) netView() (netdata.Snapshot, map[string]any) {
 	if !p.PriceOff && full.PriceFetched > 0 {
 		n.PriceUSD, n.PriceFetched, n.PriceSource = full.PriceUSD, full.PriceFetched, full.PriceSource
 		info["price_age"] = now - full.PriceFetched
-		info["price_stale"] = now-full.PriceFetched > 60*60
+		info["price_stale"] = now-full.PriceFetched > 10*60
 	}
 	if !p.PriceOff && full.PriceErr != "" {
 		info["price_err"] = full.PriceErr
@@ -55,6 +67,13 @@ func (s *Server) lotteryGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "unknown miner"})
 		return
 	}
+	writeJSON(w, 200, s.lotteryPayload(id))
+}
+
+// lotteryPayload is the lottery/odds card, recomputed from the live hashrate and
+// the current network snapshot so a websocket difficulty or price update is
+// visible immediately.
+func (s *Server) lotteryPayload(id string) map[string]any {
 	net, info := s.netView()
 	out := map[string]any{"net": info, "server_time": s.Now().Unix()}
 	snap := s.Poll.Latest(id)
@@ -94,7 +113,7 @@ func (s *Server) lotteryGet(w http.ResponseWriter, r *http.Request) {
 		blocks = blocks[:12]
 	}
 	out["blocks"] = blocks
-	writeJSON(w, 200, out)
+	return out
 }
 
 func (s *Server) featuresGet(w http.ResponseWriter, r *http.Request) {

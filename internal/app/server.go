@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -361,6 +362,12 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("miner")
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	netSince, _ := strconv.ParseInt(r.URL.Query().Get("net"), 10, 64)
+	alertSince, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
+	hold := r.URL.Query().Get("hold") == "1"
+	if hold {
+		s.waitLive(r.Context(), id, since, netSince, alertSince)
+	}
 	v, ok := s.Poll.Live(id, since)
 	if !ok {
 		writeJSON(w, 404, map[string]string{"error": "unknown miner"})
@@ -379,11 +386,81 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	}
 	out["mining"] = s.Poll.MiningView(id, mineSince)
 	if s.Alerts != nil {
-		a, _ := strconv.ParseInt(r.URL.Query().Get("a"), 10, 64)
-		items, latest := s.Alerts.Since(a, 20)
+		items, latest := s.Alerts.Since(alertSince, 20)
 		out["alerts"], out["alerts_latest"] = items, latest
 	}
+	if _, ok := s.Cfg.minerByID(id); ok {
+		lot := s.lotteryPayload(id)
+		out["lottery"] = lot
+		if net, ok := lot["net"].(map[string]any); ok {
+			if rev, ok := net["rev"]; ok {
+				out["net_rev"] = rev
+			}
+			out["net"] = net
+		}
+	}
 	writeJSON(w, 200, out)
+}
+
+func (s *Server) waitLive(ctx context.Context, id string, since, netSince, alertSince int64) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	changed := func() bool {
+		if s.Poll != nil && s.Poll.lastChangeUnix(id) > since {
+			return true
+		}
+		if s.Net != nil {
+			if s.Net.Get().Rev > netSince {
+				return true
+			}
+		}
+		if s.Alerts != nil {
+			_, latest := s.Alerts.Since(alertSince, 1)
+			if latest > alertSince {
+				return true
+			}
+		}
+		return false
+	}
+	if changed() {
+		return
+	}
+	netCh := make(chan struct{}, 1)
+	if s.Net != nil {
+		go func() {
+			s.Net.Wait(ctx, netSince)
+			select {
+			case netCh <- struct{}{}:
+			default:
+			}
+		}()
+	}
+	minerCh := make(chan struct{}, 1)
+	if s.Poll != nil {
+		go func() {
+			s.Poll.WaitChange(ctx, id, since)
+			select {
+			case minerCh <- struct{}{}:
+			default:
+			}
+		}()
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-netCh:
+			return
+		case <-minerCh:
+			return
+		case <-tick.C:
+			if changed() {
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) addMiner(w http.ResponseWriter, r *http.Request) {
