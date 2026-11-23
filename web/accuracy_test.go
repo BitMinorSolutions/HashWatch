@@ -71,6 +71,38 @@ func TestShareCopy(t *testing.T) {
 // Since v0.7.0 the sign-in form posted /api/login without the X-CSRF-Token header,
 // so every password sign-in from a browser was refused with "Missing or invalid
 // security token" (found in the v0.9.0 end-to-end run).
+func TestShareSheetNotOnDashboard(t *testing.T) {
+	js := appJS(t)
+	css := appCSS(t)
+	if strings.Contains(js, `id="linkCard"`) || strings.Contains(js, "function linkCard(") {
+		t.Fatal("the dashboard Share link card must be gone")
+	}
+	if !strings.Contains(js, `href="#/share"`) {
+		t.Fatal("the header share button should open the Share sheet")
+	}
+	if strings.Contains(js, `href="#/settings?remote"`) && !strings.Contains(js, `function openShareSheet()`) {
+		t.Fatal("header share should not only deep-link to Settings")
+	}
+	for _, s := range []string{
+		"function openShareSheet(",
+		`id="sharePane"`,
+		`id="shCopy"`,
+		`id="shStop"`,
+		"Anyone with this link can watch your dashboard. They can't sign in or change anything.",
+		"Stop sharing",
+	} {
+		if !strings.Contains(js, s) {
+			t.Errorf("Share sheet missing %q", s)
+		}
+	}
+	if !strings.Contains(css, ".msheet.share-sheet") || !strings.Contains(css, ".share-pane") {
+		t.Fatal("Share sheet styles missing")
+	}
+	if !strings.Contains(css, "prefers-reduced-motion") {
+		t.Fatal("reduced motion rules should still exist")
+	}
+}
+
 func TestLoginSendsCSRFToken(t *testing.T) {
 	js := appJS(t)
 	i := strings.Index(js, `fetch("/api/login"`)

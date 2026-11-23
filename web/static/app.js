@@ -1,4 +1,4 @@
-/* HashWatch v0.9.8 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.9 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -349,7 +349,7 @@ function viewPiOffline() {
 }
 
 /* ---------------- shell: ONE scrolling page (v0.7.0) ----------------
-   Everything about the miner lives on the dashboard. Settings (incl. Share and its QR) and alert history open as a sheet. */
+   Everything about the miner lives on the dashboard. Settings, Share, and alert history open as a sheet. */
 const PAGES = [["dashboard", "Dashboard"], ["settings", "Settings"], ["alerts", "Alerts"]];
 // Old multi-page links (#/pools, #/controls, …) now scroll to that card on the single page.
 const ANCHOR = { overview: "top", performance: "secShares", hardware: "secTemps", pools: "secPools", controls: "secControls", raw: "secRaw", mining: "secMining" };
@@ -365,7 +365,7 @@ function shell() {
       <span class="hdr-live" id="hdrLive"><span class="dot warn"></span><span>Connecting…</span></span>
       <span class="grow"></span>
       <div class="top-acts">
-        ${isView() ? "" : `<a class="icon-btn rem-btn" href="#/settings?remote" aria-label="Share my dashboard" title="Share my dashboard">${ic("share", "sm")}<em class="rem-dot" id="remDot"></em></a>`}
+        ${isView() ? "" : `<a class="icon-btn rem-btn" href="#/share" aria-label="Share my dashboard" title="Share my dashboard">${ic("share", "sm")}<em class="rem-dot" id="remDot"></em></a>`}
         <a class="icon-btn bell-btn" href="#/alerts" aria-label="Alerts" title="Alerts">${ic("bell", "sm")}<em class="badge dot-badge" data-badge></em></a>
         <a class="icon-btn" href="#/settings" aria-label="Settings" title="Settings">${ic("settings", "sm")}</a></div>
     </header>
@@ -386,25 +386,30 @@ window.addEventListener("scroll", onScroll, { passive: true });
 function route(first) {
   const r = (location.hash.replace(/^#\/?/, "").split(/[?#]/)[0] || "");
   if (r === "settings" || r === "alerts") { S.route = r; openSheet(r); }
+  else if (r === "share") { S.route = r; openShareSheet(); }
   else {
     S.route = "dashboard"; closeSheet();
     const a = ANCHOR[r]; if (a && !first) { const t = a === "top" ? null : $("#" + a); t ? t.scrollIntoView({ block: "start", behavior: "smooth" }) : window.scrollTo({ top: 0, behavior: "smooth" }); }
     else if (a && first && a !== "top") setTimeout(() => { const t = $("#" + a); if (t) t.scrollIntoView({ block: "start" }); }, 60);
   }
-  document.title = S.route === "dashboard" ? `${S.miner ? S.miner.name + " · " : ""}${APP}` : `${S.route === "settings" ? "Settings" : "Alerts"} · ${APP}`;
+  document.title = S.route === "dashboard" ? `${S.miner ? S.miner.name + " · " : ""}${APP}` : `${S.route === "share" ? "Share" : (S.route === "settings" ? "Settings" : "Alerts")} · ${APP}`;
   renderCelebrate(); badge(); onScroll();
 }
 /* Settings / alerts sheet: centred panel on Mac & iPad, full-height sheet on iPhone. */
+function ensureSheet() {
+  let sc = $("#shScrim"), sh = $("#sheet");
+  if (sh) return { sc, sh };
+  sc = document.createElement("div"); sc.className = "scrim"; sc.id = "shScrim";
+  sh = document.createElement("div"); sh.className = "msheet"; sh.id = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-modal", "true");
+  document.body.append(sc, sh); sc.onclick = () => { location.hash = "#/"; };
+  requestAnimationFrame(() => { sc.classList.add("on"); sh.classList.add("on"); });
+  document.addEventListener("keydown", sheetKey); document.body.classList.add("sheet-open");
+  return { sc, sh };
+}
 function openSheet(kind) {
   clearTimeout(S.remT);
-  let sc = $("#shScrim"), sh = $("#sheet");
-  if (!sh) {
-    sc = document.createElement("div"); sc.className = "scrim"; sc.id = "shScrim";
-    sh = document.createElement("div"); sh.className = "msheet"; sh.id = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-modal", "true");
-    document.body.append(sc, sh); sc.onclick = () => { location.hash = "#/"; };
-    requestAnimationFrame(() => { sc.classList.add("on"); sh.classList.add("on"); });
-    document.addEventListener("keydown", sheetKey); document.body.classList.add("sheet-open");
-  }
+  const { sh } = ensureSheet();
+  sh.classList.remove("share-sheet");
   const title = kind === "settings" ? "Settings" : "Alerts";
   sh.setAttribute("aria-label", title);
   sh.innerHTML = `<div class="msheet-h"><div class="seg sm" id="shTabs"><button data-k="settings" class="${kind === "settings" ? "on" : ""}">Settings</button><button data-k="alerts" class="${kind === "alerts" ? "on" : ""}">Alerts <em class="badge" data-badge></em></button></div>
@@ -664,7 +669,6 @@ VIEWS.overview = {
       <div class="hero-chart reveal" id="chHero"><div class="chart-empty"></div></div>
       <div class="hero-range">${rangeSeg().replace('id="range"', 'id="range2"')}</div>
     </section>
-    <div id="linkCard"></div>
     <section class="panel strip" id="strip">${Array.from({ length: 5 }, () => '<div class="metric"><div class="sk" style="height:14px;width:60%"></div><div class="sk" style="height:28px;width:70%;margin-top:6px"></div><div class="sk" style="height:12px;width:50%;margin-top:6px"></div></div>').join("")}</section>
     <div class="cols">
       <section class="panel panel-pad span-7"><div class="sec-h"><h2>Status</h2><span class="t3" id="stUpd"></span></div><div id="notices"><div class="sk" style="height:48px"></div></div></section>
@@ -714,7 +718,6 @@ VIEWS.overview = {
     if (qm) qm.innerHTML = d.ok ? `<span>Fan <b class="num">${fmt(fan.rpm)}</b> RPM · ${fmt(fan.percent)}%</span><span class="sep"></span><span>Uptime <b>${esc(up.human || "—")}</b>${up.seconds ? ` <span class="t3">since ${esc(absTime(Math.floor(Date.now() / 1000) - up.seconds))}</span>` : ""}</span>` : "";
     const st = $("#stUpd"); if (st) st.innerHTML = d.fetched_at_unix ? `Updated <span data-rel="${d.fetched_at_unix}">${rel(d.fetched_at_unix)}</span>` : "";
     const nt = $("#notices"); if (nt) nt.innerHTML = notices();
-    linkCard();
   },
 };
 VIEWS.performance = {
@@ -1064,7 +1067,6 @@ const DASH = {
       </article>
     </section>
     <div class="quiet-meta" id="quietMeta"></div>
-    <div id="linkCard"></div>
     <section class="panel panel-pad chart-card" id="secHash">
       <div class="sec-h chart-h">
         <div class="chart-title"><h2>Hashrate</h2><div class="chart-avgs t3" id="heroAvgs"></div></div>
@@ -1489,7 +1491,7 @@ VIEWS.alerts = {
   },
 };
 
-/* ---------------- share link card (overview) ---------------- */
+/* ---------------- share sheet (header share button) ---------------- */
 const qrSrc = (u) => "/api/remote/qr.svg?u=" + encodeURIComponent(u);
 const tsQR = (u) => "/api/tailscale/qr.svg?u=" + encodeURIComponent(u);
 function tailscaleInfo() { return (S.state && S.state.tailscale) || {}; }
@@ -1507,21 +1509,84 @@ async function copyLink(u, btn) {
   try { await navigator.clipboard.writeText(u); } catch (e) { const t = document.createElement("textarea"); t.value = u; document.body.append(t); t.select(); document.execCommand("copy"); t.remove(); }
   toast("Link copied"); if (btn) { const h = btn.innerHTML; btn.innerHTML = ic("check", "sm") + "Copied"; setTimeout(() => btn.innerHTML = h, 1600); }
 }
-function linkCard() {
-  const el = $("#linkCard"); if (!el) return;
-  const r = S.remote || {};
-  if (!r.enabled || !r.url || r.state !== "online" || !S.state.local_viewer) { el.innerHTML = ""; el.dataset.u = ""; return; }
-  const seen = LS.get("hw_seen_link"), changed = !!seen && seen !== r.url;
-  if (!seen) LS.set("hw_seen_link", r.url);
-  const key = r.url + changed; if (el.dataset.u === key) return; el.dataset.u = key;
-  el.innerHTML = `<section class="panel link-card ${changed ? "is-new" : ""}">
-    <a class="lc-qr" href="#/settings?remote" aria-label="Show a larger QR code"><img src="${qrSrc(r.url)}" alt="QR code for your share link" width="104" height="104"></a>
-    <div class="lc-txt"><div class="lc-k">${ic("share", "sm")}Share link ${changed ? '<span class="pill accent">New link</span>' : '<span class="pill good"><span class="dot"></span>On</span>'}</div>
-      <div class="lc-url mono">${esc(r.url.replace(/^https:\/\//, ""))}</div>
-      <p>${changed ? "Your share link changed since you last saw it. The old one no longer works: send this one to anyone you share with." : "Anyone with this link can watch your dashboard. They can't sign in or change anything."}</p></div>
-    <div class="lc-acts"><button class="btn ghost" id="lcCopy">${ic("copy", "sm")}Copy</button>${changed ? '<button class="btn accent" id="lcOk">Got it</button>' : ""}</div></section>`;
-  $("#lcCopy").onclick = (e) => copyLink(r.url, e.currentTarget);
-  const ok = $("#lcOk"); if (ok) ok.onclick = () => { LS.set("hw_seen_link", r.url); el.dataset.u = ""; linkCard(); };
+function openShareSheet() {
+  clearTimeout(S.remT);
+  const { sh } = ensureSheet();
+  sh.classList.add("share-sheet");
+  sh.setAttribute("aria-label", "Share");
+  sh.innerHTML = `<div class="msheet-h"><b class="share-h-title">${ic("share", "sm")}Share</b>
+    <span class="grow"></span><button class="icon-btn" id="shX" aria-label="Close">${ic("x", "sm")}</button></div>
+    <div class="msheet-b" id="sheetBody"><div class="share-pane" id="sharePane"></div></div>`;
+  $("#shX").onclick = () => { location.hash = "#/"; };
+  shareSheetPaint();
+  shareRemoteLoad();
+}
+function shareURL() {
+  const r = S.remote || {}, rem = S.rem || {}, st = rem.status || {};
+  return r.url || st.url || "";
+}
+function shareSheetPaint() {
+  const el = $("#sharePane"); if (!el) return;
+  const r = S.remote || {}, rem = S.rem || {}, st = rem.status || {};
+  const url = shareURL();
+  const on = !!(r.enabled || rem.enabled);
+  const state = r.state || st.state || (on ? "starting" : "off");
+  const can = rem.available !== false && (rem.local_viewer !== false) && !!(S.state && S.state.local_viewer);
+  const shown = url.replace(/^https:\/\//, "");
+  const shownHTML = esc(shown).replace(/\.([A-Za-z0-9-]+)$/, ".<wbr>$1");
+  if (on && state === "online" && url) {
+    const seen = LS.get("hw_seen_link"), changed = !!seen && seen !== url;
+    if (!seen) LS.set("hw_seen_link", url);
+    el.innerHTML = `<div class="share-k">${ic("share", "sm")}Share link ${changed ? '<span class="pill accent">New link</span>' : '<span class="pill good"><span class="dot"></span>On</span>'}</div>
+      <div class="share-qr"><img src="${qrSrc(url)}" alt="QR code for your share link" width="168" height="168"></div>
+      <div class="share-url mono">${shownHTML}</div>
+      <p class="share-ex">${changed ? "Your share link changed since you last saw it. The old one no longer works: send this one to anyone you share with." : "Anyone with this link can watch your dashboard. They can't sign in or change anything."}</p>
+      <div class="share-acts"><button class="btn accent" id="shCopy">${ic("copy", "sm")}Copy</button>
+        <button class="btn ghost" id="shStop"${can ? "" : " disabled"}>Stop sharing</button></div>`;
+    $("#shCopy").onclick = (e) => copyLink(url, e.currentTarget);
+    const stop = $("#shStop"); if (stop) stop.onclick = shareStop;
+    return;
+  }
+  if (on && state === "error") {
+    el.innerHTML = `<div class="notice-s bad">${ic("circle-alert", "sm")}<span><b>Couldn't start sharing.</b> ${esc(st.error || r.error || "")}</span></div>
+      <div class="share-acts" style="margin-top:16px"><button class="btn ghost" id="shRetry">${ic("refresh-cw", "sm")}Try again</button>
+        <button class="btn ghost" id="shStop"${can ? "" : " disabled"}>Stop sharing</button></div>`;
+    const rt = $("#shRetry"); if (rt) rt.onclick = async () => { await remoteSet({ enabled: false }); await remoteSet({ enabled: true }); shareSheetPaint(); };
+    const stop = $("#shStop"); if (stop) stop.onclick = shareStop;
+    return;
+  }
+  if (on) {
+    el.innerHTML = `<div class="conn"><span class="spin"></span><span>${esc(st.detail || "Connecting…")}</span></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="share-k">${ic("share", "sm")}Share link</div>
+    <p class="share-ex">Turn Share on to get a view-only link. Anyone with the link can watch your dashboard. They can't sign in or change anything.</p>
+    <div class="share-acts"><button class="btn accent" id="shStart"${can ? "" : " disabled"}>${ic("share", "sm")}Share my dashboard</button></div>
+    ${can ? "" : `<div class="notice-s" style="margin-top:16px">${ic("lock", "sm")}<span>For safety, Share can only be switched from your home network.</span></div>`}`;
+  const start = $("#shStart"); if (start) start.onclick = shareStart;
+}
+async function shareRemoteLoad() {
+  clearTimeout(S.remT);
+  try { S.rem = await api("/api/remote"); } catch (e) { S.rem = S.rem || {}; }
+  if (S.rem && S.rem.status) {
+    const st = S.rem.status;
+    S.remote = Object.assign({}, S.remote || {}, { enabled: S.rem.enabled, url: st.url || (S.remote || {}).url, state: st.state || (S.remote || {}).state });
+    liveUI();
+  }
+  if (S.route === "share") shareSheetPaint();
+  const busy = S.rem && S.rem.status && ["downloading", "starting", "restarting"].includes(S.rem.status.state);
+  if (S.route === "share") S.remT = setTimeout(shareRemoteLoad, busy ? 800 : 5000);
+}
+async function shareStop() {
+  if (!await confirmDialog("Stop sharing?", "Your share link stops working right away and everyone watching is disconnected. Next time you turn Share on you'll get a new link.", "Stop sharing")) return;
+  try { await remoteSet({ enabled: false }); toast("Share is off · the link no longer works"); liveUI(); shareSheetPaint(); }
+  catch (e) { toast(e.message, "bad"); }
+}
+async function shareStart() {
+  if (!S.rem || S.rem.password_set === undefined) await shareRemoteLoad();
+  if (S.rem && S.rem.password_set === false) { S.remForm = true; location.hash = "#/settings?remote"; return; }
+  try { await remoteToggle(); liveUI(); shareSheetPaint(); shareRemoteLoad(); }
+  catch (e) { toast(e.message, "bad"); }
 }
 
 /* ---------------- settings ---------------- */

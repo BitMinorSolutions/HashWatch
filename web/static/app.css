@@ -773,6 +773,30 @@ body.sheet-open { overflow: hidden; }
 }
 .msheet-h .grow { flex: 1; }
 
+/* v0.9.9 — focused Share sheet from the header button */
+.msheet.share-sheet { width: min(420px, calc(100vw - 48px)); max-height: min(760px, calc(100vh - 48px)); }
+.share-h-title { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 650; letter-spacing: -.02em; }
+.share-h-title .i { color: var(--accent); }
+.share-pane { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 8px 4px 4px; }
+.share-k { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.share-k .i { color: var(--t3); }
+.share-qr { align-self: center; padding: 10px; border-radius: 18px; background: #fff;
+  box-shadow: 0 0 0 1px var(--line-2), 0 18px 40px -12px rgba(245,165,36,.28); }
+.share-qr img { display: block; width: 168px; height: 168px; border-radius: 6px; image-rendering: pixelated; }
+.share-url { font-size: 14px; color: var(--t1); overflow-wrap: break-word; word-break: normal; text-align: center; letter-spacing: -.01em; line-height: 1.45; }
+.share-ex { margin: 0; color: var(--t3); font-size: 13.5px; line-height: 1.5; text-align: center; }
+.share-acts { display: flex; gap: 8px; }
+.share-acts .btn { flex: 1; }
+@media (max-width: 699px) {
+  .msheet.share-sheet { width: 100%; max-height: calc(100dvh - var(--sat) - 12px); }
+  .share-qr img { width: 148px; height: 148px; }
+  .share-acts { flex-direction: column; }
+  .share-acts .btn { width: 100%; min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msheet.share-sheet { transition: none; }
+}
+
 /* ---------------- v0.6 feature pack: lottery, blocks, badges, automations, security ---------------- */
 .sec-h h2 > .i { color: var(--t3); }
 .lotto { background: radial-gradient(90% 140% at 0% 0%, rgba(245,165,36,.09), transparent 55%), var(--bg-2); }
