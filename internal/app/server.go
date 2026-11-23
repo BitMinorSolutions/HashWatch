@@ -384,7 +384,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "unknown miner"})
 		return
 	}
-	out := map[string]any{"server_time": time.Now().Unix(), "data": v.Latest, "last_ok": v.LastOK,
+	data := any(v.Latest)
+	if s.role(r) != RoleAdmin {
+		data = model.RedactSnapshotForView(v.Latest)
+	}
+	out := map[string]any{"server_time": time.Now().Unix(), "data": data, "last_ok": v.LastOK,
 		"last_err": v.LastErr, "history": v.History, "poll_seconds": v.Poll, "next_poll_unix": v.NextAt, "can_control": s.canControl(id) && s.role(r) == RoleAdmin,
 		"local_viewer": IsLocal(r), "view_only": s.role(r) == RoleView}
 	if s.role(r) == RoleAdmin {
@@ -409,6 +413,9 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 			}
 			out["net"] = net
 		}
+	}
+	if s.role(r) != RoleAdmin {
+		scrubLivePayouts(out, v.Latest)
 	}
 	writeJSON(w, 200, out)
 }

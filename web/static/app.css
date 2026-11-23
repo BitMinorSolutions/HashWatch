@@ -22,8 +22,8 @@
 }
 *, *::before, *::after { box-sizing: border-box; }
 html { background: var(--bg-0); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-html, body { margin: 0; padding: 0; }
-body { min-height: 100vh; min-height: 100dvh; overflow-x: hidden; background: var(--bg-0); color: var(--t1);
+html, body { margin: 0; padding: 0; max-width: 100%; overflow-x: hidden; }
+body { min-height: 100vh; min-height: 100dvh; background: var(--bg-0); color: var(--t1);
   font: 450 14px/1.5 var(--font); letter-spacing: -.006em; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "cv11", "ss01"; -webkit-tap-highlight-color: transparent; }
 button, input, select { font: inherit; color: inherit; letter-spacing: inherit; }
@@ -212,7 +212,9 @@ label.f { display: block; font-size: 12.5px; font-weight: 500; color: var(--t2);
 .notice b { display: block; font-weight: 550; } .notice span { color: var(--t2); }
 
 /* shares */
-.big { font-size: 40px; font-weight: 600; letter-spacing: -.045em; line-height: 1; }
+.big { font-size: clamp(22px, 8vw, 40px); font-weight: 600; letter-spacing: -.045em; line-height: 1.1; min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.acc-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 10px; margin-top: 6px; min-width: 0; max-width: 100%; }
+.acc-row .acc-pct { flex: 0 1 auto; min-width: 0; }
 .ratio { display: flex; height: 6px; border-radius: 99px; overflow: hidden; background: var(--bg-4); gap: 2px; margin: 16px 0 10px; }
 .ratio i { display: block; height: 100%; min-width: 3px; transition: flex-grow .8s var(--ease); }
 
@@ -1014,10 +1016,12 @@ body.sheet-open { overflow: hidden; }
 .fresh-bit.dim { opacity: .7; }
 .mine-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px 0; }
 .mine-cell { padding: 14px 16px 14px 0; border-top: 1px solid var(--line); min-width: 0; }
-.mine-cell .kpi-s { white-space: normal; overflow: visible; text-overflow: unset; }
+.mine-cell .kpi-k, .mine-cell .kpi-s, .mine-cell .mine-v { min-width: 0; max-width: 100%; }
+.mine-cell .kpi-s { white-space: normal; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere; word-break: break-word; }
 .mine-cell:nth-child(-n+5) { border-top: 0; padding-top: 4px; }
 .mine-cell:not(:first-child) { padding-left: 16px; border-left: 1px solid var(--line); }
-.mine-v { font-size: 20px; font-weight: 600; letter-spacing: -.03em; line-height: 1.15; margin-top: 6px; font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01"; }
+.mine-v { font-size: clamp(15px, 4.6vw, 20px); font-weight: 600; letter-spacing: -.03em; line-height: 1.15; margin-top: 6px; font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01";
+  min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .mine-v small { font-size: 12.5px; font-weight: 500; color: var(--t3); margin-left: 4px; letter-spacing: 0; }
 .mining-sec.flash { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.35); }
 
@@ -1047,7 +1051,7 @@ body.sheet-open { overflow: hidden; }
   .one-page { --chart-h: 168px; }
   .mine-fresh { justify-content: flex-start; margin-top: 4px; }
   .mining-sec .sec-h { flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 10px; }
-  .mine-v { font-size: 18px; }
+  .mine-v { font-size: clamp(14px, 4.4vw, 18px); }
   .dash-offline { padding: 16px; }
   .top-acts .icon-btn { width: 44px; height: 44px; }
 }
@@ -1082,9 +1086,9 @@ body.sheet-open { overflow: hidden; }
 
 .guess { padding: 4px 0 2px; }
 .guess .kpi-k { margin-bottom: 8px; }
-.guess-n { font-size: clamp(22px, 6.4vw, 40px); font-weight: 650; letter-spacing: -.045em; line-height: 1.1;
+.guess-n { font-size: clamp(15px, 5vw, 40px); font-weight: 650; letter-spacing: -.045em; line-height: 1.15;
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01"; color: var(--t1);
-  overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+  overflow-wrap: anywhere; word-break: break-word; max-width: 100%; min-width: 0; }
 .guess .kpi-s { margin-top: 8px; white-space: normal; }
 
 .mine-cell.share-pulse { animation: sharePulse .85s var(--ease); }
@@ -1102,7 +1106,7 @@ body.sheet-open { overflow: hidden; }
 .mining-sec.best-glow { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.5), 0 0 48px rgba(245,165,36,.18); }
 
 .mine-recap { padding-top: 4px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
-.recap-line { font-size: 13.5px; color: var(--t2); line-height: 1.45; }
+.recap-line { font-size: 13.5px; color: var(--t2); line-height: 1.45; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .recap-line b { color: var(--t1); font-weight: 600; }
 .recap-ms { display: flex; flex-wrap: wrap; gap: 8px; }
 .ms-pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
@@ -1113,7 +1117,7 @@ body.sheet-open { overflow: hidden; }
   .mine-stage { gap: 16px; }
   .race-blk { flex-basis: 66px; width: 66px; min-height: 90px; padding: 8px; }
   .race-now { flex-basis: 86px; width: 86px; min-width: 86px; }
-  .guess-n { font-size: clamp(20px, 7vw, 32px); }
+  .guess-n { font-size: clamp(14px, 4.6vw, 28px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .race-blk.fresh, .mine-cell.share-pulse, .mining-sec.best-glow, .mining-sec.flash { animation: none !important; }

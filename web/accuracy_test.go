@@ -71,6 +71,48 @@ func TestShareCopy(t *testing.T) {
 // Since v0.7.0 the sign-in form posted /api/login without the X-CSRF-Token header,
 // so every password sign-in from a browser was refused with "Missing or invalid
 // security token" (found in the v0.9.0 end-to-end run).
+
+func TestWorkerLabelAndMiningOverflowCSS(t *testing.T) {
+	js := appJS(t)
+	css := appCSS(t)
+	if !strings.Contains(js, "function workerLabel(") {
+		t.Fatal("workerLabel helper missing")
+	}
+	if strings.Contains(js, "${esc(p.user") || strings.Contains(js, "w.value = p.user") {
+		t.Fatal("raw pool user must not be written into the DOM")
+	}
+	if !strings.Contains(js, `return "Worker " + n;`) {
+		t.Fatal("bare payout addresses should display as Worker N")
+	}
+	// Regression: long Mining values (share counts, worker names, guess counter)
+	// must wrap or ellipsize inside the grid cell, not widen the page.
+	for _, s := range []string{
+		".mine-cell { padding:",
+		"min-width: 0",
+		"overflow-wrap: anywhere",
+		".mine-v { font-size: clamp(",
+		".guess-n { font-size: clamp(",
+		".big { font-size: clamp(",
+		".acc-row { display: flex",
+		"html, body { margin: 0; padding: 0; max-width: 100%; overflow-x: hidden; }",
+	} {
+		if !strings.Contains(js, s) && !strings.Contains(css, s) {
+			t.Errorf("overflow containment missing %q", s)
+		}
+	}
+	if !strings.Contains(css, ".mine-cell .kpi-s { white-space: normal; overflow: hidden") {
+		t.Fatal("Shares & workers subtitle must not use overflow:visible")
+	}
+}
+
+func TestPayoutAddressNeverInFrontendMarkup(t *testing.T) {
+	js := appJS(t)
+	// The confirm dialog and inputs must use workerLabel, not the raw address.
+	if strings.Count(js, "function workerLabel(") != 1 {
+		t.Fatal("expected a single workerLabel helper")
+	}
+}
+
 func TestShareSheetNotOnDashboard(t *testing.T) {
 	js := appJS(t)
 	css := appCSS(t)

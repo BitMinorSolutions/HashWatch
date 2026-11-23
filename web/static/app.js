@@ -1,4 +1,4 @@
-/* HashWatch v0.9.9 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.10 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -13,6 +13,21 @@ const LS = { get: (k, d = "") => { try { return localStorage.getItem(k) ?? d; } 
 
 /* ---------------- utils ---------------- */
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// Public worker label: suffix after the last '.', or "Worker N". Never the BTC payout address.
+function workerLabel(user, index) {
+  const u = String(user == null ? "" : user).trim();
+  const i = u.lastIndexOf(".");
+  if (i >= 0 && i < u.length - 1) {
+    const suf = u.slice(i + 1).trim();
+    if (suf) return suf;
+  }
+  const n = index >= 1 ? index : 1;
+  return "Worker " + n;
+}
+function poolIndex(ps, p) {
+  const i = (ps || []).indexOf(p);
+  return i >= 0 ? i + 1 : 1;
+}
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
 const fmt = (v, d = 0) => isNum(v) ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : "—";
 function groupDigits(s) {
@@ -649,7 +664,7 @@ function histEff(h) { return isNum(h.w) && (h.hhero || h.h5m) ? h.w / (h.hhero |
 function sharesBlock() {
   const sh = D().shares || {}, er = D().errors || {}, tot = (+sh.accepted || 0) + (+sh.rejected || 0) + (+sh.stale || 0);
   return { tot, html: `<div class="label">Accepted shares</div>
-    <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span class="big num" id="accV">${fmt(sh.accepted)}</span><span class="t2 num">${tot ? (sh.accepted / tot * 100).toFixed(2) + "%" : ""}</span></div>
+    <div class="acc-row"><span class="big num" id="accV">${fmt(sh.accepted)}</span><span class="t2 num acc-pct">${tot ? (sh.accepted / tot * 100).toFixed(2) + "%" : ""}</span></div>
     <div class="ratio">${tot ? `<i style="flex-grow:${sh.accepted};background:var(--good)"></i><i style="flex-grow:${Math.max(sh.stale, tot * .004)};background:var(--warn)"></i><i style="flex-grow:${Math.max(sh.rejected, tot * .004)};background:var(--bad)"></i>` : ""}</div>
     <div class="legend" style="margin-bottom:8px"><span><i style="background:var(--good)"></i>Accepted</span><span><i style="background:var(--warn)"></i>Stale <b class="num">${fmt(sh.stale_pct, 2)}%</b></span><span><i style="background:var(--bad)"></i>Rejected <b class="num">${fmt(sh.reject_pct, 2)}%</b></span></div>` };
 }
@@ -810,9 +825,9 @@ VIEWS.pools = {
     <section class="panel panel-pad"><div class="sec-h"><h2>Connection</h2></div><div class="list three" id="poolStats"></div></section>`,
   update: () => {
     const d = D(), ps = d.pools || [], sh = d.shares || {}, er = d.errors || {};
-    $("#poolList").innerHTML = ps.length ? ps.map(p => { const alive = (p.status || "").toLowerCase() === "alive", url = (p.url || "").replace(/^stratum\+tcp:\/\//, "");
+    $("#poolList").innerHTML = ps.length ? ps.map((p, i) => { const alive = (p.status || "").toLowerCase() === "alive", url = (p.url || "").replace(/^stratum\+tcp:\/\//, "");
       return `<div class="pool${p.stratum_active ? " active" : ""}"><div class="pi">${ic(p.stratum_active ? "zap" : alive ? "globe" : "wifi-off", "sm")}</div>
-        <div style="min-width:0"><div class="pu">${esc(url)}</div><div class="pw mono">${esc(p.user || "")}</div>
+        <div style="min-width:0"><div class="pu">${esc(url)}</div><div class="pw mono">${esc(workerLabel(p.user, i + 1))}</div>
           <div class="pstats num"><div><span>Accepted</span><b>${fmt(p.accepted)}</b></div><div><span>Rejected · stale</span><b>${fmt(p.rejected)} · ${fmt(p.stale)}</b></div>
             <div><span>Difficulty</span><b>${fmt(p.difficulty)}</b></div><div><span>Last share</span><b>${p.last_share_unix ? `<span data-rel="${p.last_share_unix}">${rel(p.last_share_unix)}</span>` : "never"}</b></div>
             ${p.block_height ? `<div><span>Block</span><b>${fmt(p.block_height)}</b></div>` : ""}</div></div>
@@ -997,7 +1012,10 @@ function fillAdvPool(n) {
   const sel = $("#advPool"); if (sel) segSet(sel, "n", String(n));
   const u = $("#advURL"), w = $("#advWorker");
   if (u) u.value = p.url || "";
-  if (w) w.value = p.user || "";
+  if (w) {
+    w.value = "";
+    w.placeholder = workerLabel(p.user, n + 1) + " — paste a new pool user only if you are changing it";
+  }
   S.advPool = n;
 }
 function wireAdvanced() {
@@ -1011,9 +1029,12 @@ function wireAdvanced() {
   };
   $("#advPoolGo").onclick = async () => {
     if (!S.can) return;
-    const n = S.advPool || 0, url = $("#advURL").value.trim(), worker = $("#advWorker").value.trim(), wpass = $("#advWPass").value;
+    const n = S.advPool || 0, url = $("#advURL").value.trim(), typed = $("#advWorker").value.trim(), wpass = $("#advWPass").value;
+    const cur = ((D().pools || [])[n] || {}).user || "";
+    const worker = typed || cur;
     if (!url || !worker) { toast("Enter the pool URL and worker name.", "bad"); return; }
-    const pw = await ask("Save pool " + (n + 1) + "?", `This writes the new URL, worker and password to pool ${n + 1} on the miner. Canaan says the change only takes effect after a reboot.<br><br><span class="mono">${esc(url)}</span><br>${esc(worker)}`, "Save pool");
+    const shown = typed ? esc(typed) : esc(workerLabel(cur, n + 1)) + " (unchanged)";
+    const pw = await ask("Save pool " + (n + 1) + "?", `This writes the new URL, worker and password to pool ${n + 1} on the miner. Canaan says the change only takes effect after a reboot.<br><br><span class="mono">${esc(url)}</span><br>${shown}`, "Save pool");
     if (!pw) return;
     const body = { miner: S.miner.id, pool: n, url, worker, worker_pass: wpass, password: pw, web_user: $("#advWebUser").value.trim(), web_pass: $("#advWebPass").value };
     send("/api/control/pool", body, "Pool saved · reboot the miner for it to take effect", "#advMsg");
@@ -1272,11 +1293,7 @@ const MINING = {
     el.innerHTML = bits.join("");
   },
   cell(k, v, s, id) { return `<div class="mine-cell"${id ? ` id="${id}"` : ""}><div class="kpi-k">${k}</div><div class="mine-v num">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ""}</div>`; },
-  workerName(ap) {
-    const u = (ap && (ap.user || ap.worker)) || "";
-    const i = u.lastIndexOf(".");
-    return (i >= 0 && i < u.length - 1) ? u.slice(i + 1) : (u || "");
-  },
+  workerName(ap, index) { return workerLabel((ap && (ap.user || ap.worker)) || "", index); },
   lastShareUnix() {
     const ap = activePool();
     if (ap && ap.last_share_unix) return +ap.last_share_unix;
@@ -1360,10 +1377,11 @@ const MINING = {
         ? (h.changed_at ? `New block ${this.agoText(h.changed_at)}` : "")
         : (d.ok ? "The pool isn't reporting a block height." : ""));
     const acc = d.ok && isNum((d.shares || {}).accepted) ? +(d.shares.accepted) : null;
-    const worker = this.workerName(ap);
+    const ps = d.pools || [];
+    const worker = this.workerName(ap, poolIndex(ps, ap));
     const lastU = this.lastShareUnix();
     const sharesV = acc != null ? groupDigits(Math.round(acc)) : "—";
-    const sharesS = worker ? `worker ${esc(worker)}` : (d.ok ? "Accepted shares this session" : "");
+    const sharesS = worker ? (worker.indexOf("Worker ") === 0 ? esc(worker) : "worker " + esc(worker)) : (d.ok ? "Accepted shares this session" : "");
     const lastV = lastU ? this.agoText(lastU) : "—";
     const lastS = lastU && ap && isNum(ap.last_share_diff) ? si(ap.last_share_diff) + " difficulty" : (d.ok ? "From the miner API" : "");
     const flashH = tip.height || ((h.has_height && h.height) ? h.height : 0);
@@ -1419,7 +1437,18 @@ VIEWS.raw = {
   update: () => {
     const mm = D().mm_fields || {}, q = ($("#rawQ").value || "").toLowerCase();
     const ks = Object.keys(mm).sort((a, b) => a.localeCompare(b)).filter(k => !q || k.toLowerCase().includes(q) || String(mm[k]).toLowerCase().includes(q));
-    $("#rawT").innerHTML = ks.map(k => `<div><span>${esc(k)}</span><b>${esc(mm[k])}</b></div>`).join("") || '<div><span>No matches</span></div>';
+    const users = ((D() || {}).pools || []).map(p => p.user).filter(Boolean);
+    const redact = (s) => {
+      let out = String(s == null ? "" : s);
+      users.forEach(u => {
+        if (!u) return;
+        if (out.indexOf(u) >= 0) out = out.split(u).join(workerLabel(u, 1));
+        const i = u.lastIndexOf(".");
+        if (i >= 20 && out.indexOf(u.slice(0, i)) >= 0) out = out.split(u.slice(0, i)).join(workerLabel(u, 1));
+      });
+      return out;
+    };
+    $("#rawT").innerHTML = ks.map(k => `<div><span>${esc(k)}</span><b>${esc(redact(mm[k]))}</b></div>`).join("") || '<div><span>No matches</span></div>';
   },
 };
 
