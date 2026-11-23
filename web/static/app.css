@@ -988,18 +988,11 @@ body.sheet-open { overflow: hidden; }
 .fresh-bit { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .fresh-bit.stale { color: var(--warn); }
 .fresh-bit.dim { opacity: .7; }
-.mine-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 0; }
+.mine-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px 0; }
 .mine-cell { padding: 14px 16px 14px 0; border-top: 1px solid var(--line); min-width: 0; }
 .mine-cell .kpi-s { white-space: normal; overflow: visible; text-overflow: unset; }
-.mine-cell:nth-child(-n+4) { border-top: 0; padding-top: 4px; }
-.mine-cell:not(:nth-child(4n+1)) { padding-left: 16px; border-left: 1px solid var(--line); }
-@media (min-width: 1024px) {
-  .mine-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
-  .mine-cell { grid-column: span 3; }
-  .mine-cell:nth-child(n+5) { grid-column: span 4; }
-  .mine-cell:not(:nth-child(4n+1)) { padding-left: 16px; border-left: 1px solid var(--line); }
-  .mine-cell:nth-child(5) { padding-left: 0; border-left: 0; }
-}
+.mine-cell:nth-child(-n+5) { border-top: 0; padding-top: 4px; }
+.mine-cell:not(:first-child) { padding-left: 16px; border-left: 1px solid var(--line); }
 .mine-v { font-size: 20px; font-weight: 600; letter-spacing: -.03em; line-height: 1.15; margin-top: 6px; font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01"; }
 .mine-v small { font-size: 12.5px; font-weight: 500; color: var(--t3); margin-left: 4px; letter-spacing: 0; }
 .mining-sec.flash { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.35); }
@@ -1009,10 +1002,11 @@ body.sheet-open { overflow: hidden; }
   .kpi { min-height: 104px; padding: 16px; }
   .kpi-v { font-size: 26px; }
   .mine-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mine-cell:nth-child(-n+4) { border-top: 1px solid var(--line); padding-top: 14px; }
+  .mine-cell:nth-child(-n+5) { border-top: 1px solid var(--line); padding-top: 14px; }
   .mine-cell:nth-child(-n+2) { border-top: 0; padding-top: 4px; }
-  .mine-cell:not(:nth-child(4n+1)) { padding-left: 0; border-left: 0; }
-  .mine-cell:not(:nth-child(2n+1)) { padding-left: 16px; border-left: 1px solid var(--line); }
+  .mine-cell:not(:first-child) { padding-left: 0; border-left: 0; }
+  .mine-cell:nth-child(2n) { padding-left: 16px; border-left: 1px solid var(--line); }
+  .mine-cell:nth-child(5) { grid-column: 1 / -1; padding-left: 0; border-left: 0; }
 }
 @media (max-width: 699px) {
   .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -1035,4 +1029,70 @@ body.sheet-open { overflow: hidden; }
 }
 @media (prefers-reduced-motion: reduce) {
   .live-chip i { box-shadow: none; }
+}
+
+/* ======================================================================
+   v0.9.8 — Mining live stage (block race, guess counter, recap)
+   ====================================================================== */
+.mine-stage { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.race { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding: 2px 1px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.race::-webkit-scrollbar { display: none; }
+.race-empty { display: flex; align-items: center; gap: 8px; min-height: 88px; color: var(--t3); font-size: 13px; }
+.race-blk { position: relative; flex: 0 0 78px; width: 78px; min-height: 96px; padding: 10px 10px 8px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.015));
+  border: 1px solid var(--line); box-shadow: var(--hi); display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.race-blk.fresh { animation: raceIn .7s var(--ease); box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.55), 0 0 24px rgba(245,165,36,.25); }
+@keyframes raceIn { 0% { transform: translateX(18px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+.race-h { font-size: 13px; font-weight: 650; letter-spacing: -.02em; color: var(--t1); font-variant-numeric: tabular-nums; }
+.race-p { font-size: 11px; color: var(--t2); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.race-t { font-size: 10.5px; margin-top: auto; font-variant-numeric: tabular-nums; }
+.race-now { flex: 0 0 104px; width: 104px; min-width: 104px; position: sticky; right: 0; z-index: 2;
+  border-style: dashed; border-color: rgba(245,165,36,.42);
+  background: linear-gradient(180deg, rgba(245,165,36,.10), rgba(245,165,36,.04)), var(--bg-2);
+  box-shadow: -16px 0 16px -10px rgba(0,0,0,.7); }
+.race-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(180deg, rgba(245,165,36,.55), rgba(245,165,36,.12));
+  pointer-events: none; transition: height .7s var(--ease); }
+.race-now .race-h, .race-now .race-p, .race-now .race-t { position: relative; z-index: 1; }
+.race-now .race-h { color: var(--accent-2); letter-spacing: .06em; text-transform: uppercase; font-size: 10.5px; font-weight: 700; }
+.sk-blk { min-height: 96px; }
+
+.guess { padding: 4px 0 2px; }
+.guess .kpi-k { margin-bottom: 8px; }
+.guess-n { font-size: clamp(22px, 6.4vw, 40px); font-weight: 650; letter-spacing: -.045em; line-height: 1.1;
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01"; color: var(--t1);
+  overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.guess .kpi-s { margin-top: 8px; white-space: normal; }
+
+.mine-cell.share-pulse { animation: sharePulse .85s var(--ease); }
+@keyframes sharePulse {
+  0% { box-shadow: inset 0 0 0 0 rgba(245,165,36,0); }
+  25% { box-shadow: inset 0 0 0 1px rgba(245,165,36,.55), 0 0 22px rgba(245,165,36,.18); background: rgba(245,165,36,.08); }
+  100% { box-shadow: inset 0 0 0 0 rgba(245,165,36,0); }
+}
+
+.mine-toast { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px;
+  background: linear-gradient(90deg, rgba(245,165,36,.18), rgba(245,165,36,.05));
+  border: 1px solid rgba(245,165,36,.35); color: var(--accent-2); font-weight: 600; font-size: 14px; letter-spacing: -.01em; }
+.mine-toast[hidden] { display: none; }
+.mine-toast .i { color: var(--accent); }
+.mining-sec.best-glow { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.5), 0 0 48px rgba(245,165,36,.18); }
+
+.mine-recap { padding-top: 4px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.recap-line { font-size: 13.5px; color: var(--t2); line-height: 1.45; }
+.recap-line b { color: var(--t1); font-weight: 600; }
+.recap-ms { display: flex; flex-wrap: wrap; gap: 8px; }
+.ms-pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
+  background: rgba(245,165,36,.1); border: 1px solid rgba(245,165,36,.22); color: var(--accent-2); font-size: 12px; font-weight: 600; }
+.ms-pill .i { width: 13px; height: 13px; }
+
+@media (max-width: 699px) {
+  .mine-stage { gap: 16px; }
+  .race-blk { flex-basis: 66px; width: 66px; min-height: 90px; padding: 8px; }
+  .race-now { flex-basis: 86px; width: 86px; min-width: 86px; }
+  .guess-n { font-size: clamp(20px, 7vw, 32px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .race-blk.fresh, .mine-cell.share-pulse, .mining-sec.best-glow, .mining-sec.flash { animation: none !important; }
+  .race-fill { transition: none !important; }
+  .race-blk.fresh, .mining-sec.best-glow { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.5); }
 }

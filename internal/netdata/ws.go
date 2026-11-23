@@ -99,7 +99,7 @@ func (f *Fetcher) wsSession(ctx context.Context) error {
 	if err := writeWS(ctx, conn, map[string]any{"action": "init"}); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-	if err := writeWS(ctx, conn, map[string]any{"action": "want", "data": []string{"blocks", "stats"}}); err != nil {
+	if err := writeWS(ctx, conn, map[string]any{"action": "want", "data": []string{"blocks", "stats", "mempool-blocks"}}); err != nil {
 		return fmt.Errorf("want: %w", err)
 	}
 
@@ -217,6 +217,19 @@ func (f *Fetcher) applyWSMessage(data []byte) error {
 			f.snap.NetFetched = now
 		}
 	}
+	if msg, ok := raw["mempool-blocks"]; ok && string(msg) != "null" {
+		var list []mpMempoolBlock
+		if err := json.Unmarshal(msg, &list); err == nil {
+			blocks := mempoolFromMP(list)
+			if !mempoolEqual(f.snap.MempoolBlocks, blocks) {
+				f.snap.MempoolBlocks = blocks
+				changed = true
+			} else {
+				f.snap.MempoolBlocks = blocks
+			}
+			f.snap.NetFetched = now
+		}
+	}
 	// Other mempool "stats" fields (fees, mempoolInfo) are also a successful
 	// network receipt, even when they do not change a UI value.
 	if _, ok := raw["mempoolInfo"]; ok {
@@ -279,6 +292,7 @@ func (f *Fetcher) applyBlocksLocked(raw []mpBlock, now int64) bool {
 		}
 	}
 	f.snap.TipHeight = tip.Height
+	f.snap.TipTime = tip.Time
 	if tip.Diff > 0 {
 		f.snap.Difficulty = tip.Diff
 	}

@@ -76,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /manifest.webmanifest", s.manifest)
+	mux.HandleFunc("GET /apple-touch-icon.png", s.serveHostIcon("apple-touch-icon.png"))
+	mux.HandleFunc("GET /apple-touch-icon-precomposed.png", s.serveHostIcon("apple-touch-icon.png"))
+	mux.HandleFunc("GET /favicon.ico", s.serveHostIcon("favicon.png"))
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", s.assets()))
 	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("POST /api/login", s.login)
@@ -150,25 +153,33 @@ func (s *Server) assets() http.Handler {
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
+		if strings.HasPrefix(r.URL.Path, "icons/") {
+			w.Header().Set("Vary", "Host")
+		}
 		fsrv.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) tpl(w http.ResponseWriter, name, ctype string) {
+func (s *Server) tpl(w http.ResponseWriter, r *http.Request, name, ctype string) {
 	b, err := fs.ReadFile(s.Static, name)
 	if err != nil {
-		http.NotFound(w, nil)
+		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write([]byte(strings.NewReplacer("{{APP}}", AppName, "{{TAGLINE}}", Tagline).Replace(string(b))))
+	w.Header().Set("Vary", "Host")
+	w.Write([]byte(strings.NewReplacer(
+		"{{APP}}", requestAppName(r),
+		"{{TAGLINE}}", Tagline,
+		"{{ICON}}", iconBase(r),
+	).Replace(string(b))))
 }
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	s.tpl(w, "index.html", "text/html; charset=utf-8")
+	s.tpl(w, r, "index.html", "text/html; charset=utf-8")
 }
 func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
-	s.tpl(w, "manifest.webmanifest", "application/manifest+json")
+	s.tpl(w, r, "manifest.webmanifest", "application/manifest+json")
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

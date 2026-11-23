@@ -34,6 +34,29 @@ func (s *Server) netView() (netdata.Snapshot, map[string]any) {
 		n.WSConnected, n.WSLastEvent, n.Rev = full.WSConnected, full.WSLastEvent, full.Rev
 		info["network_age"] = now - full.NetFetched
 		info["network_stale"] = full.NetworkStale(now)
+		if full.TipHeight > 0 {
+			info["tip_height"] = full.TipHeight
+		}
+		if full.TipTime > 0 {
+			info["tip_time"] = full.TipTime
+		}
+		if len(full.Blocks) > 0 {
+			bl := full.Blocks
+			if len(bl) > 8 {
+				bl = bl[:8]
+			}
+			info["blocks"] = bl
+		}
+		if n := full.NextMempool(); n != nil {
+			fill := 0.0
+			if n.VSize > 0 {
+				fill = n.VSize / 1e6
+				if fill > 1 {
+					fill = 1
+				}
+			}
+			info["mempool_next"] = map[string]any{"vsize": n.VSize, "n_tx": n.NTx, "total_fees_sat": n.TotalFees, "median_fee": n.MedianFee, "fill": fill}
+		}
 		if full.DiffAdj != nil {
 			info["diff_adj"] = full.DiffAdj
 		}

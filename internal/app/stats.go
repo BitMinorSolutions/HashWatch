@@ -46,6 +46,7 @@ type DayRec struct {
 	SeenSec   float64 `json:"seen_sec"` // time HashWatch was watching (online or not)
 	Expected  float64 `json:"expected"` // sum of λ (expected blocks) for the day
 	BestShare float64 `json:"best_share"`
+	Shares    int64   `json:"shares,omitempty"`
 	Blocks    int     `json:"blocks"`
 }
 
@@ -67,6 +68,16 @@ type BlockRec struct {
 	Count float64 `json:"count"` // Found Blocks counter after the find
 }
 
+// Highlight is a persisted Mining moment (new best share, etc.).
+type Highlight struct {
+	Kind  string  `json:"kind"`
+	Title string  `json:"title"`
+	Value float64 `json:"value,omitempty"`
+	T     int64   `json:"t"`
+}
+
+const maxHighlights = 30
+
 type MinerStats struct {
 	FirstSeen        int64            `json:"first_seen"`
 	LastPoll         int64            `json:"last_poll"`
@@ -84,6 +95,9 @@ type MinerStats struct {
 	LastWeekly       string           `json:"last_weekly"`
 	LastDailySummary string           `json:"last_daily_summary,omitempty"` // local date 2006-01-02 last 9am briefing was sent
 	PBCount          int              `json:"pb_count"`                     // times the personal best was beaten
+	LastAccepted     float64          `json:"last_accepted,omitempty"`
+	HaveAccepted     bool             `json:"have_accepted,omitempty"`
+	Highlights       []Highlight      `json:"highlights,omitempty"`
 }
 
 const (
@@ -261,11 +275,18 @@ func (s *Stats) observeLocked(ms *MinerStats, id, name string, snap *model.Snaps
 		}
 		ms.LastUptime = up
 	}
+	if acc, ok := fnum(snap.Shares.Accepted); ok {
+		if ms.HaveAccepted && acc > ms.LastAccepted {
+			d.Shares += int64(acc - ms.LastAccepted)
+		}
+		ms.LastAccepted, ms.HaveAccepted = acc, true
+	}
 	if b, ok := fnum(snap.Shares.BestShare); ok && b > ms.SessionBest {
 		prevPB := 0.0
 		if len(ms.Leaderboard) > 0 {
 			prevPB = ms.Leaderboard[0].Diff
 		}
+		prevToday := d.BestShare
 		first := ms.SessionBest == 0 // first reading after start-up / a miner restart: not a fresh find
 		ms.SessionBest = b
 		ms.addShare(ShareRec{Diff: b, T: now.Unix(), NetDiff: net.Difficulty})
@@ -280,10 +301,14 @@ func (s *Stats) observeLocked(ms *MinerStats, id, name string, snap *model.Snaps
 		case b > prevPB && prevPB > 0:
 			ms.PBCount++
 			p.events = append(p.events, "best")
+			ms.addHighlight(Highlight{Kind: "best_ever", Title: "New best: " + siDiff(b), Value: b, T: now.Unix()})
 			al := base
 			al.Kind, al.Level, al.Title = "nearmiss", "celebrate", "New personal best share"
 			al.Body = fmt.Sprintf("%s beat its best share ever: %s (was %s).%s", name, siDiff(b), siDiff(prevPB), pct)
 			p.alerts = append(p.alerts, al)
+		case !first && b > prevToday && prevToday > 0:
+			ms.addHighlight(Highlight{Kind: "best_today", Title: "New best today: " + siDiff(b), Value: b, T: now.Unix()})
+			p.events = append(p.events, "best_today")
 		case !first && fun.NearMissDiff > 0 && b >= fun.NearMissDiff:
 			al := base
 			al.Kind, al.Level, al.Title = "nearmiss", "good", "Near miss!"
@@ -300,8 +325,12 @@ func (s *Stats) observeLocked(ms *MinerStats, id, name string, snap *model.Snaps
 		}
 		ms.FoundCounter, ms.HaveFound = v, true
 	}
-	if Optional.Badges { // OPTIONAL:badges
+	// Milestones are always recorded so the Mining recap survives a reload.
+	// Badge alerts stay behind OPTIONAL:badges.
+	if Optional.Badges {
 		p.alerts = append(p.alerts, s.badges(ms, base, now, net)...)
+	} else {
+		s.earnBadges(ms, now, net)
 	}
 	return p
 }
@@ -451,7 +480,10 @@ var badgeDefs = []badgeDef{
 		}
 		return 0, "needs a second, better share"
 	}},
-	shareBadge("share_1g", "Giga share", 1e9),
+	shareBadge("share_1m", "1M share", 1e6),
+	shareBadge("share_10m", "10M share", 1e7),
+	shareBadge("share_100m", "100M share", 1e8),
+	shareBadge("share_1g", "1B share", 1e9),
 	shareBadge("share_1t", "Tera share", 1e12),
 	ticketBadge("tickets_1e18", "Exa ticket club", 1e18),
 	ticketBadge("tickets_1e20", "Hundred exa", 1e20),
@@ -485,8 +517,11 @@ func (ms *MinerStats) Streak(now time.Time) int {
 	return n
 }
 
-func (s *Stats) badges(ms *MinerStats, base Alert, now time.Time, net netdata.Snapshot) []Alert {
-	var out []Alert
+func (s *Stats) earnBadges(ms *MinerStats, now time.Time, net netdata.Snapshot) []string {
+	if ms.Badges == nil {
+		ms.Badges = map[string]int64{}
+	}
+	var earned []string
 	streak := ms.Streak(now)
 	for _, b := range badgeDefs {
 		if ms.Badges[b.id] != 0 {
@@ -494,29 +529,53 @@ func (s *Stats) badges(ms *MinerStats, base Alert, now time.Time, net netdata.Sn
 		}
 		if p, _ := b.prog(ms, streak, net); p >= 1 {
 			ms.Badges[b.id] = now.Unix()
-			al := base
-			al.Kind, al.Level, al.Title, al.Body = "badge", "good", "Badge earned: "+b.title, b.desc
-			out = append(out, al)
+			earned = append(earned, b.id)
 		}
+	}
+	return earned
+}
+
+func (s *Stats) badges(ms *MinerStats, base Alert, now time.Time, net netdata.Snapshot) []Alert {
+	var out []Alert
+	for _, id := range s.earnBadges(ms, now, net) {
+		title, desc := id, ""
+		for _, b := range badgeDefs {
+			if b.id == id {
+				title, desc = b.title, b.desc
+				break
+			}
+		}
+		al := base
+		al.Kind, al.Level, al.Title, al.Body = "badge", "good", "Badge earned: "+title, desc
+		out = append(out, al)
 	}
 	return out
 }
 
+func (ms *MinerStats) addHighlight(h Highlight) {
+	ms.Highlights = append(ms.Highlights, h)
+	if len(ms.Highlights) > maxHighlights {
+		ms.Highlights = append([]Highlight(nil), ms.Highlights[len(ms.Highlights)-maxHighlights:]...)
+	}
+}
+
 // View is what the lottery card needs for one miner.
 type StatsView struct {
-	Leaderboard []ShareRec `json:"leaderboard"`
-	TicketsAll  float64    `json:"tickets_all"`
-	TicketsDay  float64    `json:"tickets_today"`
-	ExpectedAll float64    `json:"expected_all"`
-	ExpectedDay float64    `json:"expected_today"`
-	Today       DayRec     `json:"today"`
-	TodayAvgTHs float64    `json:"today_avg_ths"`
-	TodayUpPct  float64    `json:"today_uptime_pct"`
-	Blocks      []BlockRec `json:"blocks"`
-	Badges      []Badge    `json:"badges"`
-	Streak      int        `json:"streak_days"`
-	Summaries   []Summary  `json:"summaries"`
-	FirstSeen   int64      `json:"first_seen"`
+	Leaderboard []ShareRec  `json:"leaderboard"`
+	TicketsAll  float64     `json:"tickets_all"`
+	TicketsDay  float64     `json:"tickets_today"`
+	ExpectedAll float64     `json:"expected_all"`
+	ExpectedDay float64     `json:"expected_today"`
+	Today       DayRec      `json:"today"`
+	TodayAvgTHs float64     `json:"today_avg_ths"`
+	TodayUpPct  float64     `json:"today_uptime_pct"`
+	Blocks      []BlockRec  `json:"blocks"`
+	Badges      []Badge     `json:"badges"`
+	Streak      int         `json:"streak_days"`
+	Summaries   []Summary   `json:"summaries"`
+	FirstSeen   int64       `json:"first_seen"`
+	Highlights  []Highlight `json:"highlights,omitempty"`
+	Milestones  []Badge     `json:"milestones,omitempty"`
 }
 
 func (s *Stats) View(id string, net netdata.Snapshot) StatsView {
@@ -525,7 +584,8 @@ func (s *Stats) View(id string, net netdata.Snapshot) StatsView {
 	defer s.mu.Unlock()
 	ms := s.get(id)
 	v := StatsView{Leaderboard: append([]ShareRec(nil), ms.Leaderboard...), TicketsAll: ms.TicketsAll, ExpectedAll: ms.ExpectedAll,
-		Blocks: append([]BlockRec(nil), ms.Blocks...), Summaries: append([]Summary(nil), ms.Summaries...), FirstSeen: ms.FirstSeen}
+		Blocks: append([]BlockRec(nil), ms.Blocks...), Summaries: append([]Summary(nil), ms.Summaries...), FirstSeen: ms.FirstSeen,
+		Highlights: append([]Highlight(nil), ms.Highlights...)}
 	if n := len(ms.Days); n > 0 && ms.Days[n-1].Date == now.Format("2006-01-02") {
 		v.Today = ms.Days[n-1]
 	}
@@ -536,10 +596,11 @@ func (s *Stats) View(id string, net netdata.Snapshot) StatsView {
 	if v.Today.SeenSec > 0 {
 		v.TodayUpPct = math.Min(100, v.Today.OnlineSec/v.Today.SeenSec*100)
 	}
-	if !Optional.Badges { // OPTIONAL:badges
+	v.Streak = ms.Streak(now)
+	v.Milestones = recapMilestones(ms, v.Streak, net)
+	if !Optional.Badges { // OPTIONAL:badges — full badge board stays behind the switch
 		return v
 	}
-	v.Streak = ms.Streak(now)
 	for _, b := range badgeDefs {
 		p, hint := b.prog(ms, v.Streak, net)
 		bd := Badge{ID: b.id, Title: b.title, Desc: b.desc, Icon: b.icon, Earned: ms.Badges[b.id], Progress: math.Max(0, math.Min(1, p)), Hint: hint}
@@ -549,6 +610,29 @@ func (s *Stats) View(id string, net netdata.Snapshot) StatsView {
 		v.Badges = append(v.Badges, bd)
 	}
 	return v
+}
+
+// recapIDs is the small Mining milestone set (share tiers and uptime streaks).
+var recapIDs = []string{"share_1m", "share_10m", "share_100m", "share_1g", "streak_7", "streak_30"}
+
+func recapMilestones(ms *MinerStats, streak int, net netdata.Snapshot) []Badge {
+	want := map[string]bool{}
+	for _, id := range recapIDs {
+		want[id] = true
+	}
+	var out []Badge
+	for _, b := range badgeDefs {
+		if !want[b.id] {
+			continue
+		}
+		p, hint := b.prog(ms, streak, net)
+		bd := Badge{ID: b.id, Title: b.title, Desc: b.desc, Icon: b.icon, Earned: ms.Badges[b.id], Progress: math.Max(0, math.Min(1, p)), Hint: hint}
+		if bd.Earned != 0 {
+			bd.Progress = 1
+		}
+		out = append(out, bd)
+	}
+	return out
 }
 
 // ---------------- number words ----------------

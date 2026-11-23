@@ -1,4 +1,4 @@
-/* HashWatch v0.9.7 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.8 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -15,6 +15,22 @@ const LS = { get: (k, d = "") => { try { return localStorage.getItem(k) ?? d; } 
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
 const fmt = (v, d = 0) => isNum(v) ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : "—";
+function groupDigits(s) {
+  s = String(s == null ? "0" : s).replace(/^[+-]/, "");
+  if (!s) s = "0";
+  let i = 0; while (i < s.length - 1 && s.charAt(i) === "0") i++;
+  s = s.slice(i);
+  let out = "";
+  while (s.length > 3) { out = "," + s.slice(-3) + out; s = s.slice(0, -3); }
+  return s + out;
+}
+// hashes = TH/s × 1e12 × elapsed seconds, as a decimal string (BigInt, so long rounds stay exact).
+function hashesSince(ths, tipUnix, nowMs) {
+  if (!isNum(ths) || ths <= 0 || !tipUnix) return "0";
+  const ms = Math.max(0, Math.round(nowMs - tipUnix * 1000));
+  const milli = Math.max(0, Math.round(+ths * 1000));
+  return (BigInt(milli) * 1000000n * BigInt(ms)).toString();
+}
 const cap = (s) => String(s || "").replace(/^\w/, c => c.toUpperCase());
 const ic = (n, c = "") => `<svg class="i ${c}" aria-hidden="true"><use href="#${n}"/></svg>`;
 function si(v, d = 2) { if (!isNum(v)) return "—"; v = +v; const u = ["", "K", "M", "G", "T", "P", "E"]; let i = 0;
@@ -1059,7 +1075,17 @@ const DASH = {
     </section>
     <section class="panel panel-pad mining-sec" id="secMining">
       <div class="sec-h"><h2>Mining</h2><div class="mine-fresh" id="mineFresh"></div></div>
-      <div class="mine-grid" id="mineGrid">${Array.from({ length: 7 }, () => '<div class="mine-cell"><div class="sk" style="height:12px;width:46%"></div><div class="sk" style="height:22px;width:72%;margin-top:8px"></div></div>').join("")}</div>
+      <div class="mine-stage">
+        <div class="race" id="mineRace" aria-label="Live block race">${Array.from({ length: 6 }, () => '<div class="race-blk sk-blk"><div class="sk" style="height:10px;width:70%"></div><div class="sk" style="height:32px;width:50%;margin-top:10px"></div></div>').join("")}</div>
+        <div class="guess" id="mineGuess">
+          <div class="kpi-k">${ic("zap", "sm")}Guesses this round</div>
+          <div class="guess-n num" id="mineGuessN">—</div>
+          <div class="kpi-s" id="mineGuessS">hashes tried since the last network block</div>
+        </div>
+        <div class="mine-grid" id="mineGrid">${Array.from({ length: 5 }, () => '<div class="mine-cell"><div class="sk" style="height:12px;width:46%"></div><div class="sk" style="height:22px;width:72%;margin-top:8px"></div></div>').join("")}</div>
+        <div class="mine-toast" id="mineToast" hidden></div>
+        <div class="mine-recap" id="mineRecap"></div>
+      </div>
     </section>
     <div class="cols dash">
       ${LOTTO.build()}
@@ -1169,11 +1195,42 @@ const DASH = {
 /* ---------------- mining view ---------------- */
 const MINING = {
   _seenH: 0,
-  wire() {},
-  stop() { this._seenH = 0; },
+  _seenAcc: null,
+  _seenBest: 0,
+  _ready: false,
+  _raceKey: "",
+  _tipH: 0,
+  _raf: 0,
+  _toastT: 0,
+  wire() { this.armGuess(); },
+  stop() {
+    this._seenH = 0; this._seenAcc = null; this._seenBest = 0; this._ready = false; this._raceKey = ""; this._tipH = 0;
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = 0; }
+    if (this._toastT) { clearTimeout(this._toastT); this._toastT = 0; }
+  },
+  armGuess() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    const tick = () => { this._raf = requestAnimationFrame(tick); this.paintGuess(); };
+    this._raf = requestAnimationFrame(tick);
+  },
   netInfo() { return (S.net || (S.lot && S.lot.net) || {}); },
   netDiff() { const L = S.lot; return L && isNum(L.difficulty) && L.difficulty > 0 ? +L.difficulty : 0; },
-  netOn() { const n = this.netInfo(); return !!(n.network_on && this.netDiff() > 0); },
+  netOn() { const n = this.netInfo(); return !!(n.network_on && (this.netDiff() > 0 || n.tip_height || (n.blocks && n.blocks.length))); },
+  netBlocks() {
+    const n = this.netInfo(), L = S.lot || {};
+    return (n.blocks && n.blocks.length) ? n.blocks : (L.blocks || []);
+  },
+  tipMeta() {
+    const n = this.netInfo(), L = S.lot || {}, blocks = this.netBlocks();
+    let height = n.tip_height || L.tip_height || 0, time = n.tip_time || 0;
+    if ((!height || !time) && blocks.length) {
+      let tip = blocks[0];
+      for (let i = 1; i < blocks.length; i++) if ((blocks[i].height || 0) > (tip.height || 0)) tip = blocks[i];
+      if (!height) height = tip.height || 0;
+      if (!time) time = tip.time || 0;
+    }
+    return { height: +height || 0, time: +time || 0 };
+  },
   best() {
     const sh = (D() || {}).shares || {};
     const miner = isNum(sh.best_share) ? +sh.best_share : 0;
@@ -1212,55 +1269,144 @@ const MINING = {
     if (n.price_on) bits.push(this.freshBit("Price", priceAt, 10 * 60));
     el.innerHTML = bits.join("");
   },
-  cell(k, v, s) { return `<div class="mine-cell"><div class="kpi-k">${k}</div><div class="mine-v num">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ""}</div>`; },
+  cell(k, v, s, id) { return `<div class="mine-cell"${id ? ` id="${id}"` : ""}><div class="kpi-k">${k}</div><div class="mine-v num">${v}</div>${s ? `<div class="kpi-s">${s}</div>` : ""}</div>`; },
+  workerName(ap) {
+    const u = (ap && (ap.user || ap.worker)) || "";
+    const i = u.lastIndexOf(".");
+    return (i >= 0 && i < u.length - 1) ? u.slice(i + 1) : (u || "");
+  },
+  lastShareUnix() {
+    const ap = activePool();
+    if (ap && ap.last_share_unix) return +ap.last_share_unix;
+    const ps = (D() || {}).pools || [];
+    let best = 0;
+    for (let i = 0; i < ps.length; i++) if (ps[i].last_share_unix > best) best = +ps[i].last_share_unix;
+    return best || 0;
+  },
+  paintGuess() {
+    const el = $("#mineGuessN"), sub = $("#mineGuessS"); if (!el) return;
+    const d = D(), hv = heroVal(), tip = this.tipMeta(), on = !!(d && d.ok && isNum(hv) && hv > 0 && tip.time);
+    if (!on) {
+      if (!(d && d.ok)) { el.textContent = "—"; if (sub) sub.textContent = "Hidden while the miner is offline"; }
+      else if (!tip.time) { el.textContent = "—"; if (sub) sub.textContent = this.netInfo().network_on ? "Waiting for the last block's time" : "Network data is off in Settings"; }
+      else { el.textContent = "—"; if (sub) sub.textContent = "hashes tried since the last network block"; }
+      return;
+    }
+    el.textContent = groupDigits(hashesSince(hv, tip.time, Date.now()));
+    if (sub) sub.innerHTML = tip.height ? `since block <b class="num">${fmt(tip.height)}</b> · at ${fmt(hv, 3)} TH/s` : "hashes tried since the last network block";
+  },
+  showToast(title) {
+    const el = $("#mineToast"); if (!el) return;
+    el.hidden = false;
+    el.innerHTML = `${ic("sparkles", "sm")}<span>${esc(title)}</span>`;
+    const card = $("#secMining");
+    if (card) { card.classList.remove("best-glow"); void card.offsetWidth; card.classList.add("best-glow"); }
+    if (this._toastT) clearTimeout(this._toastT);
+    this._toastT = setTimeout(() => { el.hidden = true; if (card) card.classList.remove("best-glow"); }, 8000);
+  },
+  updateRace() {
+    const el = $("#mineRace"); if (!el) return;
+    const n = this.netInfo(), blocks = this.netBlocks().slice(), tip = this.tipMeta();
+    if (!n.network_on) {
+      this._raceKey = "off";
+      el.innerHTML = `<div class="race-empty t3">${ic("eye-off", "sm")}Turn on network data in Settings to watch the block race.</div>`;
+      return;
+    }
+    blocks.sort((a, b) => (a.height || 0) - (b.height || 0));
+    const shown = blocks.slice(-6);
+    const key = shown.map(b => b.height).join(",") + ":" + (tip.height || "");
+    const next = n.mempool_next || {};
+    const fill = isNum(next.fill) ? Math.max(0, Math.min(1, +next.fill)) : 0;
+    if (this._raceKey !== key) {
+      const freshH = tip.height && this._tipH && tip.height !== this._tipH;
+      this._tipH = tip.height || this._tipH;
+      this._raceKey = key;
+      el.innerHTML = shown.map(b => {
+        const isTip = tip.height && b.height === tip.height;
+        return `<div class="race-blk${isTip && freshH ? " fresh" : ""}" data-h="${b.height}">
+          <span class="race-h num">${fmt(b.height)}</span>
+          <span class="race-p">${esc(b.pool || "Unknown")}</span>
+          <span class="race-t t3">${b.time ? rel(b.time) : ""}</span>
+        </div>`;
+      }).join("") + `<div class="race-blk race-now" title="Next block filling from the mempool">
+        <div class="race-fill" id="mineNextFill" style="height:${(fill * 100).toFixed(1)}%"></div>
+        <span class="race-h">Next</span>
+        <span class="race-p num" id="mineNextPct">${isNum(next.fill) ? (fill * 100).toFixed(0) + "%" : "—"}</span>
+        <span class="race-t t3" id="mineNextTx">${isNum(next.n_tx) ? fmt(next.n_tx) + " tx" : "waiting for mempool"}</span>
+      </div>`;
+      el.scrollLeft = el.scrollWidth;
+    } else {
+      const bar = $("#mineNextFill"), pctEl = $("#mineNextPct"), tx = $("#mineNextTx");
+      if (bar) bar.style.height = (fill * 100).toFixed(1) + "%";
+      if (pctEl) pctEl.textContent = isNum(next.fill) ? (fill * 100).toFixed(0) + "%" : "—";
+      if (tx) tx.textContent = isNum(next.n_tx) ? fmt(next.n_tx) + " tx" : "waiting for mempool";
+    }
+  },
   update() {
     if (!$("#secMining")) return;
     const d = D(), hv = heroVal(), grid = $("#mineGrid"); if (!grid) { this.tickFresh(); return; }
     this.tickFresh();
+    this.updateRace();
+    this.paintGuess();
     const m = S.mining || {}, h = m.height || {}, ap = activePool();
     const pool = (h.pool || (ap ? (ap.stratum_url || ap.url || "").replace(/^stratum\+tcp:\/\//, "").replace(/:\d+$/, "") : "")) || "—";
-    const height = h.has_height && h.height ? fmt(h.height) : "—";
-    const heightSub = h.has_height && h.height
-      ? (h.changed_at ? `New block ${this.agoText(h.changed_at)}` : "Waiting for the next block")
-      : (d.ok ? "The pool isn't reporting a block height." : "");
-    const ever = this.best(), today = this.bestToday();
-    let bestV = "—", bestS = "";
-    if (d.ok && ever > 0) {
-      bestV = si(ever);
-      bestS = today > 0 && today < ever ? `Today ${si(today)} · best ever` : (today > 0 ? "Best today and ever" : "Best ever");
-    } else if (d.ok && today > 0) {
-      bestV = si(today); bestS = "Best today";
-    }
-    const o = S.lot && S.lot.odds, netOn = this.netOn(), minerOn = !!(d.ok && isNum(hv) && hv > 0);
-    const showOdds = minerOn && netOn && o && isNum(o.one_in_per_day) && o.one_in_per_day > 0;
-    const close = o && isNum(o.best_share_closeness) ? +o.best_share_closeness : (ever > 0 && this.netDiff() > 0 ? ever / this.netDiff() : 0);
-    const flips = showOdds ? Math.round(Math.log(o.one_in_per_day) / Math.LN2) : 0;
-    let oddsV = "—", oddsS = "";
-    if (!d.ok) { oddsV = "—"; oddsS = "Hidden while the miner is offline"; }
-    else if (!netOn) { oddsS = this.netInfo().network_on ? "Waiting for network difficulty" : "Network data is off in Settings"; }
-    else if (showOdds) {
-      oddsV = oneIn(o.one_in_per_day);
-      oddsS = (flips >= 2 ? "like flipping heads " + flips + " times in a row · " : "") + "per day";
-    }
-    const timeV = showOdds ? yrs(o.years_per_block) : "—";
-    const timeS = showOdds ? `On average, at ${fmt(o.hashrate_hs / 1e12, 2)} TH/s` : "";
-    const pctV = (minerOn && netOn && close > 0) ? pct(close) : "—";
-    const pctS = (minerOn && netOn && close > 0) ? "of the way to a block" : (d.ok ? "" : "Hidden while the miner is offline");
-    if (h.has_height && h.height && this._seenH && h.height !== this._seenH) {
+    const tip = this.tipMeta();
+    const height = tip.height ? fmt(tip.height) : ((h.has_height && h.height) ? fmt(h.height) : "—");
+    const heightSub = tip.height
+      ? (tip.time ? `New block ${this.agoText(tip.time)}` : "Waiting for the next block")
+      : ((h.has_height && h.height)
+        ? (h.changed_at ? `New block ${this.agoText(h.changed_at)}` : "")
+        : (d.ok ? "The pool isn't reporting a block height." : ""));
+    const acc = d.ok && isNum((d.shares || {}).accepted) ? +(d.shares.accepted) : null;
+    const worker = this.workerName(ap);
+    const lastU = this.lastShareUnix();
+    const sharesV = acc != null ? groupDigits(Math.round(acc)) : "—";
+    const sharesS = worker ? `worker ${esc(worker)}` : (d.ok ? "Accepted shares this session" : "");
+    const lastV = lastU ? this.agoText(lastU) : "—";
+    const lastS = lastU && ap && isNum(ap.last_share_diff) ? si(ap.last_share_diff) + " difficulty" : (d.ok ? "From the miner API" : "");
+    const flashH = tip.height || ((h.has_height && h.height) ? h.height : 0);
+    if (flashH && this._seenH && flashH !== this._seenH) {
       const card = $("#secMining");
       if (card) { card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 1200); }
     }
-    if (h.has_height && h.height) this._seenH = h.height;
+    if (flashH) this._seenH = flashH;
+    if (this._ready && acc != null && this._seenAcc != null && acc > this._seenAcc) {
+      const cell = $("#mineShares");
+      if (cell) { cell.classList.remove("share-pulse"); void cell.offsetWidth; cell.classList.add("share-pulse"); setTimeout(() => cell.classList.remove("share-pulse"), 900); }
+    }
+    if (acc != null) this._seenAcc = acc;
+    const ever = this.best(), today = this.bestToday();
+    if (this._ready && ever > 0 && this._seenBest && ever > this._seenBest) this.showToast("New best: " + si(ever));
+    if (ever > 0) this._seenBest = ever;
+    else if (today > 0 && !this._seenBest) this._seenBest = today;
+    if (!this._ready) {
+      const hs = ((S.lot && S.lot.stats && S.lot.stats.highlights) || []);
+      const last = hs.length ? hs[hs.length - 1] : null;
+      if (last && last.t && Date.now() / 1000 - last.t < 15 * 60 && last.title) this.showToast(last.title);
+    }
+    this._ready = true;
     grid.innerHTML =
       this.cell("Live hashrate", d.ok && isNum(hv) ? `${fmt(hv, 3)} <small>TH/s</small>` : "—", "Live (chip-reported)") +
-      this.cell("Block height", height, heightSub) +
       this.cell("Pool", esc(pool), "") +
-      this.cell("Best share", bestV, bestS) +
-      this.cell("Toward a block", pctV, pctS) +
-      this.cell("Odds", oddsV, oddsS) +
-      this.cell("Expected time", timeV, timeS);
+      this.cell("Block height", height, heightSub) +
+      this.cell("Shares & workers", sharesV, sharesS, "mineShares") +
+      this.cell("Last share", lastV, lastS, "mineLast");
+    const st = (S.lot && S.lot.stats) || {}, rec = $("#mineRecap");
+    if (rec) {
+      const shToday = st.today && isNum(st.today.shares) ? +st.today.shares : 0;
+      const bestT = today > 0 ? si(today) : (ever > 0 ? si(ever) : "—");
+      let up = "—";
+      if (st.today && isNum(st.today.online_sec) && st.today.online_sec > 0) {
+        const s = st.today.online_sec;
+        up = s >= 3600 ? (s / 3600).toFixed(s >= 10 * 3600 ? 0 : 1) + "h" : Math.max(1, Math.round(s / 60)) + "m";
+      } else if (d.ok && d.uptime && d.uptime.human) up = d.uptime.human;
+      const stones = (st.milestones || []).filter(b => b.earned);
+      rec.innerHTML = `<div class="recap-line">Today: <b class="num">${groupDigits(Math.round(shToday))}</b> shares, best <b class="num">${esc(bestT)}</b>, uptime <b>${esc(up)}</b></div>
+        ${stones.length ? `<div class="recap-ms">${stones.map(b => `<span class="ms-pill" title="${esc(b.desc || "")}">${ic(b.icon || "award", "sm")}${esc(b.title)}</span>`).join("")}</div>` : `<div class="recap-ms t3">Milestones show up here as you earn them — first 1M / 10M / 100M / 1B share, and uptime streaks.</div>`}`;
+    }
   },
 };
+
 
 
 /* ---------------- raw ---------------- */
@@ -1705,9 +1851,10 @@ const LOTTO = {
     $("#lotNet").innerHTML = !net.network_on ? `${ic("eye-off", "sm")}Network data off` : L.difficulty ? `difficulty <b class="num">${big(L.difficulty, 1)}</b>${stale ? ' · <span style="color:var(--warn)">stale</span>' : isNum(netAge) ? ' · <span class="t3">' + (netAge < 60 ? Math.max(0, Math.floor(netAge)) + "s ago" : rel(Date.now() / 1000 - netAge)) + "</span>" : ""}${live}` : "waiting for network data…";
     const minerOn = !(S.data && S.data.ok === false) && o.hashrate_hs > 0;
     const has = o.difficulty > 0 && minerOn;
+    const flips = has && o.one_in_per_day > 0 ? Math.round(Math.log(o.one_in_per_day) / Math.LN2) : 0;
     const T = (icn, k, v, sub, cls) => `<div class="lot-t ${cls || ""}"><div class="label">${ic(icn, "sm")}${k}</div><div class="lot-v num">${v}</div><div class="sub">${sub}</div></div>`;
     $("#lotGrid").innerHTML =
-      T("dice-5", "Chance today", has ? oneIn(o.one_in_per_day) : "—", has ? `${pct(o.per_day)} per day · ${pct(o.per_year)} per year` : "needs hashrate and network difficulty", "hl") +
+      T("dice-5", "Chance today", has ? oneIn(o.one_in_per_day) : "—", has ? `${pct(o.per_day)} per day · ${pct(o.per_year)} per year${flips >= 2 ? " · like flipping heads " + flips + " times in a row" : ""}` : "needs hashrate and network difficulty", "hl") +
       T("hourglass", "Time to block", has ? yrs(o.years_per_block) : "—", has ? `on average, at ${fmt(o.hashrate_hs / 1e12, 2)} TH/s. Every hash is a fresh draw.` : "") +
       T("ticket", "Tickets today", words(st.tickets_today), `<b>${words(st.tickets_all)}</b> since ${st.first_seen ? esc(new Date(st.first_seen * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })) : "—"} · 1 hash = 1 ticket`) +
       T("bitcoin", "Block reward", rw ? (rw.usd ? usd(rw.usd) : btc(rw.total_sat)) : "—", rw ? `${btc(rw.subsidy_sat)} + ${btc(rw.fees_sat)} fees${rw.usd ? " · " + usd(rw.price_usd) + "/BTC" : ""}` : (net.network_on ? "waiting for network data…" : "network data off in Settings"));

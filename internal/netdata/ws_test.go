@@ -403,3 +403,61 @@ func TestRESTPollsWhenWebsocketIsQuiet(t *testing.T) {
 		t.Fatal("quiet-WS REST path should not leave network stale")
 	}
 }
+
+func TestApplyMempoolBlocksRefreshesReceiptAndBumpsOnFill(t *testing.T) {
+	f := New(t.TempDir())
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	f.Now = func() time.Time { return now }
+
+	if err := f.applyWSMessage([]byte(`{"block":{"height":100,"timestamp":1699990000,"difficulty":42,"extras":{}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	s0 := f.Get()
+	rev0 := s0.Rev
+	if s0.TipTime != 1699990000 {
+		t.Fatalf("tip time %d", s0.TipTime)
+	}
+
+	now = now.Add(2 * time.Minute)
+	msg := `{"mempool-blocks":[{"blockVSize":250000,"blockSize":300000,"nTx":1200,"totalFees":8000000,"medianFee":4.5}]}`
+	if err := f.applyWSMessage([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	s1 := f.Get()
+	if s1.NetFetched != now.Unix() {
+		t.Fatalf("mempool receipt should refresh net_fetched, got %d", s1.NetFetched)
+	}
+	if s1.TipHeight != 100 {
+		t.Fatalf("tip moved on mempool-blocks: %d", s1.TipHeight)
+	}
+	n := s1.NextMempool()
+	if n == nil || n.NTx != 1200 || n.VSize != 250000 {
+		t.Fatalf("next mempool %+v", n)
+	}
+	if s1.Rev <= rev0 {
+		t.Fatalf("first mempool-blocks should bump rev: %d -> %d", rev0, s1.Rev)
+	}
+
+	rev1 := s1.Rev
+	now = now.Add(time.Minute)
+	if err := f.applyWSMessage([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	s2 := f.Get()
+	if s2.Rev != rev1 {
+		t.Fatalf("identical mempool-blocks bumped rev: %d -> %d", rev1, s2.Rev)
+	}
+	if s2.NetFetched != now.Unix() {
+		t.Fatal("identical payload should still count as a receipt")
+	}
+
+	now = now.Add(time.Minute)
+	if err := f.applyWSMessage([]byte(`{"mempool-blocks":[{"blockVSize":400000,"nTx":1800,"totalFees":1,"medianFee":5}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	s3 := f.Get()
+	if s3.Rev <= rev1 || s3.NextMempool() == nil || s3.NextMempool().NTx != 1800 {
+		t.Fatalf("fill change should bump: %+v rev %d", s3.NextMempool(), s3.Rev)
+	}
+}

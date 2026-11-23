@@ -138,9 +138,14 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 		`id="secMining"`,
 		`id="kpiRow"`,
 		`id="mineGrid"`,
+		`id="mineRace"`,
+		`id="mineGuessN"`,
+		`id="mineRecap"`,
 		`id="dashAlert"`,
+		"Guesses this round",
+		"Shares & workers",
+		"Last share",
 		"New block ",
-		"of the way to a block",
 		"like flipping heads ",
 		"Hidden while the miner is offline",
 		"prefers-reduced-motion",
@@ -166,6 +171,28 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	}
 	if !strings.Contains(js, "MINING.update()") {
 		t.Fatal("lottery load must refresh the Mining card so odds stay in sync")
+	}
+	for _, gone := range []string{
+		`this.cell("Toward a block"`,
+		`this.cell("Odds"`,
+		`this.cell("Expected time"`,
+		`this.cell("Best share"`,
+	} {
+		if strings.Contains(js, gone) {
+			t.Errorf("Mining still has a lottery tile: %s", gone)
+		}
+	}
+	if !strings.Contains(js, "Chance today") || !strings.Contains(js, "Time to block") || !strings.Contains(js, "of a winning ticket") {
+		t.Fatal("Lottery must keep chance, time to block, and the best-share progress bar")
+	}
+	if !strings.Contains(js, "hashesSince(") || !strings.Contains(js, "groupDigits(") {
+		t.Fatal("guess counter must format exact hashes with comma grouping")
+	}
+	if !strings.Contains(js, "mempool-blocks") && !strings.Contains(js, "mempool_next") {
+		t.Fatal("block race must use mempool next-block data")
+	}
+	if !strings.Contains(js, "share-pulse") || !strings.Contains(js, "New best:") {
+		t.Fatal("Mining must pulse on real accepted shares and celebrate a new best")
 	}
 	for _, gone := range []string{
 		`id="hashAnim"`,

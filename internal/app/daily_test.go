@@ -102,6 +102,16 @@ func TestDailySummaryAtNineAndOncePerDay(t *testing.T) {
 	}
 }
 
+func alertsOfKind(items []Alert, kind string) []Alert {
+	var out []Alert
+	for _, a := range items {
+		if a.Kind == kind {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func TestDailySummaryCustomTimeAndMidnightUnchanged(t *testing.T) {
 	loc := time.Local
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, loc)
@@ -120,7 +130,7 @@ func TestDailySummaryCustomTimeAndMidnightUnchanged(t *testing.T) {
 	// 18:30 custom time: 10:00 should not fire the briefing
 	hist := makeHist(now, 2*time.Minute, 24, time.Time{}, time.Time{}, 4, 70, 70)
 	st.MaybeDailySummary("m", "Nano", snap(5e8, 0, 1360), hist, "18:30")
-	if items, _ := st.Alerts.Since(0, 0); len(items) != 0 {
+	if items, _ := st.Alerts.Since(0, 0); len(alertsOfKind(items, "summary")) != 0 {
 		t.Fatalf("fired at 10:00 for 18:30: %+v", items)
 	}
 	now = time.Date(2026, 11, 14, 18, 30, 0, 0, loc)

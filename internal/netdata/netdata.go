@@ -57,19 +57,40 @@ type Block struct {
 	Diff      float64 `json:"difficulty"`
 }
 
+// MempoolBlock is one projected block in mempool.space's mempool-blocks feed.
+// The first entry is the next block that is filling up.
+type MempoolBlock struct {
+	VSize     float64 `json:"vsize"`
+	Size      float64 `json:"size,omitempty"`
+	NTx       int     `json:"n_tx"`
+	TotalFees int64   `json:"total_fees_sat,omitempty"`
+	MedianFee float64 `json:"median_fee,omitempty"`
+}
+
+// NextMempool is the block currently forming (first projected mempool block).
+func (s Snapshot) NextMempool() *MempoolBlock {
+	if len(s.MempoolBlocks) == 0 {
+		return nil
+	}
+	b := s.MempoolBlocks[0]
+	return &b
+}
+
 // Snapshot is the cached network state.
 type Snapshot struct {
-	Difficulty   float64 `json:"difficulty"`
-	TipHeight    int64   `json:"tip_height"`
-	Blocks       []Block `json:"blocks"`
-	AvgFeesSat   int64   `json:"avg_fees_sat"`
-	NetFetched   int64   `json:"net_fetched"` // unix time of last successful network data receipt (not block age)
-	PriceUSD     float64 `json:"price_usd"`
-	PriceFetched int64   `json:"price_fetched"`
-	Source       string  `json:"source"`
-	PriceSource  string  `json:"price_source"`
-	LastErr      string  `json:"last_err,omitempty"`
-	PriceErr     string  `json:"price_err,omitempty"`
+	Difficulty    float64        `json:"difficulty"`
+	TipHeight     int64          `json:"tip_height"`
+	TipTime       int64          `json:"tip_time,omitempty"` // unix time of the tip block itself
+	Blocks        []Block        `json:"blocks"`
+	MempoolBlocks []MempoolBlock `json:"mempool_blocks,omitempty"`
+	AvgFeesSat    int64          `json:"avg_fees_sat"`
+	NetFetched    int64          `json:"net_fetched"` // unix time of last successful network data receipt (not block age)
+	PriceUSD      float64        `json:"price_usd"`
+	PriceFetched  int64          `json:"price_fetched"`
+	Source        string         `json:"source"`
+	PriceSource   string         `json:"price_source"`
+	LastErr       string         `json:"last_err,omitempty"`
+	PriceErr      string         `json:"price_err,omitempty"`
 	// Live websocket (mempool.space). WSConnected is true while the socket is up.
 	WSConnected bool     `json:"ws_connected"`
 	WSLastEvent int64    `json:"ws_last_event,omitempty"` // unix time of the last applied ws message
@@ -141,6 +162,11 @@ func (f *Fetcher) Get() Snapshot {
 	defer f.mu.Unlock()
 	s := f.snap
 	s.Blocks = append([]Block(nil), f.snap.Blocks...)
+	s.MempoolBlocks = append([]MempoolBlock(nil), f.snap.MempoolBlocks...)
+	if f.snap.DiffAdj != nil {
+		d := *f.snap.DiffAdj
+		s.DiffAdj = &d
+	}
 	return s
 }
 
@@ -349,6 +375,42 @@ type mpBlock struct {
 	} `json:"extras"`
 }
 
+type mpMempoolBlock struct {
+	BlockVSize float64 `json:"blockVSize"`
+	BlockSize  float64 `json:"blockSize"`
+	NTx        int     `json:"nTx"`
+	TotalFees  int64   `json:"totalFees"`
+	MedianFee  float64 `json:"medianFee"`
+}
+
+func mempoolFromMP(raw []mpMempoolBlock) []MempoolBlock {
+	out := make([]MempoolBlock, 0, len(raw))
+	for _, b := range raw {
+		out = append(out, MempoolBlock{VSize: b.BlockVSize, Size: b.BlockSize, NTx: b.NTx, TotalFees: b.TotalFees, MedianFee: b.MedianFee})
+	}
+	return out
+}
+
+func mempoolEqual(a, b []MempoolBlock) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].NTx != b[i].NTx {
+			return false
+		}
+		dv := a[i].VSize - b[i].VSize
+		if dv < 0 {
+			dv = -dv
+		}
+		// 5k vbytes is a little under 0.5% of a full block — below a visible fill change.
+		if dv >= 5000 {
+			return false
+		}
+	}
+	return true
+}
+
 // soloRe matches pool tags that are solo / lottery mining services.
 var soloRe = regexp.MustCompile(`(?i)\bsolo\b|solock|solo ?ck|public ?pool|publicpool|ckpool solo|solo\.ckpool`)
 
@@ -401,6 +463,7 @@ func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 	}
 	f.snap.Blocks = blocks
 	f.snap.TipHeight = raw[0].Height
+	f.snap.TipTime = raw[0].Timestamp
 	f.snap.Difficulty = raw[0].Diff
 	f.snap.AvgFeesSat = fees / int64(len(raw))
 	f.snap.NetFetched = f.Now().Unix()
@@ -410,6 +473,29 @@ func (f *Fetcher) RefreshNetwork(ctx context.Context) error {
 	f.saveLocked()
 	f.mu.Unlock()
 	f.notify()
+	// Best-effort: the forming-block preview is optional and must not fail the poll.
+	_ = f.refreshMempoolBlocks(ctx)
+	return nil
+}
+
+func (f *Fetcher) refreshMempoolBlocks(ctx context.Context) error {
+	var raw []mpMempoolBlock
+	if err := f.get(ctx, strings.TrimRight(f.Base, "/")+"/v1/fees/mempool-blocks", &raw); err != nil {
+		return err
+	}
+	blocks := mempoolFromMP(raw)
+	f.mu.Lock()
+	changed := !mempoolEqual(f.snap.MempoolBlocks, blocks)
+	f.snap.MempoolBlocks = blocks
+	f.snap.NetFetched = f.Now().Unix()
+	if changed {
+		f.bumpLocked()
+		f.saveLocked()
+	}
+	f.mu.Unlock()
+	if changed {
+		f.notify()
+	}
 	return nil
 }
 
@@ -574,6 +660,7 @@ func (f *Fetcher) Wait(ctx context.Context, since int64) (Snapshot, int64) {
 		if rev > since {
 			s := f.snap
 			s.Blocks = append([]Block(nil), f.snap.Blocks...)
+			s.MempoolBlocks = append([]MempoolBlock(nil), f.snap.MempoolBlocks...)
 			if f.snap.DiffAdj != nil {
 				d := *f.snap.DiffAdj
 				s.DiffAdj = &d
