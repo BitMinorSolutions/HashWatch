@@ -1,4 +1,4 @@
-/* HashWatch v0.9.10 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
+/* HashWatch v0.9.11 frontend (single page) — vanilla JS + uPlot. Design: docs/DESIGN.md */
 (() => {
 "use strict";
 const APP = document.body.dataset.app || "HashWatch";
@@ -39,12 +39,22 @@ function groupDigits(s) {
   while (s.length > 3) { out = "," + s.slice(-3) + out; s = s.slice(0, -3); }
   return s + out;
 }
-// hashes = TH/s × 1e12 × elapsed seconds, as a decimal string (BigInt, so long rounds stay exact).
-function hashesSince(ths, tipUnix, nowMs) {
-  if (!isNum(ths) || ths <= 0 || !tipUnix) return "0";
-  const ms = Math.max(0, Math.round(nowMs - tipUnix * 1000));
-  const milli = Math.max(0, Math.round(+ths * 1000));
-  return (BigInt(milli) * 1000000n * BigInt(ms)).toString();
+// hashes = TH/s × 1e12 × ms / 1000, as a BigInt (long rounds pass 2^53).
+function hashesFor(ths, ms) {
+  if (!isNum(ths) || ths <= 0 || !(ms > 0)) return 0n;
+  return BigInt(Math.max(0, Math.round(+ths * 1000))) * 1000000n * BigInt(Math.round(ms));
+}
+// Estimate only: hashrate × time since the block (used when the miner's own counter can't cover the round).
+function estimateSince(ths, tipUnix, nowMs) {
+  if (!tipUnix) return "0";
+  return hashesFor(ths, Math.max(0, nowMs - tipUnix * 1000)).toString();
+}
+// The real count: the server's reading of the miner's counter, carried forward
+// smoothly at the live hashrate until the next poll re-anchors it.
+function roundNow(R, ths, nowMs, capS) {
+  let base; try { base = BigInt(R.hashes || "0"); } catch (e) { base = 0n; }
+  const ms = Math.min(Math.max(0, nowMs - (+R.at_ms || nowMs)), capS * 1000);
+  return (base + hashesFor(ths, ms)).toString();
 }
 const cap = (s) => String(s || "").replace(/^\w/, c => c.toUpperCase());
 const ic = (n, c = "") => `<svg class="i ${c}" aria-hidden="true"><use href="#${n}"/></svg>`;
@@ -387,7 +397,7 @@ function shell() {
     <main class="content" id="view"></main>
   </div>`;
   if ($("#msel")) $("#msel").onchange = (e) => { localStorage.setItem("hw_miner", e.target.value); boot(); };
-  S.data = null; S.hist = []; S.hits = []; S.mining = null; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {}; S.net = null; S.netRev = 0; S.liveTok = (S.liveTok || 0) + 1; S.liveHold = false; S.liveAgain = null; if (typeof MINING !== "undefined") MINING.stop();
+  S.data = null; S.hist = []; S.hits = []; S.mining = null; S.round = null; S.can = false; S.ctl.init = false; S.remote = S.state.remote || {}; S.net = null; S.netRev = 0; S.liveTok = (S.liveTok || 0) + 1; S.liveHold = false; S.liveAgain = null; if (typeof MINING !== "undefined") MINING.stop();
   S.charts.forEach(c => c.destroy()); S.charts = [];
   const warn = (S.state.wifi_no_password && !isView()) ? `<div class="banner" style="margin:0 0 16px">${ic("triangle-alert")}<div><b>No password, and phones can reach this dashboard.</b> Set a password in Settings. Until you do, only this computer can change settings or the miner.</div></div>` : "";
   const v = $("#view"); v.innerHTML = `<div class="view one-page">${warn}<div id="celebrate"></div>${DASH.build()}</div>`;
@@ -499,6 +509,7 @@ async function refresh(full) {
       }
       S.mining = r.mining;
     }
+    S.round = r.round || null;
     newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
@@ -1101,9 +1112,10 @@ const DASH = {
       <div class="mine-stage">
         <div class="race" id="mineRace" aria-label="Live block race">${Array.from({ length: 6 }, () => '<div class="race-blk sk-blk"><div class="sk" style="height:10px;width:70%"></div><div class="sk" style="height:32px;width:50%;margin-top:10px"></div></div>').join("")}</div>
         <div class="guess" id="mineGuess">
-          <div class="kpi-k">${ic("zap", "sm")}Guesses this round</div>
+          <div class="kpi-k">${ic("zap", "sm")}Guesses this round<span class="guess-tag" id="mineGuessTag" hidden>Estimate</span></div>
           <div class="guess-n num" id="mineGuessN">—</div>
           <div class="kpi-s" id="mineGuessS">hashes tried since the last network block</div>
+          <div class="guess-note" id="mineGuessNote" hidden></div>
         </div>
         <div class="mine-grid" id="mineGrid">${Array.from({ length: 5 }, () => '<div class="mine-cell"><div class="sk" style="height:12px;width:46%"></div><div class="sk" style="height:22px;width:72%;margin-top:8px"></div></div>').join("")}</div>
         <div class="mine-toast" id="mineToast" hidden></div>
@@ -1303,16 +1315,37 @@ const MINING = {
     return best || 0;
   },
   paintGuess() {
-    const el = $("#mineGuessN"), sub = $("#mineGuessS"); if (!el) return;
-    const d = D(), hv = heroVal(), tip = this.tipMeta(), on = !!(d && d.ok && isNum(hv) && hv > 0 && tip.time);
-    if (!on) {
-      if (!(d && d.ok)) { el.textContent = "—"; if (sub) sub.textContent = "Hidden while the miner is offline"; }
-      else if (!tip.time) { el.textContent = "—"; if (sub) sub.textContent = this.netInfo().network_on ? "Waiting for the last block's time" : "Network data is off in Settings"; }
-      else { el.textContent = "—"; if (sub) sub.textContent = "hashes tried since the last network block"; }
+    const el = $("#mineGuessN"), sub = $("#mineGuessS"), note = $("#mineGuessNote"), tag = $("#mineGuessTag"); if (!el) return;
+    const d = D(), hv = heroVal(), tip = this.tipMeta(), R = S.round;
+    const setNote = (html) => { if (!note) return; if (note._h !== html) { note._h = html; note.innerHTML = html; } note.hidden = !html; };
+    const setTag = (on) => { if (tag) tag.hidden = !on; };
+    if (!(d && d.ok)) { el.textContent = "—"; if (sub) sub.textContent = "Hidden while the miner is offline"; setNote(""); setTag(false); return; }
+    if (R && R.exact && R.height) {
+      el.textContent = groupDigits(roundNow(R, hv, Date.now(), (S.pollS || 5) * 2 + 3));
+      if (sub) sub.innerHTML = `hashes tried since block <b class="num">${fmt(R.height)}</b>, from the miner's own counter`;
+      setTag(false);
+      const rs = R.restarts || [], last = rs[rs.length - 1], n = R.n_restarts || rs.length;
+      if (last) {
+        const at = new Date(last.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        setNote(`${ic("rotate-ccw", "sm")}<span>Miner restarted at ${esc(at)}; count includes ~${fmt(last.down_s || 0)} s downtime${n > 1 ? ` · ${fmt(n)} restarts this round` : ""}</span>`);
+      } else setNote("");
       return;
     }
-    el.textContent = groupDigits(hashesSince(hv, tip.time, Date.now()));
-    if (sub) sub.innerHTML = tip.height ? `since block <b class="num">${fmt(tip.height)}</b> · at ${fmt(hv, 3)} TH/s` : "hashes tried since the last network block";
+    // No exact count for this round: show the clearly labelled estimate.
+    const partial = R && R.partial && R.height, h = (partial ? R.height : 0) || tip.height;
+    const why = partial ? (R.partial_why === "unreachable" ? "partial, the miner wasn't answering when the block arrived" : "partial, HashWatch was offline") : "";
+    if (!(isNum(hv) && hv > 0 && tip.time)) {
+      el.textContent = "—"; setTag(false);
+      if (sub) sub.textContent = !tip.time ? (this.netInfo().network_on ? "Waiting for the last block's time" : "Network data is off in Settings") : "hashes tried since the last network block";
+      setNote(why ? `${ic("info", "sm")}<span>${esc(why)}</span>` : "");
+      return;
+    }
+    el.textContent = groupDigits(estimateSince(hv, tip.time, Date.now()));
+    setTag(true);
+    const blk = h ? ` since block <b class="num">${fmt(h)}</b>` : "";
+    if (sub) sub.innerHTML = `estimated${blk} at ${fmt(hv, 3)} TH/s × time`;
+    setNote(why ? `${ic("info", "sm")}<span>${esc(why)}; the miner's own count starts with the next block</span>`
+      : (R && R.counter === false ? `${ic("info", "sm")}<span>This miner doesn't report a hash counter</span>` : ""));
   },
   showToast(title) {
     const el = $("#mineToast"); if (!el) return;

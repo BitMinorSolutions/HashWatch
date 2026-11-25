@@ -61,14 +61,21 @@ type Poller struct {
 	OnPoll func(id, name string, snap *model.Snapshot, lastHour []model.Sample)
 	// Mining is the rolling accepted-share log and block-height clock.
 	Mining *mining.Log
-	dir    string
-	mu     sync.RWMutex
-	m      map[string]*minerState
-	wait   chan struct{}
+	// Rounds is the per-round hash counter ("Guesses this round").
+	Rounds *mining.Rounds
+	// Tip returns the latest network block height HashWatch knows (0 = unknown)
+	// for the round counter; nil uses only the pool's reported height.
+	Tip func(snap *model.Snapshot) int64
+	// OnRestart is called when the round counter sees the miner restart.
+	OnRestart func(id, name string, r mining.Restart)
+	dir       string
+	mu        sync.RWMutex
+	m         map[string]*minerState
+	wait      chan struct{}
 }
 
 func NewPoller(dir string, every time.Duration) *Poller {
-	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}, Mining: mining.NewLog(dir), wait: make(chan struct{})}
+	p := &Poller{Every: every, Base: every, dir: dir, m: map[string]*minerState{}, Mining: mining.NewLog(dir), Rounds: mining.NewRounds(dir), wait: make(chan struct{})}
 	go func() {
 		for range time.Tick(time.Minute) {
 			p.saveHistory()
@@ -128,6 +135,9 @@ func (p *Poller) Stop(id string) {
 	if p.Mining != nil {
 		p.Mining.Remove(id)
 	}
+	if p.Rounds != nil {
+		p.Rounds.Remove(id)
+	}
 }
 
 // Halt stops reading a miner but keeps its history (the Mac switched to showing a Pi).
@@ -176,6 +186,11 @@ func (p *Poller) pollOnce(id string, st *minerState) time.Duration {
 	p.record(id, st, snap)
 	if p.Mining != nil {
 		p.Mining.Observe(id, snap, time.Now().Unix())
+	}
+	if p.Rounds != nil {
+		if rs := p.Rounds.Observe(id, snap, p.tipFor(snap), time.Now()); rs != nil && p.OnRestart != nil {
+			p.OnRestart(id, st.name, *rs)
+		}
 	}
 	p.mu.Lock()
 	if snap.OK {
@@ -399,6 +414,31 @@ func (p *Poller) saveHistory() {
 	if p.Mining != nil {
 		p.Mining.Save()
 	}
+	if p.Rounds != nil {
+		p.Rounds.Save()
+	}
+}
+
+// tipFor is the newest network block HashWatch knows: the network feed's tip,
+// or the block before the one the pool says the miner is working on, whichever
+// is newer (the pool often hears about a block a few seconds first).
+func (p *Poller) tipFor(snap *model.Snapshot) int64 {
+	var tip int64
+	if p.Tip != nil {
+		tip = p.Tip(snap)
+	}
+	if s := mining.FromSnapshot(snap); s.HasHeight && s.Height-1 > tip {
+		tip = s.Height - 1
+	}
+	return tip
+}
+
+// RoundView is the current round counter for a miner (nil before the first round).
+func (p *Poller) RoundView(id string) *mining.RoundView {
+	if p == nil || p.Rounds == nil {
+		return nil
+	}
+	return p.Rounds.View(id)
 }
 
 var ErrNoControl = fmt.Errorf("this miner can't be controlled from here")

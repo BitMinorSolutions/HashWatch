@@ -259,8 +259,15 @@ func TestMiningViewAndHeroLabel(t *testing.T) {
 	if !strings.Contains(js, "Chance today") || !strings.Contains(js, "Time to block") || !strings.Contains(js, "of a winning ticket") {
 		t.Fatal("Lottery must keep chance, time to block, and the best-share progress bar")
 	}
-	if !strings.Contains(js, "hashesSince(") || !strings.Contains(js, "groupDigits(") {
+	if !strings.Contains(js, "roundNow(") || !strings.Contains(js, "groupDigits(") {
 		t.Fatal("guess counter must format exact hashes with comma grouping")
+	}
+	if !strings.Contains(js, "from the miner's own counter") || !strings.Contains(js, "partial, HashWatch was offline") ||
+		!strings.Contains(js, "Miner restarted at ") || !strings.Contains(js, "s downtime") {
+		t.Fatal("guess counter must show the miner-counter subtitle, the partial label and the restart note")
+	}
+	if strings.Contains(js, "hashesSince(") {
+		t.Fatal("the old hashrate × time guess counter must be gone")
 	}
 	if !strings.Contains(js, "mempool-blocks") && !strings.Contains(js, "mempool_next") {
 		t.Fatal("block race must use mempool next-block data")

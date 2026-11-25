@@ -98,6 +98,9 @@ type Shares struct {
 	RemoteFailures *float64 `json:"remote_failures"`
 	FoundBlocks    *float64 `json:"found_blocks"`
 	NetworkBlocks  *float64 `json:"network_blocks"`
+	// TotalMH is the miner's own running count of work since it started (cgminer
+	// summary "Total MH", in millions of hashes). It resets when the miner reboots.
+	TotalMH *float64 `json:"total_mh,omitempty"`
 }
 
 type Pool struct {

@@ -215,7 +215,8 @@ func Build(s *model.Snapshot, summary, version, pools, devs, stats map[string]an
 	s.Shares = model.Shares{Accepted: m("Accepted"), Rejected: m("Rejected"), Stale: m("Stale"), HWErrors: m("Hardware Errors"),
 		RejectPct: m("Pool Rejected%"), StalePct: m("Pool Stale%"), DeviceHWPct: m("Device Hardware%"), DHPct: f("DH"),
 		BestShare: m("Best Share"), Utility: m("Utility"), Getworks: m("Getworks"), GetFailures: m("Get Failures"),
-		RemoteFailures: m("Remote Failures"), FoundBlocks: m("Found Blocks"), NetworkBlocks: m("Network Blocks")}
+		RemoteFailures: m("Remote Failures"), FoundBlocks: m("Found Blocks"), NetworkBlocks: m("Network Blocks"),
+		TotalMH: m("Total MH")}
 
 	s.Temps = model.Temps{Ambient: f("Temp"), Outlet: f("OTemp"), Avg: f("TAvg"), Max: f("TMax"), Target: f("TarT")}
 	if s.Temps.Max == nil {

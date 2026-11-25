@@ -33,7 +33,7 @@ type AlertKind struct {
 
 var AlertKinds = []AlertKind{
 	{"block", "Block found", "When the miner's Found Blocks count goes up."},
-	{"offline", "Offline / back online", "When " + AppName + " can't reach a miner for 30 seconds, and when it's back."},
+	{"offline", "Offline / back online", "When " + AppName + " can't reach a miner for 30 seconds, when it's back, and when the miner restarts."},
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
 	{"temp", "Running hot", "Average chip temperature more than 2°C above the miner's own target (or 90°C if it reports none) for 5 minutes. A separate alarm fires when any chip stays at or above 95°C for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
@@ -152,6 +152,44 @@ func (a *Alerts) Fire(al Alert) (Alert, bool) {
 		go a.Push(al)
 	}
 	return al, true
+}
+
+// Record always keeps the alert in the history, and sends the desktop / phone
+// notification only when its kind is turned on.
+func (a *Alerts) Record(al Alert) Alert {
+	a.mu.Lock()
+	a.seq++
+	if ns := a.Now().UnixMilli(); ns > a.seq {
+		a.seq = ns
+	}
+	al.ID, al.T = a.seq, a.Now().Unix()
+	a.items = append(a.items, al)
+	if len(a.items) > alertsMax {
+		a.items = a.items[len(a.items)-alertsMax:]
+	}
+	a.mu.Unlock()
+	a.save()
+	if a.Enabled == nil || a.Enabled(al.Kind) {
+		if a.Notify != nil {
+			go a.Notify(al)
+		}
+		if a.Push != nil {
+			go a.Push(al)
+		}
+	}
+	return al
+}
+
+// MinerRestarted logs a miner restart seen by the round counter.
+func (a *Alerts) MinerRestarted(id, name string, downSec int64, unknown bool) Alert {
+	body := "It's hashing again. Guesses this round keeps the count from before the restart"
+	switch {
+	case unknown:
+		body = "It restarted while " + AppName + " was offline, so this round's count is partial"
+	case downSec > 0:
+		body += fmt.Sprintf(" (about %d s without counted work)", downSec)
+	}
+	return a.Record(Alert{Miner: id, MinerName: name, Kind: "offline", Level: "warn", Title: name + " restarted", Body: body + "."})
 }
 
 func fnum(p *float64) (float64, bool) {

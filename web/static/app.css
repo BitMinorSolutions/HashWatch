@@ -1090,6 +1090,14 @@ body.sheet-open { overflow: hidden; }
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum", "cv11", "ss01"; color: var(--t1);
   overflow-wrap: anywhere; word-break: break-word; max-width: 100%; min-width: 0; }
 .guess .kpi-s { margin-top: 8px; white-space: normal; }
+.guess-tag { margin-left: 8px; height: 18px; padding: 0 7px; border-radius: 999px; display: inline-flex; align-items: center;
+  font-size: 10.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--t2);
+  background: rgba(255,255,255,.05); border: 1px solid var(--line); }
+.guess-tag[hidden] { display: none; }
+.guess-note { margin-top: 8px; display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; line-height: 1.45; color: var(--t2);
+  min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.guess-note[hidden] { display: none; }
+.guess-note .i { flex: none; margin-top: 2px; color: var(--accent); }
 
 .mine-cell.share-pulse { animation: sharePulse .85s var(--ease); }
 @keyframes sharePulse {

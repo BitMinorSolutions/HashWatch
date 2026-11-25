@@ -22,6 +22,7 @@ import (
 	"github.com/hashwatch/hashwatch/internal/app"
 	"github.com/hashwatch/hashwatch/internal/autostart"
 	"github.com/hashwatch/hashwatch/internal/install"
+	"github.com/hashwatch/hashwatch/internal/mining"
 	"github.com/hashwatch/hashwatch/internal/model"
 	"github.com/hashwatch/hashwatch/internal/netdata"
 	"github.com/hashwatch/hashwatch/internal/notify"
@@ -223,6 +224,14 @@ func main() {
 			stats.Save()
 		}
 	}()
+	// Round counter: the newest network block (respecting the network-data switch).
+	poll.Tip = func(*model.Snapshot) int64 {
+		if cfg.Privacy.NetworkOff {
+			return 0
+		}
+		return netf.Get().TipHeight
+	}
+	poll.OnRestart = func(id, name string, r mining.Restart) { alerts.MinerRestarted(id, name, r.DownSec, r.Unknown) }
 	poll.OnPoll = func(id, name string, snap *model.Snapshot, hist []model.Sample) {
 		alerts.Observe(id, name, snap, hist)
 		stats.Observe(id, name, snap)

@@ -59,6 +59,11 @@ type Miner struct {
 	extraAccept   int
 	lastShareAt   int64
 	pinBest       bool // test control: /best pins the value so advance() won't raise it
+	// Work counter (summary "Total MH"): grows with the hashrate, resets on a restart.
+	totalMH  float64
+	lastWork time.Time
+	downTill time.Time // simulated restart: no answers and no work until then
+	booting  bool
 }
 
 type poolInfo struct{ URL, User, Pass string }
@@ -76,6 +81,7 @@ func New() *Miner {
 		WorkDiff: 3997, LastShareDiff: 3997, BlockHeight: 975731}
 	m.Best = m.bestOf(549866)
 	m.lastBest = time.Now()
+	m.totalMH, m.lastWork = m.hs()/1e6*549866, time.Now()
 	return m
 }
 
@@ -132,6 +138,14 @@ func (m *Miner) hs() float64 { return []float64{3.4, 3.7, 3.95}[m.WorkLevel] * m
 
 func (m *Miner) advance() {
 	now := time.Now()
+	if m.booting && !now.Before(m.downTill) {
+		m.booting = false
+		m.start, m.totalMH, m.lastWork = m.downTill, 0, m.downTill
+	}
+	if !m.booting && now.After(m.lastWork) {
+		m.totalMH += m.hs() / 1e6 * now.Sub(m.lastWork).Seconds()
+	}
+	m.lastWork = now
 	if !m.pinBest {
 		if b := m.bestOf(now.Sub(m.lastBest).Seconds()); b > m.Best {
 			m.Best = b
@@ -167,7 +181,7 @@ func (m *Miner) handle(c net.Conn) {
 	defer func() { m.mu.Lock(); m.conc--; m.mu.Unlock() }()
 	time.Sleep(2 * time.Millisecond) // a real miner isn't instant; makes overlap visible
 	m.mu.Lock()
-	off := m.Offline
+	off := m.Offline || time.Now().Before(m.downTill)
 	m.mu.Unlock()
 	if off {
 		return
@@ -198,9 +212,9 @@ func (m *Miner) reply(cmd, param string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j := rand.Float64()*0.4 - 0.2
+	m.advance()
 	el := int(time.Since(m.start).Seconds())
 	base := []float64{3.4, 3.7, 3.95}[m.WorkLevel] * m.HashFactor
-	m.advance()
 	heat := m.ExtraHeat
 	if time.Now().Before(m.spikeEnd) {
 		heat += m.spikeC
@@ -225,8 +239,8 @@ func (m *Miner) reply(cmd, param string) string {
 		}
 		return status("S", 22, "CGMiner versions") + `,"VERSION":[{"CGMiner":"4.11.1","API":"3.7","PROD":"Avalonnano","MODEL":"nano3","HWTYPE":"PMMv1_X1","SWTYPE":"MM318_X2","LVERSION":"25103101_0736b2e","MAC":"e0e1a9000000"}],"id":1}`
 	case "summary":
-		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
-			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, m.acceptedLocked(), m.Best)
+		return status("S", 11, "Summary") + fmt.Sprintf(`,"SUMMARY":[{"Elapsed":%d,"MHS av":3221871.73,"MHS 5s":%.2f,"MHS 1m":%.2f,"MHS 5m":%.2f,"MHS 15m":%.2f,"Found Blocks":%d,"Getworks":18886,"Accepted":%d,"Rejected":233,"Hardware Errors":385,"Utility":14.63,"Stale":2627,"Get Failures":32,"Remote Failures":24,"Network Blocks":770,"Best Share":%.0f,"Total MH":%.4f,"Difficulty Accepted":%.8f,"Device Hardware%%":0.0001,"Pool Rejected%%":0.1638,"Pool Stale%%":0.5190}],"id":1}`,
+			el, (base+j*2)*1e6, (base+j)*1e6, (base+j/3)*1e6, base*1e6, m.Blocks, m.acceptedLocked(), m.Best, m.totalMH, m.totalMH*1e6/4294967296)
 	case "pools":
 		wd, ld, bh := m.WorkDiff, m.LastShareDiff, m.BlockHeight
 		if wd <= 0 {
@@ -349,12 +363,23 @@ func (m *Miner) Log() []string {
 //	GET /best?d=2.1e9 the miner reports a new best share of difficulty d
 //	GET /share?n=1&d=12000  n new accepted shares, latest difficulty d
 //	GET /height?h=977086    set Current Block Height (or add=1 to increment)
+//	GET /restart?down=12    simulate a miner restart with 12 s of downtime (uptime and Total MH reset)
 //
 // SetElapsed pretends the miner has been up for sec seconds (tests: a reboot is a drop).
 func (m *Miner) SetElapsed(sec int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.start = time.Now().Add(-time.Duration(sec) * time.Second)
+	m.totalMH, m.lastWork = m.hs()/1e6*float64(sec), time.Now()
+}
+
+// Restart simulates the miner restarting: it stops answering and hashing for
+// down seconds, then comes back with its uptime and Total MH counted from zero.
+func (m *Miner) Restart(down time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.advance()
+	m.downTill, m.booting = time.Now().Add(down), true
 }
 
 func (m *Miner) Admin(addr string) error {
@@ -450,6 +475,14 @@ func (m *Miner) Admin(addr string) error {
 			m.BlockHeight += add
 			m.mu.Unlock()
 		}
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/restart", func(w http.ResponseWriter, r *http.Request) {
+		d, err := strconv.Atoi(r.URL.Query().Get("down"))
+		if err != nil || d < 0 {
+			d = 12
+		}
+		m.Restart(time.Duration(d) * time.Second)
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {

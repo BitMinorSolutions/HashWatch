@@ -400,6 +400,9 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		mineSince -= 120 // last-share times can precede the poll timestamp
 	}
 	out["mining"] = s.Poll.MiningView(id, mineSince)
+	if rv := s.Poll.RoundView(id); rv != nil {
+		out["round"] = rv
+	}
 	if s.Alerts != nil {
 		items, latest := s.Alerts.Since(alertSince, 20)
 		out["alerts"], out["alerts_latest"] = items, latest
