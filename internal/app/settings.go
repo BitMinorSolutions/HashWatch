@@ -137,3 +137,6 @@ func (c *Config) updateMiner(id string, f func(*Miner)) bool {
 	}
 	return false
 }
+
+// MinerByID returns the configured miner with that id.
+func (c *Config) MinerByID(id string) (Miner, bool) { return c.minerByID(id) }

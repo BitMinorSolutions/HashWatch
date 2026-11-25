@@ -509,7 +509,7 @@ async function refresh(full) {
       }
       S.mining = r.mining;
     }
-    S.round = r.round || null;
+    S.round = r.round || null; S.integ = r.integrity || null;
     newAlerts(r.alerts || [], r.alerts_latest);
     S.hist = full ? (r.history || []) : S.hist.concat(r.history || []);
     const cut = Date.now() / 1000 - 86400; while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
@@ -846,6 +846,35 @@ VIEWS.pools = {
       : '<div class="pool"><span class="t3" style="grid-column:1/-1">No pools reported.</span></div>';
     $("#poolStats").innerHTML = kv([["Pools alive", `${ps.filter(p => (p.status || "").toLowerCase() === "alive").length} of ${ps.length}`], ["Pool ping", isNum(er.ping_ms) ? fmt(er.ping_ms) + " ms" : "—"],
       ["Best share", si(sh.best_share)], ["Get failures", fmt(sh.get_failures)], ["Remote failures", fmt(sh.remote_failures)], ["Network blocks", fmt(sh.network_blocks)]]);
+    INTEG.update();
+  },
+};
+/* Pool integrity: what the pool's public stats credit vs. the miner's own counters (read-only). Never shows the payout address. */
+const INTEG = {
+  STATE: { ok: ["good", "Credited", "shield-check"], mismatch: ["bad", "Not credited", "shield-alert"], waiting: ["", "Checking", "shield"],
+    unknown: ["", "Can't compare", "shield"], unsupported: ["", "Not available", "shield"], off: ["", "Off", "shield"] },
+  th(v) { if (!isNum(v)) return "—"; v = +v; return v >= 10 ? fmt(v, 1) + "<i>TH/s</i>" : v >= 0.01 ? fmt(v, 2) + "<i>TH/s</i>" : v > 0 ? fmt(v * 1000, 0) + "<i>GH/s</i>" : "0<i>TH/s</i>"; },
+  update() {
+    const el = $("#poolInteg"); if (!el) return;
+    const g = S.integ; if (!g) { el.hidden = true; return; }
+    el.hidden = false;
+    const [lv, title, icn] = INTEG.STATE[g.state] || INTEG.STATE.waiting, c = g.credited, m = g.miner || {};
+    const bad = g.state === "mismatch" && g.bad_since_unix ? ` · since <span data-rel="${g.bad_since_unix}">${rel(g.bad_since_unix)}</span>` : "";
+    const sch = g.scheme === "tls" ? ["good", "lock", "TLS"] : g.scheme === "sv2" ? ["good", "lock", "Stratum V2"] : ["warn", "lock-open", "Plain Stratum V1 · unencrypted"];
+    const cmp = c ? `<div class="integ-cmp num">
+        <div><span>Pool credits · 1 h</span><b>${INTEG.th(c.ths_1h)}</b></div>
+        <div><span>Miner reports · 1 h</span><b>${INTEG.th(m.ths_1h || m.ths_5m)}</b></div>
+        <div><span>Pool's last share</span><b>${c.last_share_unix ? `<span data-rel="${c.last_share_unix}">${rel(c.last_share_unix)}</span>` : "none"}</b></div>
+        <div><span>Miner's last share</span><b>${m.last_share_unix ? `<span data-rel="${m.last_share_unix}">${rel(m.last_share_unix)}</span>` : "none"}</b></div>
+      </div>` : "";
+    const foot = [g.source ? `Source: ${esc(g.source)}${c && !c.worker_match ? " (whole address)" : ""}` : "", g.checked_unix ? `checked <span data-rel="${g.checked_unix}">${rel(g.checked_unix)}</span>` : "",
+      g.on && g.every_sec ? `every ${g.every_sec >= 60 ? Math.round(g.every_sec / 60) + " min" : g.every_sec + " s"}` : ""].filter(Boolean).join(" · ");
+    el.innerHTML = `<div class="integ-h"><div class="integ-ic ${lv}">${ic(icn, "sm")}</div>
+        <div class="grow" style="min-width:0"><div class="integ-t">Pool integrity${g.pool_host ? ` <span class="t3"><span class="integ-dot">· </span>${esc(g.pool || "")} · ${esc(g.pool_host)}</span>` : ""}</div>
+          <div class="integ-s">${esc(g.reason || "")}</div></div>
+        <span class="pill ${lv}">${lv ? '<span class="dot"></span>' : ""}${esc(title)}${bad}</span></div>
+      ${cmp}
+      <div class="integ-f"><span class="pill ${sch[0]} sm">${ic(sch[1], "sm")}${esc(sch[2])}</span><span class="t3">${foot}</span></div>`;
   },
 };
 
@@ -1195,7 +1224,8 @@ const DASH = {
       <section class="panel panel-pad span-6" id="secPower"><div class="sec-h"><h2>Power <span class="t3">watts</span></h2></div>
         <div class="chart reveal" id="chPow" style="height:150px"><div class="chart-empty"></div></div><div class="list" id="powList" style="margin-top:12px"></div></section>
       <section class="panel span-7 pools-card" id="secPools"><div class="sec-h panel-pad-h"><h2>Pools</h2></div><div id="poolList"><div class="pool"><div class="sk" style="height:40px;grid-column:1/-1"></div></div></div>
-        <div class="panel-pad pools-stats"><div class="list two" id="poolStats"></div></div></section>
+        <div class="panel-pad pools-stats"><div class="list two" id="poolStats"></div></div>
+        <div class="integ" id="poolInteg" hidden></div></section>
       <section class="panel panel-pad span-5" id="secDevice"><div class="sec-h"><h2>Device</h2></div><div class="list" id="devList"></div>
         <div class="sec-h" style="margin-top:20px"><h2>Network drops <span class="t3" id="nfN"></span></h2></div><div class="list" id="nfList"></div></section>
       <details class="panel span-12 raw-card" id="secRaw"><summary class="panel-pad-h">${ic("table", "sm t3")}<span class="grow">All miner fields</span><span class="t3" id="rawCount"></span>${ic("chevron-down", "sm t3 chev")}</summary>
@@ -1486,7 +1516,7 @@ VIEWS.raw = {
 };
 
 /* ---------------- alerts ---------------- */
-const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activity", temp: "thermometer", pool: "network", link: "link", test: "bell", nearmiss: "crosshair", badge: "award", summary: "calendar-clock", auto: "sliders-horizontal" };
+const KIND_ICON = { block: "party-popper", offline: "wifi-off", hashrate: "activity", temp: "thermometer", pool: "network", link: "link", integrity: "shield-check", test: "bell", nearmiss: "crosshair", badge: "award", summary: "calendar-clock", auto: "sliders-horizontal" };
 async function loadAlerts() {
   try {
     const r = await api("/api/alerts");

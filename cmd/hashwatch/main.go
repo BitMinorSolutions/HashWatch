@@ -205,6 +205,10 @@ func main() {
 	alerts := app.NewAlerts(*dir)
 	alerts.Enabled = cfg.AlertOn
 	srv.Alerts = alerts
+	integ := app.NewIntegrity(*dir, alerts)
+	integ.Enabled = func() bool { return cfg.AlertOn("integrity") }
+	integ.Version = version
+	srv.Integrity = integ
 	// Lottery stats, public network data (optional, cached) and automations.
 	stats := app.NewStats(*dir)
 	stats.Alerts = alerts
@@ -234,6 +238,9 @@ func main() {
 	poll.OnRestart = func(id, name string, r mining.Restart) { alerts.MinerRestarted(id, name, r.DownSec, r.Unknown) }
 	poll.OnPoll = func(id, name string, snap *model.Snapshot, hist []model.Sample) {
 		alerts.Observe(id, name, snap, hist)
+		if m, ok := cfg.MinerByID(id); !ok || m.Kind != "remote" {
+			integ.Observe(id, name, snap, hist)
+		}
 		stats.Observe(id, name, snap)
 		cut := time.Now().Add(-24 * time.Hour).Unix()
 		at := cfg.DailySummaryAt

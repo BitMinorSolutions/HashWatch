@@ -37,6 +37,7 @@ var AlertKinds = []AlertKind{
 	{"hashrate", "Hashrate drop", "Hashrate more than 30% below its 1-hour average for 10 minutes."},
 	{"temp", "Running hot", "Average chip temperature more than 2°C above the miner's own target (or 90°C if it reports none) for 5 minutes. A separate alarm fires when any chip stays at or above 95°C for 5 minutes."},
 	{"pool", "Pool disconnected", "When no pool is connected, and when it reconnects."},
+	{"integrity", "Pool integrity", "Every 5 minutes, compares what the pool's public stats credit with the miner's own counters. Alerts when the pool stops crediting work the miner says was accepted for 20 minutes, when pool settings or the active pool change, or when the share difficulty looks like an impostor. Turning it off also stops the pool-stats check."},
 	{"link", "Share link changed", "When your share link changes, so you can send the new one."},
 	{"nearmiss", "Near misses & best shares", "A new personal-best share, or any share above your near-miss threshold."},
 	{"badge", "Badges", "When you earn a badge (streaks, big shares, ticket milestones)."},

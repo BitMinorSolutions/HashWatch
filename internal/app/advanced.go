@@ -80,6 +80,9 @@ func (s *Server) ctlPool(w http.ResponseWriter, r *http.Request) {
 	res, snap, err := s.Poll.Control(b.Miner, func(c source.Controller) (cgminer.Result, error) {
 		return c.SetPool(b.WebUser, b.WebPass, b.Pool, b.URL, b.Worker, b.WorkerPass)
 	}, nil)
+	if err == nil && res.OK {
+		s.Integrity.Expect(b.Miner, b.Pool, b.URL, b.Worker)
+	}
 	s.ctlReply(w, res, snap, err)
 }
 

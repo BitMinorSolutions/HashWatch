@@ -43,11 +43,12 @@ type Server struct {
 	ShowWindow func()           // native shells: bring the window forward (second launch)
 	Pi         *PiLink          // macOS app only: "Connect to my Pi" (nil = off)
 
-	Net    *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
-	Stats  *Stats           // lottery stats, badges, summaries
-	Auto   *Automations     // schedule, light effects
-	Fan    *FanSync         // re-applies a persisted Cooler fan speed
-	Update *update.Runner   // OTA for the Pi service; never talks to a miner
+	Net       *netdata.Fetcher // public network data (difficulty, blocks, price); nil = off
+	Stats     *Stats           // lottery stats, badges, summaries
+	Auto      *Automations     // schedule, light effects
+	Fan       *FanSync         // re-applies a persisted Cooler fan speed
+	Update    *update.Runner   // OTA for the Pi service; never talks to a miner
+	Integrity *Integrity       // read-only pool cross-check (nil = off)
 
 	mu       sync.Mutex
 	pwMu     sync.Mutex // serializes password changes so only one first-time set can win
@@ -402,6 +403,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	out["mining"] = s.Poll.MiningView(id, mineSince)
 	if rv := s.Poll.RoundView(id); rv != nil {
 		out["round"] = rv
+	}
+	if s.Integrity != nil {
+		if m, ok := s.Cfg.minerByID(id); ok && m.Kind != "remote" {
+			out["integrity"] = s.Integrity.View(id)
+		}
 	}
 	if s.Alerts != nil {
 		items, latest := s.Alerts.Since(alertSince, 20)

@@ -1132,3 +1132,26 @@ body.sheet-open { overflow: hidden; }
   .race-fill { transition: none !important; }
   .race-blk.fresh, .mining-sec.best-glow { box-shadow: var(--hi), 0 0 0 1px rgba(245,165,36,.5); }
 }
+
+/* Pool integrity (inside the Pools card) */
+.integ { border-top: 1px solid var(--line); padding: 16px 20px 18px; }
+.integ-h { display: flex; align-items: flex-start; gap: 14px; }
+.integ-ic { width: 40px; height: 40px; flex: none; border-radius: 12px; display: grid; place-items: center; background: rgba(255,255,255,.05); color: var(--t2); }
+.integ-ic.good { background: var(--good-soft); color: var(--good); } .integ-ic.bad { background: var(--bad-soft); color: var(--bad); }
+.integ-ic.warn { background: var(--warn-soft); color: var(--warn); }
+.integ-t { font-weight: 600; font-size: 14.5px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.integ-s { color: var(--t2); font-size: 13px; line-height: 1.45; margin-top: 3px; }
+.integ-h .pill { flex: none; }
+.integ-cmp { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0 54px; }
+.integ-cmp div { background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.integ-cmp span { display: block; font-size: 11.5px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.integ-cmp b { display: block; font-weight: 600; font-size: 16px; margin-top: 3px; white-space: nowrap; }
+.integ-cmp b i { font-style: normal; font-size: 11.5px; color: var(--t3); font-weight: 500; margin-left: 4px; }
+.integ-f { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0 0 54px; font-size: 12px; }
+.integ-f .pill { height: 22px; font-size: 11.5px; } .integ-f .pill .i { width: 12px; height: 12px; }
+@media (max-width: 720px) {
+  .integ { padding: 14px 16px 16px; }
+  .integ-h { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 4px 12px; } .integ-h .pill { grid-column: 2; justify-self: start; margin-top: 8px; }
+  .integ-cmp { grid-template-columns: 1fr 1fr; margin-left: 0; } .integ-f { margin-left: 0; }
+  .integ-t { white-space: normal; } .integ-t .integ-dot { display: none; } .integ-t .t3 { display: block; font-weight: 500; font-size: 12.5px; margin-top: 1px; }
+}
